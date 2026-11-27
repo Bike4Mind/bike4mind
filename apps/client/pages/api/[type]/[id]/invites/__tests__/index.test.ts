@@ -169,15 +169,19 @@ describe('GET /api/[type]/[id]/invites', () => {
 describe('POST /api/[type]/[id]/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+    createInvite.mockResolvedValue({
+      id: 'i1',
+      documentId: '507f1f77bcf86cd799439011',
+      recipients: { pending: [] },
+    });
     mockRefs.accounts = [];
     tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
   });
 
-  it('charges organization email invites against the typed-address budget', async () => {
+  it('charges organization email invites and audits the canonical document id', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'organizations', id: '507f1f77bcf86cd799439011' },
+      query: { type: 'organizations', id: '507F1F77BCF86CD799439011' },
       body: { permissions: ['read'], recipients: ['new@example.com'] },
     });
     Object.assign(req, { user: { id: 'u1' } });

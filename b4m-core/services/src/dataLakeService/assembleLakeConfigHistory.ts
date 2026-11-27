@@ -17,6 +17,8 @@ import type {
   LakeConfigHistoryView,
 } from '@bike4mind/common';
 import { classifyConfigUndo, classifyFileUndo, type UndoClassification } from './lakeChangeUndoability';
+import { satisfiesMembershipScope } from './lakeMembership';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 
 /**
  * Default cap on config-change events read for one history view. Deliberately small: config writes
@@ -180,6 +182,8 @@ export interface AssembleLakeConfigHistoryAdapters {
     /** Absent: file rows carry no name. */
     fabFiles?: Pick<IFabFileRepository, 'find'>;
   };
+  /** The reader: a file they own is named even after it left the lake. */
+  viewerUserId?: string;
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
   /** Also return file add/remove rows. Off by default: callers that predate them expect config rows only. */
@@ -222,8 +226,8 @@ function identityValueIds(changes: readonly LakeConfigHistoryFieldChange[]): str
 }
 
 export async function assembleLakeConfigHistory(
-  lake: Pick<IDataLakeDocument, 'id' | 'name'>,
-  { db, limit, includeFiles = false, now = new Date() }: AssembleLakeConfigHistoryAdapters
+  lake: Pick<IDataLakeDocument, 'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
+  { db, limit, includeFiles = false, viewerUserId, now = new Date() }: AssembleLakeConfigHistoryAdapters
 ): Promise<LakeConfigHistoryView> {
   const pageSize = clampLakeConfigHistoryLimit(limit);
   // One row MORE than the page, purely as a probe: fetching exactly `pageSize` cannot distinguish
@@ -355,7 +359,14 @@ export async function assembleLakeConfigHistory(
     // A deleted file has no row to name, so its entry keeps showing the id.
     db.fabFiles && fileIds.length > 0 ? db.fabFiles.find({ _id: { $in: fileIds } }) : [],
   ]);
-  const fileNameById = new Map(files.filter(f => !f.deletedAt && f.fileName).map(f => [f.id, f.fileName]));
+  // Managing the lake entitles the reader to its current members, not to files that have left it.
+  const membership = resolveLakeMembershipScope(lake);
+  const fileNameById = new Map(
+    files
+      .filter(f => !f.deletedAt && f.fileName)
+      .filter(f => satisfiesMembershipScope(membership, f) || (!!viewerUserId && f.userId === viewerUserId))
+      .map(f => [f.id, f.fileName])
+  );
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
   const keyNameById = new Map(keys.map(k => [k.id, k.name || undefined]));
 

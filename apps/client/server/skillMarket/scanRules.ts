@@ -7,6 +7,8 @@ import {
   type SkillReviewStatus,
   type SkillRiskTier,
 } from '@bike4mind/common';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 
 /**
  * Deterministic layer of the Skill Market safety scan. It runs before (and independently of) the
@@ -53,7 +55,7 @@ const LOCAL_RISKY_TOOLS = [
 /** Case- and separator-insensitive tool key: web_fetch, web-fetch, WebFetch and webFetch collide. */
 const toolKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-const KNOWN_TOOL_KEYS = new Set<string>(b4mLLMTools.options.map(toolKey));
+const KNOWN_TOOL_KEYS = new Set<string>([...b4mLLMTools.options, ...Object.keys(premiumLlmTools)].map(toolKey));
 const PROSE_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']);
 
 export type ScanOptions = {

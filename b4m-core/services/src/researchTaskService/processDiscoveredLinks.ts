@@ -113,7 +113,8 @@ export const processDiscoveredLinks = async (
         `Research Task Process Discovered Links - Research Data for ${url} not found for task ${researchTask.id}`
       );
 
-    const fabFile = await db.fabFiles.findById(researchData.fabFileId);
+    const linkedFile = await db.fabFiles.findById(researchData.fabFileId);
+    const fabFile = linkedFile && String(linkedFile.userId) === researchTask.userId ? linkedFile : null;
 
     if (!fabFile)
       throw new NotFoundError(`Research Task Process Discovered Links - Fab File ${researchData.fabFileId} not found`);

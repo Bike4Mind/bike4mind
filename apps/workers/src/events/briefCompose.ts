@@ -10,6 +10,7 @@ import {
   delegatedItemRepository,
   emailTriageItemRepository,
   questRepository,
+  sessionRepository,
   userRepository,
   assistantInstructionRepository,
   type IAssistantBrief,
@@ -19,7 +20,7 @@ import { publishPushNotification, briefDeepLink } from '@bike4mind/server-utils/
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { BRIEF_LIMITS, PENDING_ACTION_TTL_MS, type PushNotificationEvent } from '@bike4mind/common';
+import { BRIEF_LIMITS, PENDING_ACTION_TTL_MS, type IUserDocument, type PushNotificationEvent } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
@@ -60,6 +61,9 @@ const APPROVAL_SUMMARY_LIMIT = 600;
 
 type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 
+/** The brief's user, as the notebook read check needs them. */
+export type BriefReader = Pick<IUserDocument, 'id' | 'groups'>;
+
 export type BriefComposeDeps = {
   now: () => Date;
   users: Pick<typeof userRepository, 'findById'>;
@@ -67,7 +71,7 @@ export type BriefComposeDeps = {
     typeof assistantBriefRepository,
     'findById' | 'markReady' | 'markFailed' | 'discardComposing' | 'removeEmailSourcedItems' | 'markRemindersSurfaced'
   >;
-  loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
+  loadActivity(brief: IAssistantBrief, now: Date, reader: BriefReader): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** Sends the prompt to the model and returns its raw reply. */
@@ -125,7 +129,7 @@ export async function composeBrief(
 
   try {
     const now = deps.now();
-    const activity = await deps.loadActivity(brief, now);
+    const activity = await deps.loadActivity(brief, now, user);
 
     let composed: ComposedBrief;
     let periodEnd: Date | undefined;
@@ -297,14 +301,27 @@ async function settleSurfacedReminders(deps: BriefComposeDeps, userId: string, a
   }
 }
 
-export async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
+/**
+ * The notebooks among `sessionIds` the user can read now, by the same read rule as the sessions API
+ * (ShareableDocumentRepository.findAllAccessibleByIds). A run row outlives a transfer of its notebook, so
+ * the run alone does not entitle the user to that notebook's later turns.
+ */
+async function readableSessionIds(reader: BriefReader, sessionIds: string[]): Promise<string[]> {
+  if (sessionIds.length === 0) return [];
+  const readable = new Set(
+    (await sessionRepository.shareable.findAllAccessibleByIds(reader, sessionIds)).map(session => session.id)
+  );
+  return sessionIds.filter(id => readable.has(id));
+}
+
+export async function loadActivity(brief: IAssistantBrief, now: Date, reader: BriefReader): Promise<BriefActivity> {
   const block = brief.trigger === 'busy_block' ? brief.busyBlock : null;
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,
     { fromDate: brief.periodStart, ...(block && { toDate: brief.periodEnd }) },
     { limit: MAX_RUNS }
   );
-  const sessionIds = [...new Set(items.map(item => item.sessionId))];
+  const sessionIds = await readableSessionIds(reader, [...new Set(items.map(item => item.sessionId))]);
   const pending = await questRepository.findPendingActionsBySessionIds(
     sessionIds,
     now.getTime() - PENDING_ACTION_TTL_MS,

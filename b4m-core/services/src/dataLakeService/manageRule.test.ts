@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import {
+  canColdAddFileToLake,
   canManageLake,
   canShredLakeMemory,
   isEffectiveOwner,
@@ -82,6 +83,28 @@ describe('isEffectiveOwner', () => {
     expect(isEffectiveOwner(lake('creator', 'org1'), actor({ userId: 'x', administeredOrgIds: ['org1'] }), [])).toBe(
       false
     );
+  });
+});
+
+describe('canColdAddFileToLake', () => {
+  it("admits the file's owner", () => {
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'u' }), [], 'u')).toBe(true);
+  });
+
+  it("admits an admin or the lake's owner only for a file the lake's owner owns", () => {
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'x', isAdmin: true }), [], 'creator')).toBe(true);
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'creator' }), [], 'creator')).toBe(true);
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'x', isAdmin: true }), [], 'third')).toBe(false);
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'creator' }), [], 'third')).toBe(false);
+  });
+
+  it('does not admit a curator who owns neither the file nor the lake', () => {
+    const grants = [grant('user', 'cur', 'curator')];
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'cur' }), grants, 'creator')).toBe(false);
+  });
+
+  it('refuses an unknown file owner', () => {
+    expect(canColdAddFileToLake(lake('creator'), actor({ userId: 'x', isAdmin: true }), [], undefined)).toBe(false);
   });
 });
 

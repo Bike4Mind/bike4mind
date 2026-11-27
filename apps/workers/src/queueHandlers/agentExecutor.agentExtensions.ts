@@ -1,6 +1,6 @@
 /**
- * The agent executor's extension registry: the executor's own surface profile and tool-map guards,
- * registered as built-ins, plus whatever a mounted package contributes.
+ * The agent executor's extension registry: the executor's own tool-map guards, registered as
+ * built-ins, plus whatever a mounted package contributes (surface profiles included).
  *
  * Built once at module load and frozen, so a run can neither add nor drop an entry. Built-in
  * guard order is fixed by priority (100, 200, 300 = innermost to outermost); contributions take
@@ -15,12 +15,10 @@ import {
   type AgentExtensionLogger,
   type AgentExtensionRegistry,
 } from '@bike4mind/agents';
-import { OPTI_SURFACE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { IOptiPlanState } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { premiumAgentExtensions } from '@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated';
-import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
@@ -39,25 +37,6 @@ const executorToolMapSchema = z.record(
 );
 
 function registerBuiltIns(registry: ExecutorAgentExtensions): void {
-  registry.registerSurfaceProfile(
-    {
-      id: 'synthetic:opti-orchestration',
-      surface: OPTI_SURFACE,
-      build: ({ contributedToolNames, executionId, logger }) => {
-        // An empty list means codegen ran with nothing mounted. The loop then has no surface tools
-        // at all and answers in prose, which reads as a model failure rather than a build one -
-        // so say it once, here, where the cause is known.
-        if (contributedToolNames.length === 0) {
-          logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
-            executionId,
-          });
-        }
-        return buildOptiOrchestrationProfile({ premiumToolNames: contributedToolNames });
-      },
-    },
-    'builtin'
-  );
-
   // The three guards share the run's plan ledger through `runState`: the inner two record and
   // read plan progress on it, the outermost only augments real tool observations.
   registry.registerToolMapGuard(

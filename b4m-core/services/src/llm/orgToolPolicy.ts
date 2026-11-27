@@ -6,12 +6,13 @@ import { isToolAllowedByOrgPolicy, type ReadOrgModelPolicy } from '@bike4mind/co
  */
 export function applyOrgToolPolicy<T extends { toolSchema: { name: string } }>(
   tools: T[],
-  policy: ReadOrgModelPolicy | undefined
+  policy: ReadOrgModelPolicy | undefined,
+  contributedToolNames?: ReadonlySet<string>
 ): { tools: T[]; stripped: string[] } {
   if (!policy) return { tools, stripped: [] };
   const stripped: string[] = [];
   const kept = tools.filter(tool => {
-    const allowed = isToolAllowedByOrgPolicy(policy, tool.toolSchema.name);
+    const allowed = isToolAllowedByOrgPolicy(policy, tool.toolSchema.name, contributedToolNames);
     if (!allowed) stripped.push(tool.toolSchema.name);
     return allowed;
   });
@@ -19,7 +20,11 @@ export function applyOrgToolPolicy<T extends { toolSchema: { name: string } }>(
 }
 
 /** The requested tool names the organization's policy does not allow. */
-export function orgDisallowedTools(names: readonly string[], policy: ReadOrgModelPolicy | undefined): string[] {
+export function orgDisallowedTools(
+  names: readonly string[],
+  policy: ReadOrgModelPolicy | undefined,
+  contributedToolNames?: ReadonlySet<string>
+): string[] {
   if (!policy) return [];
-  return names.filter(name => !isToolAllowedByOrgPolicy(policy, name));
+  return names.filter(name => !isToolAllowedByOrgPolicy(policy, name, contributedToolNames));
 }

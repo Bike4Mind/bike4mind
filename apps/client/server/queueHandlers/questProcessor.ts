@@ -481,6 +481,7 @@ export async function processQuest(
       body: requestBody,
       logger,
       externalTools,
+      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
       imageJobsResolver: getImageJobsResolver(params.apiKeyId),

@@ -55,6 +55,7 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
   } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
 
   const quest = await chatCompletion.invoke({
+    contributedToolNames: new Set<string>(),
     body: {
       params: {
         model: ChatModels.GPT4_1_MINI,
