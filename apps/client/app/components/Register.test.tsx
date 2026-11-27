@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   allowOpenRegistration: true,
   configLoading: false,
+  configError: false,
+  configMissingField: false,
   appleSignInEnabled: false,
   trackSignupConversion: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
@@ -99,12 +101,16 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({
-    data: mocks.configLoading
-      ? undefined
-      : { allowOpenRegistration: mocks.allowOpenRegistration, appleSignInEnabled: mocks.appleSignInEnabled },
-    isLoading: mocks.configLoading,
-  }),
+  usePublicConfig: () => {
+    if (mocks.configError) return { data: undefined, isLoading: false, isError: true };
+    if (mocks.configMissingField) return { data: { appleSignInEnabled: false }, isLoading: false, isError: false };
+    return {
+      data: mocks.configLoading
+        ? undefined
+        : { allowOpenRegistration: mocks.allowOpenRegistration, appleSignInEnabled: mocks.appleSignInEnabled },
+      isLoading: mocks.configLoading,
+    };
+  },
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
@@ -143,6 +149,8 @@ describe('Register', () => {
   beforeEach(() => {
     mocks.allowOpenRegistration = true;
     mocks.configLoading = false;
+    mocks.configError = false;
+    mocks.configMissingField = false;
     mocks.appleSignInEnabled = false;
   });
 
@@ -569,5 +577,50 @@ describe('Register - product hint from redirectTo', () => {
     renderRegister();
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
     expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
+  });
+});
+
+describe('Register - public config unavailable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.allowOpenRegistration = true;
+    mocks.configLoading = false;
+    mocks.configError = false;
+    mocks.configMissingField = false;
+  });
+
+  const fillFormWithoutInvite = async (user: ReturnType<typeof userEvent.setup>) => {
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+  };
+
+  const expectInviteRequired = async () => {
+    renderRegister();
+    expect(screen.getByLabelText(/^Invite code/)).toBeRequired();
+    expect(screen.getByText('Invite code', { selector: 'label' })).toBeInTheDocument();
+    expect(screen.queryByText('Invite code (optional)')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('register-invite-optional-hint')).not.toBeInTheDocument();
+    expect(screen.getByTestId('register-join-waitlist-link')).toBeInTheDocument();
+    expect(screen.getByTestId('register-google-btn')).not.toBeVisible();
+
+    const user = userEvent.setup();
+    await fillFormWithoutInvite(user);
+    expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+
+    await fill(user, within(screen.getByTestId('register-invite-input')).getByRole('textbox'), 'FRIEND1');
+    expect(screen.getByTestId('register-submit-btn')).toBeEnabled();
+  };
+
+  it('requires an invite code when the config request failed', async () => {
+    mocks.configError = true;
+    await expectInviteRequired();
+  });
+
+  it('requires an invite code when the config has no allowOpenRegistration value', async () => {
+    mocks.configMissingField = true;
+    await expectInviteRequired();
   });
 });

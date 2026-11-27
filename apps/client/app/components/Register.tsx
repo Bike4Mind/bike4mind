@@ -149,7 +149,8 @@ const Register: React.FC = () => {
   const hasRedirectedRef = useRef(false);
 
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
-  const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration === false;
+  // Only an explicit true opens registration; a failed or partial config request counts as closed.
+  const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration !== true;
 
   useEffect(() => {
     if (currentUser && !hasRedirectedRef.current) {
