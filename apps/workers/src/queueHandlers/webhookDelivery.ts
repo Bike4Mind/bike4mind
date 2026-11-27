@@ -114,6 +114,76 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     maxRetries: MAX_RETRIES,
   });
 
+  // 2. Idempotency check with atomic claim
+  // Uses findOneAndUpdate with $setOnInsert to prevent race conditions
+  // Only the first Lambda to reach this point will successfully claim the key
+  const dedupKey = `${DEDUP_KEY_PREFIX}${payload.eventId}-${payload.subscriptionId}`;
+  const claimOwner = randomUUID();
+  const claimResult = await cacheRepository.claimDedup(
+    dedupKey,
+    {
+      status: 'pending',
+      owner: claimOwner,
+      deliveryId: payload.deliveryId,
+      startedAt: new Date().toISOString(),
+      eventType: payload.eventType,
+    },
+    DEDUP_TTL_MS
+  );
+
+  if (!claimResult.claimed) {
+    logger.info('Delivery already claimed by another worker', {
+      eventId: payload.eventId,
+      subscriptionId: payload.subscriptionId,
+      existingStatus: claimResult.existingData?.status,
+    });
+    const receipt = claimResult.existingData;
+    if (receipt?.status === 'terminal') return;
+    if (receipt?.status === 'completed') {
+      if (receipt.deliveryId === payload.deliveryId) {
+        const history = await webhookDeliveryRepository.findByDeliveryAndSubscription(
+          payload.deliveryId,
+          payload.subscriptionId
+        );
+        if (history?.status !== WebhookDeliveryStatus.Success) {
+          const httpStatus = typeof receipt.httpStatus === 'number' ? receipt.httpStatus : 0;
+          await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, httpStatus);
+        }
+      }
+      return;
+    }
+    const history = await webhookDeliveryRepository.findByDeliveryAndSubscription(
+      payload.deliveryId,
+      payload.subscriptionId
+    );
+    if (history?.status === WebhookDeliveryStatus.Success && typeof receipt?.owner === 'string') {
+      await finishClaim(dedupKey, receipt.owner, payload, 'completed');
+      return;
+    }
+    throw new RetryableError('Delivery claim is pending; defer without sending another POST');
+  }
+
+  const attempt = { sent: false };
+  try {
+    await deliverClaimed(payload, startTime, dedupKey, claimOwner, logger, attempt);
+    if (!attempt.sent) await finishClaim(dedupKey, claimOwner, payload, 'terminal');
+  } catch (error) {
+    // Release unaccepted work for retry. Accepted work retains its receipt for reconciliation.
+    if (!attempt.sent) {
+      await releaseClaim(dedupKey, claimOwner, logger);
+    }
+    throw error;
+  }
+});
+
+async function deliverClaimed(
+  payload: WebhookDeliveryPayload,
+  startTime: number,
+  dedupKey: string,
+  claimOwner: string,
+  logger: Logger,
+  attempt: { sent: boolean }
+): Promise<void> {
   // 1. SSRF Protection - validate target URL with DNS resolution; the send in step 7 re-checks the dialed address
   const urlValidation = await validateTargetUrl(payload.targetUrl);
   if (!urlValidation.valid) {
@@ -127,46 +197,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return; // Don't retry - this is a security violation
   }
 
-  // 2. Idempotency check with atomic claim
-  // Uses findOneAndUpdate with $setOnInsert to prevent race conditions
-  // Only the first Lambda to reach this point will successfully claim the key
-  const dedupKey = `${DEDUP_KEY_PREFIX}${payload.eventId}-${payload.subscriptionId}`;
-  const claimOwner = randomUUID();
-  const claimResult = await cacheRepository.claimDedup(
-    dedupKey,
-    { status: 'pending', owner: claimOwner, startedAt: new Date().toISOString(), eventType: payload.eventType },
-    DEDUP_TTL_MS
-  );
-
-  if (!claimResult.claimed) {
-    logger.info('Delivery already claimed by another worker, skipping', {
-      eventId: payload.eventId,
-      subscriptionId: payload.subscriptionId,
-      existingStatus: claimResult.existingData?.status,
-    });
-    return;
-  }
-
-  const attempt = { sent: false };
-  try {
-    await deliverClaimed(payload, startTime, dedupKey, logger, attempt);
-  } catch (error) {
-    // A throw hands the message back to SQS, and a held claim would make that receive ack without
-    // sending. Once the endpoint has accepted the POST the claim stays, so a redelivery is deduped.
-    if (!attempt.sent) {
-      await releaseClaim(dedupKey, claimOwner, logger);
-    }
-    throw error;
-  }
-});
-
-async function deliverClaimed(
-  payload: WebhookDeliveryPayload,
-  startTime: number,
-  dedupKey: string,
-  logger: Logger,
-  attempt: { sent: boolean }
-): Promise<void> {
   // 3. Check if subscription is auto-disabled (circuit breaker)
   const subscription = await webhookSubscriptionRepository.findById(payload.subscriptionId);
   if (!subscription) {
@@ -276,6 +306,7 @@ async function deliverClaimed(
       },
       { allowHttp: true, discardBody: true }
     );
+    if (response.ok) attempt.sent = true;
     clearTimeout(timeoutId);
     await response.body?.cancel().catch(() => undefined);
 
@@ -283,23 +314,22 @@ async function deliverClaimed(
 
     // 8. Handle response codes
     if (response.ok) {
-      attempt.sent = true;
       logger.info('Delivery successful', {
         statusCode: response.status,
         processingDurationMs,
       });
 
-      await cacheRepository.createOrUpdate({
-        key: dedupKey,
-        result: { status: 'completed', processedAt: new Date().toISOString(), eventType: payload.eventType },
-        expiresAt: new Date(Date.now() + DEDUP_TTL_MS),
-      });
-
-      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status);
-
-      // Reset consecutive failures on success
+      // Either durable fact can reconcile the other on redelivery without another POST.
+      const bookkeeping = await Promise.allSettled([
+        finishClaim(dedupKey, claimOwner, payload, 'completed', response.status),
+        recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status),
+      ]);
       await resetConsecutiveFailures(payload.subscriptionId, logger);
-
+      const failed = bookkeeping.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
+        const error: unknown = failed.reason;
+        throw error;
+      }
       return;
     }
 
@@ -367,6 +397,7 @@ async function deliverClaimed(
     throw new RetryableError(errorMessage);
   } catch (error) {
     clearTimeout(timeoutId);
+    if (attempt.sent) throw error;
 
     const processingDurationMs = Date.now() - startTime;
 
@@ -413,15 +444,39 @@ async function deliverClaimed(
   }
 }
 
+async function finishClaim(
+  dedupKey: string,
+  owner: string,
+  payload: WebhookDeliveryPayload,
+  status: 'completed' | 'terminal',
+  httpStatus?: number
+): Promise<void> {
+  const updated = await cacheRepository.casUpdateDedup(
+    dedupKey,
+    'owner',
+    owner,
+    {
+      status,
+      owner,
+      deliveryId: payload.deliveryId,
+      eventType: payload.eventType,
+      processedAt: new Date().toISOString(),
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+    },
+    DEDUP_TTL_MS
+  );
+  if (!updated) throw new RetryableError('Delivery claim changed before bookkeeping completed');
+}
+
 /**
  * Drop this receive's `pending` claim so the SQS redelivery can claim it and retry. The owner guard
- * leaves any newer claim alone. If the delete fails the claim lapses at its TTL instead.
+ * leaves any newer claim alone. A surviving pending claim defers redelivery instead of acking it.
  */
 async function releaseClaim(dedupKey: string, owner: string, logger: Logger): Promise<void> {
   try {
     await cacheRepository.casDeleteDedup(dedupKey, 'owner', owner);
   } catch (error) {
-    logger.warn('Failed to release webhook delivery claim; a redelivery before it expires is skipped', { error });
+    logger.warn('Failed to release webhook delivery claim; redelivery will defer while it is pending', { error });
   }
 }
 

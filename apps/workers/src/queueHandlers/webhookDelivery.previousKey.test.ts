@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     claimDedup: vi.fn(async () => ({ claimed: true })),
     casDeleteDedup: vi.fn(),
-    createOrUpdate: vi.fn(),
+    casUpdateDedup: vi.fn(async () => true),
   },
   webhookDeliveryRepository: { recordAttempt: h.recordAttempt },
   webhookSubscriptionRepository: {

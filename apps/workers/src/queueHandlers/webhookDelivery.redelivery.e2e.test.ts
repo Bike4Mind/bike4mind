@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Cache, WebhookDelivery, webhookDeliveryRepository } from '@bike4mind/database';
+import {
+  Cache,
+  WebhookDelivery,
+  webhookDeliveryRepository,
+  webhookSubscriptionRepository,
+  cacheRepository,
+} from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
 // Real dedup claim and delivery record; everything around them is stubbed.
@@ -11,6 +17,8 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   fetchMock: vi.fn(),
+  validateTarget: vi.fn(),
+  successMetric: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async importActual => ({
@@ -24,14 +32,14 @@ vi.mock('@bike4mind/database', async importActual => ({
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
-  validateTargetUrl: vi.fn(async () => ({ valid: true })),
+  validateTargetUrl: h.validateTarget,
   fetchPinned: h.fetchMock,
   SsrfError: class SsrfError extends Error {},
 }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptStoredSecret: () => 'plain-secret' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
-  recordWebhookDeliverySuccess: vi.fn(),
+  recordWebhookDeliverySuccess: h.successMetric,
   recordWebhookDeliveryFailure: vi.fn(),
   recordWebhookDeliverySkipped: vi.fn(),
 }));
@@ -93,6 +101,7 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   receiveCount = 0;
+  h.validateTarget.mockResolvedValue({ valid: true });
   await Cache.deleteMany({});
   await WebhookDelivery.deleteMany({});
 });
@@ -134,6 +143,97 @@ describe('webhookDelivery redelivery', () => {
     await receive();
 
     expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    const row = await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean();
+    expect(row).toMatchObject({ status: 'success' });
+    expect(row).not.toHaveProperty('payload');
+    expect(row).not.toHaveProperty('targetUrl');
+    expect(row).not.toHaveProperty('errorMessage');
+    expect(webhookSubscriptionRepository.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+    expect(webhookSubscriptionRepository.resetConsecutiveFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles accepted history before checking a new-send URL policy', async () => {
+    h.fetchMock.mockResolvedValue(respond(200));
+    vi.spyOn(webhookDeliveryRepository, 'recordAttempt').mockRejectedValueOnce(new Error('history unavailable'));
+    h.validateTarget
+      .mockResolvedValueOnce({ valid: true })
+      .mockResolvedValue({ valid: false, error: 'DNS unavailable' });
+
+    await expect(receive()).rejects.toThrow('history unavailable');
+    await receive();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect(await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean()).toMatchObject({ status: 'success' });
+    expect(h.validateTarget).toHaveBeenCalledTimes(1);
+    expect(webhookSubscriptionRepository.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+  });
+
+  it('retains accepted history when completion-cache persistence fails', async () => {
+    h.fetchMock.mockResolvedValue(respond(200));
+    vi.spyOn(cacheRepository, 'casUpdateDedup').mockRejectedValueOnce(new Error('cache update unavailable'));
+
+    await expect(receive()).rejects.toThrow('cache update unavailable');
+    expect(await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean()).toMatchObject({ status: 'success' });
+    await receive();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect((await Cache.findOne({ key: DEDUP_KEY }).lean())?.result).toMatchObject({
+      status: 'completed',
+      deliveryId: 'del-1',
+    });
+    expect(webhookSubscriptionRepository.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+    expect(webhookSubscriptionRepository.resetConsecutiveFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Success when its metric emission fails after persistence', async () => {
+    h.fetchMock.mockResolvedValue(respond(200));
+    h.successMetric.mockRejectedValueOnce(new Error('metric unavailable'));
+
+    await expect(receive()).rejects.toThrow('metric unavailable');
+    await receive();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect(await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean()).toMatchObject({ status: 'success' });
+    expect(webhookSubscriptionRepository.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+    expect(webhookSubscriptionRepository.resetConsecutiveFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overwrite a replacement claim after an older accepted response', async () => {
+    let release!: () => void;
+    h.fetchMock.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(respond(200)))));
+    const first = receive();
+    await vi.waitFor(() => expect(h.fetchMock).toHaveBeenCalledTimes(1));
+    await Cache.updateOne({ key: DEDUP_KEY }, { $set: { 'result.owner': 'replacement' } });
+    release();
+
+    await expect(first).rejects.toThrow('claim changed');
+
+    expect((await Cache.findOne({ key: DEDUP_KEY }).lean())?.result).toMatchObject({
+      status: 'pending',
+      owner: 'replacement',
+    });
+    expect(await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean()).toMatchObject({ status: 'success' });
+    expect(webhookSubscriptionRepository.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+  });
+
+  it('defers redelivery while an unaccepted claim could not be released', async () => {
+    h.fetchMock.mockResolvedValue(respond(503));
+    vi.spyOn(cacheRepository, 'casDeleteDedup').mockRejectedValueOnce(new Error('cache delete unavailable'));
+
+    await expect(receive()).rejects.toThrow('HTTP 503');
+    expect(await Cache.findOne({ key: DEDUP_KEY })).not.toBeNull();
+    await expect(receive()).rejects.toThrow('pending');
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('acks redelivery of a permanent endpoint failure', async () => {
+    h.fetchMock.mockResolvedValue(respond(404));
+
+    await receive();
+    await receive();
+
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    expect(await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean()).toMatchObject({ status: 'failed' });
   });
 
   it('makes an HTTP attempt on every receive of the retry budget', async () => {
@@ -154,9 +254,10 @@ describe('webhookDelivery redelivery', () => {
 
     const first = receive();
     await vi.waitFor(() => expect(h.fetchMock).toHaveBeenCalledTimes(1));
-    await receive();
+    await expect(receive()).rejects.toThrow('pending');
     release();
     await first;
+    await receive();
 
     expect(h.fetchMock).toHaveBeenCalledTimes(1);
   });
