@@ -402,6 +402,9 @@ describe('ChatService approval modes', () => {
       'git fetch origin main && git merge --ff-only origin/main',
       'git fetch origin x && git merge --ff-only origin/x',
       'git fetch origin main && git rebase origin/main',
+      // With no merge in progress git stops before writing anything.
+      'git merge --abort',
+      'git merge --abort && git status --short && git rev-parse HEAD',
       'git fetch origin main && git reset --hard origin/main',
       'git show --format= HEAD',
       'git show --format= --remerge-diff HEAD',
@@ -414,8 +417,6 @@ describe('ChatService approval modes', () => {
       ['auto', 'git status --frobnicate'],
       ['full', 'git status --frobnicate'],
       ['full', 'cd sub && ls ; wc -l ../notes.txt'],
-      ['auto', 'git merge --abort'],
-      ['auto', 'git merge --abort && git status --short && git rev-parse HEAD'],
       ['full', 'git status && rm -f "$OPAQUE_TARGET"'],
     ] as const)('asks in %s when the scan cannot follow it: %s', async (mode, command) => {
       const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
