@@ -286,9 +286,8 @@ describe('appendTranscript', () => {
 
 describe('SessionToolbar - dark send button fill', () => {
   // Pins the dark override that matches the native sendButton role (design-tokens nativeTheme.ts).
-  const ModeWrapper =
-    (mode: 'light' | 'dark'): React.FC<{ children: React.ReactNode }> =>
-    ({ children }) => (
+  const ModeWrapper = (mode: 'light' | 'dark'): React.FC<{ children: React.ReactNode }> => {
+    const ModeProvider = ({ children }: { children: React.ReactNode }) => (
       <CssVarsProvider
         theme={appTheme}
         defaultMode={mode}
@@ -298,6 +297,8 @@ describe('SessionToolbar - dark send button fill', () => {
         {children}
       </CssVarsProvider>
     );
+    return ModeProvider;
+  };
   const fill = () => getComputedStyle(screen.getByTestId('send-message-btn')).backgroundColor;
 
   it('fills the enabled button with the dark accent', () => {
