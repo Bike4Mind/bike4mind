@@ -12,6 +12,8 @@ A function is a Python artifact you saved as a function and promoted to live aft
 
 In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope: it reaches only the calling routes on this page and the [MCP endpoint](./functions-mcp.md). Tick **Also write, test, promote, and share your functions** to add `functions:author`, which reaches only the [authoring routes](#author-a-function). The two may share a key, and a request to mint either together with any other scope is refused. `functions:author` calls nothing, and `functions:invoke` authors nothing. The Functions level appears only while callable functions are turned on for your account.
 
+An app that signs you in with Bike4Mind can hold the same two scopes on the short-lived key its server exchanges for you, once an admin grants them to the app and you approve them on its consent screen. That key may also hold `ai:generate` and `me:read`, and it reaches the routes on this page and those its other scopes name, nothing else. See [Building on B4M](../developers/building-on-b4m.md), section 5.
+
 Each call answers for the key's owner. A key reaches the live functions its owner owns and the live functions other people shared with them. A draft, a turned-off function, a function whose artifact was deleted, and another person's function that was not shared with you all answer `404`, the same as an id that does not exist.
 
 ## List your live functions
@@ -44,6 +46,10 @@ The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `s
 | `unverified` | No cited worked example was checked when the function was promoted.         |
 
 Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified` function. The label is never read from a function's name or description. Changing the function's code, data files, or sources returns it to draft and removes the label, and so does a promotion or examples change that leaves it `unverified`. Promoting it again, even as `verified`, does not bring the label back; only an admin can.
+
+### Functions offered to everyone signed in
+
+An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Once reviewed, it lists and calls over the API too. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, data files, or calls, and it does not add you to any project or organization.
 
 ## Find your functions in the app
 
