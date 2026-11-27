@@ -109,7 +109,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markAbandoned` | repository-check | `literal` | writes "failed" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markComplete` | repository-check | `literal` | writes "completed" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markFailed` | repository-check | `literal` | writes "failed" |
-| AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markFailedIfActive` | repository-check | `literal` | writes "failed" |
+| AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markFailedIfActive` | schema | `runValidators` | update call passes runValidators |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setPendingGate` | repository-check | `literal` | writes "paused" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setWaitingOnChild` | repository-check | `literal` | writes "awaiting_subagent" |
 | AgentExecution | `subagentConfig.thoroughness` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setSubagentConfig` | route-schema | `b4m-core/services/src/llm/tools/implementation/delegateToAgent.ts#createDelegateToAgentTool` | Tool rejects out-of-enum thoroughness before foreground or background delegation; omitted values use the agent default |
