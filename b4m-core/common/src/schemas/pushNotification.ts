@@ -55,6 +55,11 @@ export const PushNotificationEventSchema = z.object({
    * not land (notifyHeldBlockRuns in packages/server-utils/src/briefs). Never held itself.
    */
   busyBlockDigest: z.literal(true).optional(),
+  /**
+   * `brief_ready` of a busy-block brief only: the push categories the brief reports. deliverPush in
+   * apps/workers/src/events/sendPush.ts holds the push when isBlockEndPushHeld says so.
+   */
+  blockEndCategories: z.array(PushNotificationCategorySchema).max(PUSH_NOTIFICATION_CATEGORIES.length).optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;
@@ -96,4 +101,38 @@ export function isPushCategoryEnabled(
   category: PushNotificationCategory
 ): boolean {
   return preferences?.[category] !== false;
+}
+
+/** The categories a user can teach the block-end push to stay quiet about. */
+export const INTERRUPTION_FEEDBACK_CATEGORIES = BUSY_BLOCK_HELD_CATEGORIES;
+
+/**
+ * Stored at `user.preferences.interruptionFeedback`; `true` means do not push about that category once a
+ * busy block ends. The brief is still composed and listed. Must stay in sync with the interruptionFeedback
+ * sub-schema in packages/database/src/models/auth/UserModel.ts.
+ */
+export const InterruptionFeedbackSchema = z
+  .object({
+    agent_completed: z.boolean().optional(),
+    agent_failed: z.boolean().optional(),
+  })
+  .strict();
+
+export type InterruptionFeedback = z.infer<typeof InterruptionFeedbackSchema>;
+
+function isInterruptionFeedbackCategory(
+  category: PushNotificationCategory
+): category is (typeof INTERRUPTION_FEEDBACK_CATEGORIES)[number] {
+  return (INTERRUPTION_FEEDBACK_CATEGORIES as readonly PushNotificationCategory[]).includes(category);
+}
+
+/**
+ * Whether the block-end brief push is held: only when every category it reports is one the user taught
+ * to stay quiet. A decision or any other content keeps the push live, and absent feedback never holds.
+ */
+export function isBlockEndPushHeld(
+  feedback: InterruptionFeedback | null | undefined,
+  categories: readonly PushNotificationCategory[]
+): boolean {
+  return categories.length > 0 && categories.every(c => isInterruptionFeedbackCategory(c) && feedback?.[c] === true);
 }

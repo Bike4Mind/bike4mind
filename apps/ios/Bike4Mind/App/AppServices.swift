@@ -56,6 +56,8 @@ final class AppServices {
   let busyBlocks: any BusyBlocksAPI
   let busyBlockReader: any BusyBlockReader
   let busyBlockSyncer: BusyBlockSyncer
+  /// Which run updates stay quiet after a busy block.
+  let interruptionFeedback: any InterruptionFeedbackAPI
   /// Re-syncs busy blocks from a system background refresh while the app is not opened.
   let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
@@ -168,6 +170,12 @@ final class AppServices {
     busyBlockReader = EventKitBusyBlockReader()
     let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
     busyBlockSyncer = syncer
+    interruptionFeedback = ForwardingInterruptionFeedbackAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.interruptionFeedback }
+      #endif
+      return InterruptionFeedbackClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     busyBlockRefresh = BusyBlockBackgroundRefresh(
       identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
     ) { await syncer.syncJoiningInFlight() }
@@ -529,6 +537,18 @@ struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
 
   func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
     try await provider().save(enabled: enabled, blocks: blocks)
+  }
+}
+
+struct ForwardingInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+  let provider: @MainActor @Sendable () -> any InterruptionFeedbackAPI
+
+  func feedback() async throws -> InterruptionFeedback {
+    try await provider().feedback()
+  }
+
+  func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+    try await provider().save(patch)
   }
 }
 

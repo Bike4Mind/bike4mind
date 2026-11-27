@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BRIEF_LIMITS } from '@bike4mind/common';
 import {
   assembleBrief,
+  blockBriefPushCategories,
   briefedDelegationIds,
   briefedEmailIds,
   briefPushBody,
@@ -416,5 +417,49 @@ describe('confirmed obligations in the brief', () => {
     const kinds = assembleBrief(reply, activity).happened.map(item => item.source?.kind);
     expect(kinds.filter(kind => kind === 'obligation')).toHaveLength(BRIEF_OBLIGATION_LIMIT);
     expect(kinds.filter(kind => kind === 'email')).toHaveLength(BRIEF_LIMITS.itemsPerSection - BRIEF_OBLIGATION_LIMIT);
+  });
+});
+
+describe('blockBriefPushCategories', () => {
+  const runsOnly = (): BriefActivity => ({ ...baseActivity(), approvals: [] });
+  const failed = { id: 'r2', query: 'q', status: 'failed', finishedAt: undefined, errorMessage: 'boom' };
+
+  it('maps runs to agent_completed and agent_failed, once each', () => {
+    const activity = { ...runsOnly(), runs: [...runsOnly().runs, failed, { ...failed, id: 'r3' }] };
+    expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['agent_completed', 'agent_failed']);
+  });
+
+  it.each(['pending', 'running', 'continuing', 'awaiting_permission', 'awaiting_subagent', 'paused', 'aborted'])(
+    'maps a %s run to brief_ready, never a teachable run category',
+    status => {
+      const activity = { ...runsOnly(), runs: [{ ...failed, id: 'r9', status, errorMessage: undefined }] };
+      expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['brief_ready']);
+    }
+  );
+
+  it('keeps a completed run with an in-flight one unholdable', () => {
+    const activity = { ...runsOnly(), runs: [...runsOnly().runs, { ...failed, id: 'r9', status: 'paused' }] };
+    expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['agent_completed', 'brief_ready']);
+  });
+
+  it('adds approval_needed for a decision, an approval or a question', () => {
+    expect(blockBriefPushCategories(emptyBrief(), baseActivity())).toEqual(['agent_completed', 'approval_needed']);
+    expect(blockBriefPushCategories(emptyBrief(), { ...runsOnly(), questions: [question(1)] })).toContain(
+      'approval_needed'
+    );
+    const withDecision = assembleBrief(JSON.stringify({ headline: 'h' }), baseActivity());
+    expect(blockBriefPushCategories(withDecision, { ...runsOnly(), runs: [] })).toEqual(['approval_needed']);
+  });
+
+  it('adds brief_ready for any non-run section', () => {
+    expect(blockBriefPushCategories(emptyBrief(), emailActivity())).toContain('brief_ready');
+    const reminder = { briefId: 'b0', decisionId: 'd0', text: 'Call the vendor.' };
+    expect(blockBriefPushCategories(emptyBrief(), { ...runsOnly(), runs: [], reminders: [reminder] })).toEqual([
+      'brief_ready',
+    ]);
+  });
+
+  it('reports nothing for an empty block', () => {
+    expect(blockBriefPushCategories(emptyBrief(), { ...runsOnly(), runs: [] })).toEqual([]);
   });
 });
