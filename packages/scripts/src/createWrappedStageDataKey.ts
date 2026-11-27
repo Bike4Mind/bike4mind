@@ -1,5 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { isPlaceholderValue, SECRETS_AT_REST_PURPOSE, WRAPPED_DATA_KEY_SECRET_NAME } from '@bike4mind/common';
+import { parseArgs } from 'node:util';
+import {
+  isPlaceholderValue,
+  isPreviewStageName,
+  SECRETS_AT_REST_PURPOSE,
+  WRAPPED_DATA_KEY_SECRET_NAME,
+} from '@bike4mind/common';
 
 /**
  * Mints the per-stage wrapped data key: asks KMS for an AES-256 data key under the stage's secrets-at-rest
@@ -67,6 +73,31 @@ export interface WrappedKeyOptions {
   appName: string;
   dryRun: boolean;
   isPreview: boolean;
+}
+
+/**
+ * Parses the CLI flags. The returned appName is the one value both the default key alias and the sst
+ * secret store (SEED_APP_NAME) are built from, so the two always name the same app.
+ */
+export function parseCliOptions(args: string[], env: NodeJS.ProcessEnv): WrappedKeyOptions {
+  const { values } = parseArgs({
+    args,
+    options: {
+      stage: { type: 'string' },
+      key: { type: 'string' },
+      app: { type: 'string', default: env.SEED_APP_NAME || 'bike4mind' },
+      'dry-run': { type: 'boolean', default: false },
+    },
+  });
+  if (!values.stage) throw new Error('--stage is required');
+  return {
+    stage: values.stage,
+    key: values.key,
+    appName: values.app,
+    dryRun: values['dry-run'],
+    // Same rule as isPreviewStage in infra/constants.ts.
+    isPreview: env.IS_PREVIEW === 'true' || isPreviewStageName(values.stage),
+  };
 }
 
 export type WrappedKeyResult = 'already-set' | 'dry-run' | 'created';

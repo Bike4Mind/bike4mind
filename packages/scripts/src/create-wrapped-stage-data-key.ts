@@ -7,27 +7,24 @@
  *   pnpm --filter @bike4mind/scripts create-wrapped-stage-data-key --stage <stage> [--key <alias|arn>] [--dry-run]
  */
 
-import { parseArgs } from 'node:util';
 import { DescribeKeyCommand, GenerateDataKeyWithoutPlaintextCommand, KMSClient } from '@aws-sdk/client-kms';
-import { isPreviewStageName } from '@bike4mind/common';
-import { createSstSecretStore, createWrappedStageDataKey, type WrappedKeyDeps } from './createWrappedStageDataKey';
+import {
+  createSstSecretStore,
+  createWrappedStageDataKey,
+  parseCliOptions,
+  type WrappedKeyDeps,
+  type WrappedKeyOptions,
+} from './createWrappedStageDataKey';
 
-const { values } = parseArgs({
-  options: {
-    stage: { type: 'string' },
-    key: { type: 'string' },
-    app: { type: 'string', default: process.env.SEED_APP_NAME || 'bike4mind' },
-    'dry-run': { type: 'boolean', default: false },
-  },
-});
-
-if (!values.stage) {
-  console.error('--stage is required');
+let options: WrappedKeyOptions;
+try {
+  options = parseCliOptions(process.argv.slice(2), process.env);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 }
-const stage = values.stage;
 const kms = new KMSClient({});
-const store = createSstSecretStore(values.app);
+const store = createSstSecretStore(options.appName);
 
 const deps: WrappedKeyDeps = {
   ...store,
@@ -45,17 +42,7 @@ const deps: WrappedKeyDeps = {
   log: line => console.log(line),
 };
 
-createWrappedStageDataKey(
-  {
-    stage,
-    key: values.key,
-    appName: values.app,
-    dryRun: values['dry-run'],
-    // Same rule as isPreviewStage in infra/constants.ts.
-    isPreview: process.env.IS_PREVIEW === 'true' || isPreviewStageName(stage),
-  },
-  deps
-).catch(error => {
+createWrappedStageDataKey(options, deps).catch(error => {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });

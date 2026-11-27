@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createSstSecretStore,
   createWrappedStageDataKey,
+  parseCliOptions,
   parseSecretListing,
   type WrappedKeyDeps,
   type WrappedKeyOptions,
@@ -116,5 +117,38 @@ describe('createSstSecretStore', () => {
       ['sst', 'secret', 'set', 'SECRET_DATA_KEY_WRAPPED', '--stage', 'dev'],
       { input: 'AQID' },
     ]);
+  });
+});
+
+describe('parseCliOptions', () => {
+  it.each([
+    [['--stage', 'dev', '--app', 'flag-app'], { SEED_APP_NAME: 'env-app' }, 'flag-app'],
+    [['--stage', 'dev'], { SEED_APP_NAME: 'env-app' }, 'env-app'],
+    [['--stage', 'dev'], {}, 'bike4mind'],
+  ])('builds the key alias and the sst store from one app name (%j, %j)', async (args, env, app) => {
+    const options = parseCliOptions(args, env);
+    const exec = vi.fn((_cmd: string, argv: string[]) => (argv[2] === 'list' ? '# x/dev\n' : ''));
+    const describeKey = vi.fn(async () => ({ enabled: true, arn: 'arn:key' }));
+    await createWrappedStageDataKey(options, {
+      ...createSstSecretStore(options.appName, exec),
+      describeKey,
+      generateWrappedKey: async () => BLOB,
+      log: () => {},
+    });
+    expect(describeKey).toHaveBeenCalledWith(`alias/${app}-dev-secrets-at-rest`);
+    expect(exec).toHaveBeenCalledTimes(2);
+    for (const call of exec.mock.calls as unknown as [string, string[], { env: NodeJS.ProcessEnv }][]) {
+      expect(call[2].env.SEED_APP_NAME).toBe(app);
+    }
+  });
+
+  it('requires --stage and flags preview stages', () => {
+    expect(() => parseCliOptions([], {})).toThrow('--stage is required');
+    expect(parseCliOptions(['--stage', 'pr1'], {}).isPreview).toBe(true);
+    expect(parseCliOptions(['--stage', 'dev'], { IS_PREVIEW: 'true' }).isPreview).toBe(true);
+    expect(parseCliOptions(['--stage', 'production', '--dry-run'], {})).toMatchObject({
+      isPreview: false,
+      dryRun: true,
+    });
   });
 });
