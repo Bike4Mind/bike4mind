@@ -409,7 +409,18 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     source: { kind: 'reply', sessionId: 'session-1', messageId: 'message-1' },
   };
   const THEIRS = {
+    _id: 'id-2',
     publicId: 'theirs',
+    tier: 'bundle',
+    slug: 'their-artifact',
+    description: 'Their description',
+    tags: ['a'],
+    visibility: 'public',
+    commentPolicy: 'open',
+    size: 123,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    viewCount: 7,
     ownerId: 'user-2',
     scopeId: 'org-9',
     previousVersionMeta: { by: 'y' },
@@ -433,6 +444,30 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
       expect(field in row).toBe(false);
     }
     expect(row.title).toBe('Their artifact');
+  });
+
+  it('returns exactly the display allowlist for another user row', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}));
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        '_id',
+        'publicId',
+        'tier',
+        'slug',
+        'title',
+        'description',
+        'tags',
+        'visibility',
+        'commentPolicy',
+        'discoverable',
+        'size',
+        'publishedAt',
+        'updatedAt',
+        'viewCount',
+        'versionsCount',
+      ].sort()
+    );
   });
 
   it('drops any field not on the display allowlist from another user row', async () => {
