@@ -89,6 +89,7 @@ export const createSessionTurnContract = defineEndpoint({
       description: 'No session with that id exists, or the caller cannot write to it.',
       schema: ApiErrorSchema,
     },
+    413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
     422: {
       description: 'The body failed schema validation.',
       schema: CompletionsUnprocessableErrorSchema,

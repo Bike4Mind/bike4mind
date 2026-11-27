@@ -4367,7 +4367,7 @@
           "history_count": {
             "type": "integer",
             "minimum": 0,
-            "description": "Earlier turns of the session to send as context. Defaults to 10."
+            "description": "Earlier turns of the session to send as context. Defaults to 10. 14 is reserved and rejected with 422."
           },
           "prompt_mode": {
             "type": "string",
@@ -51221,6 +51221,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body over 25 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }

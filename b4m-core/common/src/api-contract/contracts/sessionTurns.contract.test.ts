@@ -45,10 +45,15 @@ describe('createSessionTurn contract', () => {
     ['an empty message', { ...validBody, message: '' }],
     ['a missing model', { session_id: 's', message: 'hi' }],
     ['a negative history_count', { ...validBody, history_count: -1 }],
+    ["the reserved history_count 14 (the web slider's unlimited mark)", { ...validBody, history_count: 14 }],
     ['an unknown prompt_mode', { ...validBody, prompt_mode: 'bare' }],
     ['a temperature out of range', { ...validBody, temperature: 3 }],
   ])('rejects %s', (_label, body) => {
     expect(SessionTurnRequestSchema.safeParse(body).success).toBe(false);
+  });
+
+  it.each([13, 15])('accepts history_count %i as a plain count', historyCount => {
+    expect(SessionTurnRequestSchema.safeParse({ ...validBody, history_count: historyCount }).success).toBe(true);
   });
 
   it('parses every event the stream sends', () => {
@@ -71,8 +76,9 @@ describe('createSessionTurn contract', () => {
   });
 
   it('rejects a settled event with a non-terminal status', () => {
-    expect(SessionTurnStreamEventSchema.safeParse({ type: 'settled', quest_id: 'q1', status: 'running' }).success).toBe(
-      false
-    );
+    expect(
+      SessionTurnStreamEventSchema.safeParse({ type: 'settled', quest_id: 'q1', status: 'running', failed: false })
+        .success
+    ).toBe(false);
   });
 });

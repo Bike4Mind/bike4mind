@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
 
@@ -54,5 +55,17 @@ describe('ChatCompletionProcess client frame sender', () => {
     await service.sendStatusUpdate(quest, 'Still working');
 
     expect(websocketSend).toHaveBeenCalled();
+  });
+
+  // The behavioural tests reach one StatusManager site; this pins the others (process() init, the
+  // rapid-reply and research paths), so none can quietly build its own websocket sender again.
+  it('builds every status manager and frame send through the injectable sender', () => {
+    const source = readFileSync(new URL('./ChatCompletionProcess.ts', import.meta.url), 'utf8');
+
+    expect(source.match(/new ClientMessageSender\(/g)).toHaveLength(1);
+    expect(source).toMatch(/\?\? new ClientMessageSender\(this\.db, logger\)/);
+    const statusManagerArgs = [...source.matchAll(/new StatusManager\(\s*([^,]+),/g)].map(match => match[1].trim());
+    expect(statusManagerArgs.length).toBeGreaterThan(0);
+    for (const firstArg of statusManagerArgs) expect(firstArg).toMatch(/^this\.clientFrameSender\(/);
   });
 });

@@ -46,7 +46,8 @@ import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/free
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
-import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -74,7 +75,7 @@ import type { z } from 'zod';
 import { handleQuestProcessingFailure } from '../internal/route';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 import { bodyParserErrorHandler, requestIdFrom, toJsonError } from './preStreamErrors';
-import { TurnReplyDiffer, createTurnFrameTee, isTerminalQuestStatus, type QuestSnapshot } from './turnFrameStream';
+import { TurnReplyDiffer, createTurnFrameTee, type QuestSnapshot } from './turnFrameStream';
 
 /**
  * Public `POST /api/v1/turns` (sessionTurns.contract.ts): adds a turn to an existing session through
@@ -256,13 +257,14 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       await checkFreeTierDailySpendCap({ user, billingOrganizationId, usageEventRepository, logger });
       // Held until the quest settles: this request runs the work, unlike the queued web send.
       quota = await admitRequestCompletion(caller, { holdSlot: true });
+      const fileInputsAllowed = fileInputsAllowedFor(caller);
 
       // A malformed id is just another session the caller cannot reach, not a cast failure.
       if (!mongoose.isValidObjectId(body.session_id)) throw new NotFoundError('Session not found');
       // With a session id this only looks up (write access via the ability) and never creates.
       const { session, sessionId, asyncPromises } = await getOrCreateSession({
         sessionId: body.session_id,
-        fabFileIds: body.fab_file_ids,
+        fabFileIds: fileInputsAllowed ? body.fab_file_ids : [],
         // An API-key turn keeps its files per-run, as /api/ai/llm does.
         ...(apiKeyInfo ? {} : { messageFileIds: body.message_file_ids }),
         origin: resolveSessionOrigin({ apiKeyInfo, headers: req.headers }),
@@ -291,7 +293,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
         },
       });
 
-      const deniedTools = dataLakeToolsDeniedFor(caller);
+      const deniedTools = apiKeyToolsDeniedFor(caller);
       const quest = await chatCompletion.invoke({
         body: {
           ...invokeBody,
@@ -301,6 +303,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
           ...(apiKeyInfo ? { enabledPlatformMcpConnections: undefined } : {}),
         },
         userId: user.id,
+        fileInputsAllowed,
         ...requestTurnAuth(caller),
         apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
         oauthClientId: apiKeyInfo?.oauthExchangeClientId,
@@ -328,18 +331,17 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       write({ type: 'turn', quest_id: questId, session_id: sessionId });
 
       const differ = new TurnReplyDiffer(questId);
-      // Frames carry no errorCode, so the closing events come from the stored quest. Chained so a
-      // settle read never lets a later frame overtake it; a failed read leaves the turn unsettled,
-      // which the end of the handler reports.
-      let settling: Promise<void> = Promise.resolve();
-      const settleFromStore = () => {
-        settling = settling
-          .then(async () => {
-            const stored = await storedSnapshot(questId);
-            if (stored) differ.settle(stored).forEach(event => write(event));
-          })
-          .catch(error => logger.warn('[TURNS] Settle read failed', { error: serializeError(error) }));
-        return settling;
+      // Frames carry no errorCode, so the closing events come from the stored quest, read once the
+      // processing has returned. A terminal frame is not used: the cancellation watcher sends its
+      // 'stopped' frame from a reload whose replies can predate the final saved text. A failed read
+      // leaves the turn unsettled, which the end of the handler reports.
+      const settleFromStore = async () => {
+        try {
+          const stored = await storedSnapshot(questId);
+          if (stored) differ.settle(stored).forEach(event => write(event));
+        } catch (error) {
+          logger.warn('[TURNS] Settle read failed', { error: serializeError(error) });
+        }
       };
 
       if (questStartParams) {
@@ -347,10 +349,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
         const tee = createTurnFrameTee({
           questId,
           forward: new ClientMessageSender(getStaticOptions().db, logger),
-          onFrame: snapshot => {
-            differ.observe(snapshot).forEach(event => write(event));
-            if (isTerminalQuestStatus(snapshot.status)) void settleFromStore();
-          },
+          onFrame: snapshot => differ.observe(snapshot).forEach(event => write(event)),
         });
         quotaHandedOff = true;
         const releaseQuota = quota;
@@ -389,7 +388,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       if (!quotaHandedOff) await quota.release();
     }
   });
-  app.use(TURNS_ENDPOINT, bodyParserErrorHandler('[TURNS]'));
+  app.use(TURNS_ENDPOINT, bodyParserErrorHandler({ endpoint: TURNS_ENDPOINT, logTag: '[TURNS]' }));
 
   app.all(TURNS_ENDPOINT, (req: Request, res: Response, next: NextFunction) => {
     const result = checkTurnsMethod(req.method);

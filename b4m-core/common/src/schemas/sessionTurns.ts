@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
 import { CompletionSseErrorEventSchema } from './cliCompletions';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
+import { CLIENT_UNLIMITED_HISTORY_VALUE } from '../llm';
 // Specific file, not the `../types` barrel - see the note in cliCompletions.ts.
 import { QUEST_OUTCOME_ERROR_CODES } from '../types/entities/SessionTypes';
 
@@ -41,12 +42,20 @@ export const SessionTurnRequestSchema = z.object({
     .optional(),
   message_file_ids: FileIdListSchema.optional().describe('Files attached to this message.'),
   fab_file_ids: FileIdListSchema.optional().describe('Workbench files to put in context for this turn.'),
+  // The web send path uses this value as its "unlimited history" slider mark, which the core turns
+  // into no window at all. Refused here so a count on the public contract only ever means a count.
   history_count: z
     .number()
     .int()
     .nonnegative()
+    .refine(count => count !== CLIENT_UNLIMITED_HISTORY_VALUE, {
+      message: `history_count ${CLIENT_UNLIMITED_HISTORY_VALUE} is reserved; send another count.`,
+    })
     .optional()
-    .describe(`Earlier turns of the session to send as context. Defaults to ${DEFAULT_SESSION_TURN_HISTORY_COUNT}.`),
+    .describe(
+      `Earlier turns of the session to send as context. Defaults to ${DEFAULT_SESSION_TURN_HISTORY_COUNT}. ` +
+        `${CLIENT_UNLIMITED_HISTORY_VALUE} is reserved and rejected with 422.`
+    ),
   prompt_mode: z
     .enum(['raw', 'grounded', 'surface'])
     .optional()

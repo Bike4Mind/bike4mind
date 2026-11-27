@@ -75,7 +75,6 @@ vi.mock('@bike4mind/server-utils/cli/auth', () => ({
 }));
 const resolveContractAuth = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContractAuth }));
-vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ dataLakeToolsDeniedFor: () => [] }));
 const getOrCreateSession = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({ getOrCreateSession }));
 vi.mock('@bike4mind/server-utils/middlewares/clientVersionGate', () => ({
@@ -108,7 +107,13 @@ const handleQuestProcessingFailure = vi.hoisted(() => vi.fn().mockResolvedValue(
 vi.mock('../internal/route', () => ({ handleQuestProcessingFailure }));
 vi.mock('./apiKeyUsageLog', () => ({ logApiKeyUsageOnResponse: vi.fn().mockResolvedValue(undefined) }));
 
-import { UnauthorizedError, NotFoundError, SessionTurnStreamEventSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  FILE_READ_TOOL_NAMES,
+  NotFoundError,
+  SessionTurnStreamEventSchema,
+  UnauthorizedError,
+} from '@bike4mind/common';
 import type { ClientFrameSender } from '@bike4mind/services/llm';
 import { registerTurnsRoutes } from './turnsRoute';
 
@@ -154,6 +159,20 @@ function post(body: unknown) {
     headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
     body: JSON.stringify(body),
   });
+}
+
+function apiKeyAuth(scopes: ApiKeyScope[]) {
+  return { method: 'apiKey', apiKeyInfo: { keyId: 'key-1', userId: USER.id, scopes } };
+}
+
+/** The reply text a client rebuilds from the slot events: `delta` appends, `replace` overwrites. */
+function replyText(events: { type: string; slot?: number; text?: string }[], slot = 0) {
+  return events.reduce((text, event) => {
+    if (event.slot !== slot) return text;
+    if (event.type === 'delta') return text + (event.text ?? '');
+    if (event.type === 'replace') return event.text ?? '';
+    return text;
+  }, '');
 }
 
 function parseEvents(text: string) {
@@ -331,6 +350,111 @@ describe('POST /api/v1/turns', () => {
       failed: true,
     });
     expect(events.at(-1)).toBe('[DONE]');
+  });
+
+  it('settles once, from the saved quest, when a stale stopped frame arrives before the final text', async () => {
+    // Until processing returns, the stored quest is the stopped reload frozen at the last heartbeat.
+    let finalTextSaved = false;
+    db.findQuest.mockImplementation(async () =>
+      finalTextSaved
+        ? { status: 'stopped', replies: ['Hello world, stopped'], creditsUsed: 2 }
+        : { status: 'stopped', replies: ['Hello'] }
+    );
+    processQuest.mockImplementation(async (_params, _logger, { clientMessageSender }) => {
+      await sendFrame(clientMessageSender, { status: 'running', replies: ['Hello wor'] });
+      // The cancellation watcher's frame, sent from that frozen reload.
+      await sendFrame(clientMessageSender, { status: 'stopped', replies: ['Hello'] });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      finalTextSaved = true;
+      await sendFrame(clientMessageSender, { status: 'stopped', replies: ['Hello world, stopped'] });
+    });
+
+    const res = await post(VALID_BODY);
+    const events = parseEvents(await res.text())
+      .slice(0, -1)
+      .map(event => SessionTurnStreamEventSchema.parse(JSON.parse(event)));
+
+    expect(replyText(events)).toBe('Hello world, stopped');
+    expect(events.filter(event => event.type === 'settled')).toHaveLength(1);
+    expect(events.at(-1)).toEqual({
+      type: 'settled',
+      quest_id: QUEST_ID,
+      status: 'stopped',
+      failed: true,
+      credits_used: 2,
+    });
+  });
+
+  it('runs an API-key turn as the key owner with the admin role withheld', async () => {
+    db.findUser.mockResolvedValue({ id: USER.id, isAdmin: true });
+    resolveContractAuth.mockResolvedValue(apiKeyAuth([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]));
+
+    const res = await post({ ...VALID_BODY, message_file_ids: ['m1'] });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    const sessionArgs = getOrCreateSession.mock.calls[0][0];
+    expect(sessionArgs.user.isAdmin).toBe(false);
+    // An API-key turn keeps its message files per-run, out of the session.
+    expect(sessionArgs).not.toHaveProperty('messageFileIds');
+    expect(invoke.fn).toHaveBeenCalledWith(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1', adminRoleWithheld: true })
+    );
+  });
+
+  it('answers an API key whose owner no longer exists with a JSON 401', async () => {
+    db.findUser.mockResolvedValue(null);
+    resolveContractAuth.mockResolvedValue(apiKeyAuth([ApiKeyScope.AI_CHAT]));
+
+    const res = await post(VALID_BODY);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('withholds file inputs and file-reading tools from a key without files:read', async () => {
+    db.findUser.mockResolvedValue({ id: USER.id });
+    resolveContractAuth.mockResolvedValue(apiKeyAuth([ApiKeyScope.AI_CHAT]));
+
+    const res = await post({ ...VALID_BODY, fab_file_ids: ['f1'] });
+    await res.text();
+
+    expect(getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: [] }));
+    const [{ body, fileInputsAllowed }] = invoke.fn.mock.calls[0];
+    expect(fileInputsAllowed).toBe(false);
+    expect(body.deniedTools).toEqual(expect.arrayContaining([...FILE_READ_TOOL_NAMES]));
+  });
+
+  it('keeps file inputs and file-reading tools for a key holding files:read', async () => {
+    db.findUser.mockResolvedValue({ id: USER.id });
+    resolveContractAuth.mockResolvedValue(apiKeyAuth([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]));
+
+    const res = await post({ ...VALID_BODY, fab_file_ids: ['f1'] });
+    await res.text();
+
+    expect(getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: ['f1'] }));
+    const [{ body, fileInputsAllowed }] = invoke.fn.mock.calls[0];
+    expect(fileInputsAllowed).toBe(true);
+    for (const tool of FILE_READ_TOOL_NAMES) expect(body.deniedTools ?? []).not.toContain(tool);
+  });
+
+  it('keeps every file input and tool for a signed-in caller', async () => {
+    const res = await post({ ...VALID_BODY, fab_file_ids: ['f1'] });
+    await res.text();
+
+    expect(getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: ['f1'] }));
+    const [{ body, fileInputsAllowed }] = invoke.fn.mock.calls[0];
+    expect(fileInputsAllowed).toBe(true);
+    expect(body).not.toHaveProperty('deniedTools');
+  });
+
+  it('answers a body over the 25 MB limit with a JSON 413 before the handler runs', async () => {
+    const res = await post({ ...VALID_BODY, message: 'x'.repeat(26 * 1024 * 1024) });
+
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(resolveContractAuth).not.toHaveBeenCalled();
   });
 
   it('answers another verb with 405', async () => {

@@ -5104,7 +5104,7 @@ export interface components {
       message_file_ids?: string[];
       /** @description Workbench files to put in context for this turn. */
       fab_file_ids?: string[];
-      /** @description Earlier turns of the session to send as context. Defaults to 10. */
+      /** @description Earlier turns of the session to send as context. Defaults to 10. 14 is reserved and rejected with 422. */
       history_count?: number;
       /**
        * @description How much of the system stack to place in front of the model. Unset keeps the full stack the web app uses.
@@ -21629,6 +21629,17 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body over 25 MB. */
+      413: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {

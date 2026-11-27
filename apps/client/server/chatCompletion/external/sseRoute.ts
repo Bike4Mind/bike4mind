@@ -495,7 +495,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });
-  app.use(COMPLETIONS_ENDPOINT, bodyParserErrorHandler('[CLI_LLM]'));
+  app.use(COMPLETIONS_ENDPOINT, bodyParserErrorHandler({ endpoint: COMPLETIONS_ENDPOINT, logTag: '[CLI_LLM]' }));
 
   // Express answers an unregistered verb with a bare 404, but the contract documents a 405 with
   // `Allow` (openapi/registerContract.ts) - the same one baseApi and defineLambdaRoute serve.

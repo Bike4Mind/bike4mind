@@ -73,15 +73,16 @@ export function toJsonError(
 /**
  * express.json failures never reach the handler. 415 (unsupported charset or encoding) is outside
  * the contract's status table, so every client fault but an oversized body folds into 400.
- * `logTag` prefixes the log line of an unexpected parser failure, e.g. `[CLI_LLM]`.
+ * `logTag` prefixes the log line of an unexpected parser failure, e.g. `[CLI_LLM]`. `endpoint` is
+ * passed in because Express strips the mount path from `req.path` inside a mounted handler.
  */
-export function bodyParserErrorHandler(logTag: string) {
+export function bodyParserErrorHandler({ endpoint, logTag }: { endpoint: string; logTag: string }) {
   return (err: unknown, req: Request, res: Response, next: NextFunction): void => {
     if (res.headersSent) return next(err);
     const requestId = requestIdFrom(flattenHeaders(req.headers));
     const parserStatus = err instanceof Error ? getHttpStatus(err) : undefined;
     if (parserStatus === undefined || parserStatus < 400 || parserStatus >= 500) {
-      new Logger({ metadata: { service: 'chatCompletion', endpoint: req.path, requestId } }).error(
+      new Logger({ metadata: { service: 'chatCompletion', endpoint, requestId } }).error(
         `${logTag} Body parser error`,
         { requestId, error: serializeError(err) }
       );
