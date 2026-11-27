@@ -55,6 +55,7 @@ export interface ProviderCredentialPlanInput {
  * original, unmarked table; an unmarked table's key strings all count as `static`.
  */
 export function withProviderCredentialPlan<T extends FederatableKeys>(keys: T, input: ProviderCredentialPlanInput): T {
+  if (!input.platformKeys && input.userKeys.size === 0) return keys;
   const plan: Partial<Record<FederatableProvider, PlannedCredential>> = {};
   for (const provider of ['openai', 'anthropic'] as const) {
     const key = keys[provider];
@@ -129,5 +130,19 @@ export function normalizeProviderCredential<Sentinel extends symbol>(
     if (credential === sentinel) return { kind: 'federated', fallbackKey: null };
     throw new TypeError('Unrecognized federated provider credential');
   }
-  return credential;
+  if (isProviderCredentialSpec(credential)) return credential;
+  throw new TypeError('Unrecognized provider credential');
+}
+
+function isProviderCredentialSpec(value: unknown): value is ProviderCredentialSpec {
+  if (typeof value !== 'object' || value === null || !('kind' in value)) return false;
+  switch (value.kind) {
+    case 'static':
+    case 'user_key':
+      return 'key' in value && typeof value.key === 'string';
+    case 'federated':
+      return 'fallbackKey' in value && (value.fallbackKey === null || typeof value.fallbackKey === 'string');
+    default:
+      return false;
+  }
 }

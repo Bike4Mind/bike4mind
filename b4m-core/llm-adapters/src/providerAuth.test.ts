@@ -103,7 +103,8 @@ describe('normalizeProviderCredential', () => {
     expect(normalizeProviderCredential(SENTINEL, SENTINEL)).toEqual({ kind: 'federated', fallbackKey: null });
   });
 
-  it('rejects a foreign symbol', () => {
+  it('rejects a foreign symbol or a key table', () => {
     expect(() => normalizeProviderCredential(Symbol('other') as typeof SENTINEL, SENTINEL)).toThrow(TypeError);
+    expect(() => normalizeProviderCredential({ openai: 'sk-x' } as never, SENTINEL)).toThrow(TypeError);
   });
 });
