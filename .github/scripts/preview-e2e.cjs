@@ -138,7 +138,7 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
       posted = true;
       log.notice('preview was asleep; waking');
     }
-    if (now() - started + intervalMs > deadlineMs) break;
+    if (now() - started + intervalMs + requestTimeoutMs > deadlineMs) break;
     await wait(intervalMs);
     state = await readStatus();
     if (state === 'unsupported') return unsupported();

@@ -252,8 +252,9 @@ test('ensureAwake treats a 404 on GET or POST (older or sleep-disabled preview) 
   }
 });
 
-test('ensureAwake stops at the wall-clock deadline and reports the elapsed time', async () => {
-  const w = wake([asleep, json(202, {}), asleep, asleep, asleep], { attempts: 48, deadlineMs: 25000 });
+test('ensureAwake stops at the wall-clock deadline, reserving time for the next request', async () => {
+  // 35s deadline: a third poll at 30s would fit the interval but not its 15s request timeout.
+  const w = wake([asleep, json(202, {}), asleep, asleep, asleep], { attempts: 48, deadlineMs: 35000 });
   await assert.rejects(w.run, /still asleep\/waking after 20s/);
   assert.equal(w.calls.filter(call => call.method === 'GET').length, 3);
 });
