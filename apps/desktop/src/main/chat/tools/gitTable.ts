@@ -12,6 +12,8 @@ export interface GitWord {
   splits: boolean;
   /** Whether the word holds a glob bash expands, which may stand for several words. */
   glob?: boolean;
+  /** Filled at run time with one word that cannot start with `-`, so git reads it as an operand, never an option. */
+  inert?: boolean;
 }
 
 /** The output format a call selects, `value` absent when it reads format.pretty. */
@@ -488,7 +490,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
   rebase: {
     options: `-qvnfm -C: -s: -X: -r? --onto= --(no-)keep-base --no-verify --verify --(no-)quiet --(no-)verbose
       --no-stat --stat --(no-)signoff --(no-)committer-date-is-author-date --(no-)reset-author-date --ignore-date
-      --(no-)ignore-whitespace --whitespace= --(no-)force-rebase --no-ff --ff --abort --quit --show-current-patch
+      --(no-)ignore-whitespace --whitespace= --(no-)force-rebase --no-ff --ff --abort --quit --continue --skip
+      --show-current-patch
       --apply --merge --(no-)rerere-autoupdate --empty= --(no-)autosquash --(no-)update-refs --no-gpg-sign
       --(no-)autostash --rebase-merges[=] --no-rebase-merges --(no-)fork-point --strategy= --strategy-option=
       --(no-)root --(no-)reapply-cherry-picks --(no-)keep-empty`,
@@ -789,7 +792,7 @@ type Miss = { listed: false; reason: string };
 
 const miss = (reason: string): Miss => ({ listed: false, reason });
 const shown = (text: string): string => (text.length > 40 ? `${text.slice(0, 40)}...` : text);
-const isOpen = (word: GitWord): boolean => word.splits || (!word.whole && word.text === '');
+const isOpen = (word: GitWord): boolean => !word.inert && (word.splits || (!word.whole && word.text === ''));
 const OPEN = 'with a word filled at run time where git reads options';
 
 function checkValue(form: Form, name: string, value: GitWord, label: string): Miss | null {
@@ -956,7 +959,7 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
   }
   if (form.maxOperands !== undefined) {
     if (operands.length > form.maxOperands) return miss(`${label} with ${operands.length} operands`);
-    if (operands.some(operand => !operand.whole && (operand.splits || form.open !== 'any'))) {
+    if (operands.some(operand => !operand.whole && !operand.inert && (operand.splits || form.open !== 'any'))) {
       return miss(`${label} with an operand filled at run time`);
     }
   }
