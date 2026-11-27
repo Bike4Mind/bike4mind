@@ -69,9 +69,6 @@ export const AdminOperationsModelSetting: React.FC = () => {
       );
       return queryClient.invalidateQueries({ queryKey: ['operationsModel'] });
     },
-    onError: (error: Error) => {
-      toast.error(`Failed to update operations model: ${error.message}`);
-    },
   });
 
   const draft = useRequiredSettingsDraft(
