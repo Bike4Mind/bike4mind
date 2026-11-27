@@ -215,3 +215,24 @@ export function buildNoOtherLakeMetaTagFilter(datalakeTag: string): Record<strin
     },
   };
 }
+
+/**
+ * The members a whole-lake teardown may destroy: owned by one of the lake's effective owners and
+ * carrying no other lake's meta-tag. Every other member outlives the teardown in its owner's
+ * library. Shared by the phase-1 soft delete and the phase-2 purge so the purge can never reach a
+ * file phase 1 would have left alone.
+ *
+ * An empty `ownerUserIds` matches nothing, the safe direction.
+ */
+export function buildDataLakeTeardownFilter(
+  scope: DataLakeMembershipScope,
+  ownerUserIds: readonly string[]
+): Record<string, unknown> {
+  return {
+    $and: [
+      buildDataLakeMembershipFilter(scope),
+      { userId: { $in: [...ownerUserIds] } },
+      buildNoOtherLakeMetaTagFilter(scope.datalakeTag),
+    ],
+  };
+}

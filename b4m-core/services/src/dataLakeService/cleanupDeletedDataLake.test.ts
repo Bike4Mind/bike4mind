@@ -48,13 +48,10 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
       delete: vi.fn(async () => {}),
     },
     fabFiles: {
-      // Called twice: the main sweep, then the mid-sweep-joiner re-check (step 3b). A real DB would
-      // find nothing left the second time once the ids above are hard-deleted; the mock mirrors that
-      // rather than replaying the same ids forever.
-      findIdsByDataLakeTag: vi
-        .fn()
-        .mockResolvedValueOnce(fileIds)
-        .mockResolvedValue([] as never),
+      findTeardownIdsByDataLakeTag: vi.fn(async () => fileIds),
+      // The survivor re-check (step 2b). A real DB finds nothing left once the ids above are
+      // hard-deleted.
+      findIdsByDataLakeTag: vi.fn(async () => [] as string[]),
       hardDeleteOneById: vi.fn(async () => true),
       findById: vi.fn(async () => undefined as never),
       pullTagsByFabFileId: vi.fn(async () => {}),
@@ -112,15 +109,46 @@ describe('cleanupDeletedDataLake', () => {
 
     // f1's row committed before its chunk delete threw, so f1 leaks orphaned chunks - the harmless
     // direction. f2 was never touched at all: its row survives, so the replay's
-    // `findIdsByDataLakeTag` still names it and the sweep resumes there rather than no-opping.
+    // `findTeardownIdsByDataLakeTag` still names it and the sweep resumes there rather than no-opping.
     expect(order).toEqual(['row:f1', 'chunks:f1']);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalledWith('f2');
+  });
+
+  it('destroys only the effective owner files no other lake holds, resolved under the owner grant', async () => {
+    const db = makeDb(['owned']);
+    db.dataLakeAccessGrants.listByLake = vi.fn(async () => [
+      { principalType: 'user', principalId: 'new-owner', role: 'owner' },
+    ]) as never;
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(
+      expect.objectContaining({ datalakeTag: LAKE.datalakeTag }),
+      ['new-owner']
+    );
+    expect(db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(['owned']);
+  });
+
+  it("lets another user's member leave the lake instead of destroying it", async () => {
+    const db = makeDb(['owned']);
+    db.fabFiles.findIdsByDataLakeTag = vi.fn(async () => ['curator-upload']);
+    db.fabFiles.findById = vi.fn(async () => ({
+      id: 'curator-upload',
+      userId: 'curator-1',
+      tags: [{ name: LAKE.datalakeTag, strength: 1 }],
+    })) as never;
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalledWith('curator-upload');
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalledWith('curator-upload');
+    expect(db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('curator-upload', [LAKE.datalakeTag]);
   });
 
   it('sends a spared survivor back to its uploader once it is stripped of the last org lake it was in', async () => {
     const db = makeDb([]);
     db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, organizationId: 'org-sales' }));
-    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    db.fabFiles.findIdsByDataLakeTag = vi.fn(async () => ['s1']);
     const survivor = {
       id: 's1',
       userId: 'u1',
@@ -153,7 +181,7 @@ describe('cleanupDeletedDataLake', () => {
   it('recomputes the owner even when stripping the lake signals changes nothing', async () => {
     const db = makeDb([]);
     db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, organizationId: 'org-sales' }));
-    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    db.fabFiles.findIdsByDataLakeTag = vi.fn(async () => ['s1']);
     const survivor = {
       id: 's1',
       userId: 'u1',
@@ -190,7 +218,7 @@ describe('cleanupDeletedDataLake', () => {
     const db = makeDb([]);
     const purgingLake = { ...LAKE, organizationId: 'org-sales' };
     db.dataLakes.findById = vi.fn(async () => purgingLake);
-    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    db.fabFiles.findIdsByDataLakeTag = vi.fn(async () => ['s1']);
     const survivor = {
       id: 's1',
       userId: 'u1',
@@ -383,7 +411,7 @@ describe('cleanupDeletedDataLake', () => {
   });
 
   it("sweeps a slice's findings BEFORE any of its rows, so an interruption cannot strand them", async () => {
-    // Once a row is gone its id is no longer resolvable by `findIdsByDataLakeTag`, so a DLQ retry
+    // Once a row is gone its id is no longer resolvable by `findTeardownIdsByDataLakeTag`, so a DLQ retry
     // could never name it again - the findings would be stranded permanently. This order fails the
     // recoverable way instead: findings lost early are still re-detectable from documents that
     // still exist. Two files in ONE slice, so the assertion is that the batch precedes BOTH rows,
@@ -423,7 +451,7 @@ describe('cleanupDeletedDataLake', () => {
     // "don't fail a whole teardown over a findings sweep" reflex - destroys the FabFiles with
     // their findings unswept, and a co-tagged sibling lake is then left quoting a 240-char excerpt
     // of a document that no longer exists, unresolvable and never re-detectable. Rejecting leaves
-    // every row in the slice present, so the replay's `findIdsByDataLakeTag` still names them all.
+    // every row in the slice present, so the replay's `findTeardownIdsByDataLakeTag` still names them all.
     const db = makeDb(['f1', 'f2']);
     db.dataLakeFindings.deleteForPurgedDocuments = vi.fn(async () => {
       throw new Error('per-document findings sweep failed');
@@ -557,7 +585,7 @@ describe('cleanupDeletedDataLake', () => {
       );
 
       // f1's storage delete failed before its row was ever touched - the id stays resolvable by
-      // findIdsByDataLakeTag on a DLQ retry, rather than hard-deleting a row over a live object.
+      // findTeardownIdsByDataLakeTag on a DLQ retry, rather than hard-deleting a row over a live object.
       expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
       expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
     });
@@ -602,7 +630,7 @@ describe('cleanup execution admission and atomic deletion adapter', () => {
     await expect(cleanupDeletedDataLake(ADMIN, LAKE.id, { db, beginPurge, storage })).rejects.toBeInstanceOf(
       BadRequestError
     );
-    expect(db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.fabFiles.findTeardownIdsByDataLakeTag).not.toHaveBeenCalled();
     expect(storage.delete).not.toHaveBeenCalled();
     expect(db.dataLakes.delete).not.toHaveBeenCalled();
   });

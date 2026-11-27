@@ -43,6 +43,7 @@ function buildDb(overrides: Record<string, unknown> = {}) {
       delete: vi.fn().mockResolvedValue(undefined),
     },
     fabFiles: {
+      findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(['file-blocked']),
       findIdsByDataLakeTag: vi.fn().mockResolvedValue(['file-blocked']),
       findStorageKeysByIds: vi.fn().mockResolvedValue([]),
       hardDeleteOneById: vi.fn(),
@@ -121,7 +122,7 @@ describe('cleanupDeletedDataLake - evidence-held stored objects', () => {
     }>
   ) => {
     const db = buildDb();
-    db.fabFiles.findIdsByDataLakeTag.mockResolvedValue(members.map(member => member.id));
+    db.fabFiles.findTeardownIdsByDataLakeTag.mockResolvedValue(members.map(member => member.id));
     db.fabFiles.findStorageKeysByIds.mockResolvedValue(members);
     const storage = { delete: vi.fn().mockResolvedValue(undefined) };
     const deleteFileAndChunks = vi.fn(async (id: string) => {

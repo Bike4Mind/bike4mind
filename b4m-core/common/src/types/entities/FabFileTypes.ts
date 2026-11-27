@@ -2237,7 +2237,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     archiveStampToClear?: Date
   ): Promise<DataLakeSweptFile[]>;
   /**
-   * Soft-delete (phase 1) all member files, stamped `at`.
+   * Soft-delete (phase 1) the member files a whole-lake teardown may destroy, stamped `at`: those
+   * owned by one of `ownerUserIds` (the lake's effective owners) and in no other lake. Every other
+   * member is left live and keeps its tags, so a restore finds the lake whole.
    *
    * Returns the files this call itself stamped, matched back by stamp equality - not the ids it
    * selected. A row another delete door claimed in between carries a different stamp and is left
@@ -2245,7 +2247,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * lake rather than one per file it hoped to. Carries `userId`/`fileSize` alongside `id` for the
    * same reason as `undeleteByDataLakeTag` above - see its note.
    */
-  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<DataLakeSweptFile[]>;
+  softDeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    ownerUserIds: readonly string[],
+    at?: Date
+  ): Promise<DataLakeSweptFile[]>;
   /**
    * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
    *
@@ -2277,6 +2283,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Member ids (including soft-deleted) under the same owner-and-no-other-lake rule as
+   * `softDeleteByDataLakeTag`: the only files a whole-lake teardown removes from the retrieval
+   * index or purges.
+   */
+  findTeardownIdsByDataLakeTag(scope: DataLakeMembershipScope, ownerUserIds: readonly string[]): Promise<string[]>;
   /**
    * Members that are CURRENTLY live - the lake's membership as of now, which is what a reader
    * reconstructing membership over time has to start from. Distinct from `findIdsByDataLakeTag`

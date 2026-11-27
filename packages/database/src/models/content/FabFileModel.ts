@@ -57,6 +57,7 @@ import {
   buildDataLakeMembershipQuery,
   buildDataLakePrefixOnlyMembershipFilter,
   buildLacksContentPrefixTagFilter,
+  buildDataLakeTeardownFilter,
   buildNoOtherLakeMetaTagFilter,
   LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
@@ -3530,9 +3531,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return restored;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
+  async softDeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    ownerUserIds: readonly string[],
+    at: Date = new Date()
+  ): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { ...buildDataLakeTeardownFilter(scope, ownerUserIds), deletedAt: null },
       { _id: 1, userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
@@ -3658,6 +3663,16 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     const docs = await this.fabFileModel
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
+      .setOptions({ includeDeleted: true });
+    return docs.map(d => d._id.toString());
+  }
+
+  async findTeardownIdsByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    ownerUserIds: readonly string[]
+  ): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find(buildDataLakeTeardownFilter(scope, ownerUserIds), { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }

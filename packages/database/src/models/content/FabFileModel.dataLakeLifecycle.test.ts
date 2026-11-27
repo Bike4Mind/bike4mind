@@ -30,6 +30,9 @@ const scope: DataLakeMembershipScope = {
   creatorUserId: CREATOR,
 };
 
+/** The lake's effective owners: the creator, with no owner grant superseding them. */
+const OWNERS = [CREATOR];
+
 /** The pre-fix scope: what these methods matched when they only knew the meta-tag. */
 const metaOnlyScope: DataLakeMembershipScope = { datalakeTag: DATALAKE_TAG };
 
@@ -1139,7 +1142,7 @@ describe('FabFile data lake lifecycle membership', () => {
     it('soft-deletes the members and spares every stranger-owned prefix match', async () => {
       const rows = await seedLakeRows();
 
-      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
       const ids = swept.map(f => f.id);
 
       expect(ids.sort()).toEqual([...rows.memberIds].sort());
@@ -1155,7 +1158,7 @@ describe('FabFile data lake lifecycle membership', () => {
     it('round-trips a prefix-only member back to live', async () => {
       const rows = await seedLakeRows();
 
-      await fabFileRepository.softDeleteByDataLakeTag(scope);
+      await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
 
       expect(restored).toHaveLength(2);
@@ -1175,7 +1178,7 @@ describe('FabFile data lake lifecycle membership', () => {
       });
       const id = orgOwned._id.toString();
 
-      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
       expect(swept.find(f => f.id === id)).toMatchObject({ userId: CREATOR, organizationId: 'o1' });
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
       expect(restored.find(f => f.id === id)).toMatchObject({ userId: CREATOR, organizationId: 'o1' });
@@ -1191,7 +1194,7 @@ describe('FabFile data lake lifecycle membership', () => {
       });
       const id = pending._id.toString();
 
-      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
       expect(swept.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
       expect(restored.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
@@ -1210,7 +1213,7 @@ describe('FabFile data lake lifecycle membership', () => {
       );
       const id = legacy._id.toString();
 
-      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
       expect(swept.find(f => f.id === id)).toMatchObject({ fileSize: 100 });
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
       expect(restored.find(f => f.id === id)).toMatchObject({ fileSize: 100 });
@@ -1218,7 +1221,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
     it('honours excludeIds so a discarded duplicate stays deleted', async () => {
       const rows = await seedLakeRows();
-      await fabFileRepository.softDeleteByDataLakeTag(scope);
+      await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
 
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()]);
 
@@ -1231,7 +1234,7 @@ describe('FabFile data lake lifecycle membership', () => {
     it('omits a row a concurrent restore already revived', async () => {
       const stamp = new Date('2026-07-01T00:00:00.000Z');
       const rows = await seedLakeRows();
-      await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+      await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, stamp);
       // The losing half's view: the row is enumerated, then someone else clears deletedAt before
       // this write reaches it, so the conditional update matches nothing.
       await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: null } }).setOptions({
@@ -1262,7 +1265,7 @@ describe('FabFile data lake lifecycle membership', () => {
         return updateOne(filter as never, update as never);
       }) as never);
 
-      const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+      const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, stamp);
 
       expect(flipped.map(f => f.id)).toEqual([rows.metaTagged._id.toString()]);
     });
@@ -1275,8 +1278,8 @@ describe('FabFile data lake lifecycle membership', () => {
       const stamp = new Date('2026-07-01T00:00:00.000Z');
       const rows = await seedLakeRows();
 
-      const first = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
-      const second = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+      const first = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, stamp);
+      const second = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, stamp);
 
       expect(first.map(f => f.id).sort()).toEqual([...rows.memberIds].sort());
       expect(second).toEqual([]);
@@ -1284,11 +1287,69 @@ describe('FabFile data lake lifecycle membership', () => {
 
     it('finds soft-deleted members for the restore dedup pass', async () => {
       await seedLakeRows();
-      await fabFileRepository.softDeleteByDataLakeTag(scope);
+      await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
 
       const found = await fabFileRepository.findDeletedByDataLakeTag(scope);
 
       expect(found).toHaveLength(2);
+    });
+  });
+
+  describe('whole-lake teardown keeps members it may not destroy', () => {
+    const CURATOR = 'u-curator';
+    const OTHER_LAKE_TAG = 'datalake:org1:other';
+
+    async function seedMixedMembers() {
+      const ownerOnly = await makeFile({ fileName: 'owner-only.txt', userId: CREATOR, tags: [{ name: DATALAKE_TAG }] });
+      const curatorUpload = await makeFile({
+        fileName: 'curator.txt',
+        userId: CURATOR,
+        tags: [{ name: DATALAKE_TAG }],
+      });
+      const alsoInOtherLake = await makeFile({
+        fileName: 'shared-lakes.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: OTHER_LAKE_TAG }],
+      });
+      return {
+        ownerOnly: ownerOnly._id.toString(),
+        curatorUpload: curatorUpload._id.toString(),
+        alsoInOtherLake: alsoInOtherLake._id.toString(),
+      };
+    }
+
+    it("soft-deletes only the owner's files that no other lake holds", async () => {
+      const ids = await seedMixedMembers();
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
+
+      expect(swept.map(f => f.id)).toEqual([ids.ownerOnly]);
+      expect((await readRaw(ids.curatorUpload))?.deletedAt ?? null).toBeNull();
+      expect((await readRaw(ids.alsoInOtherLake))?.deletedAt ?? null).toBeNull();
+    });
+
+    it('follows the effective owner rather than the creator', async () => {
+      const ids = await seedMixedMembers();
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, [CURATOR]);
+
+      expect(swept.map(f => f.id)).toEqual([ids.curatorUpload]);
+      expect((await readRaw(ids.ownerOnly))?.deletedAt ?? null).toBeNull();
+    });
+
+    it('matches nothing when the lake resolves no owner', async () => {
+      await seedMixedMembers();
+
+      expect(await fabFileRepository.softDeleteByDataLakeTag(scope, [])).toEqual([]);
+    });
+
+    it('names the same files for the purge, soft-deleted ones included', async () => {
+      const ids = await seedMixedMembers();
+      await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);
+      // Deleted on its owner's own: still not the teardown's to destroy.
+      await FabFile.updateOne({ _id: ids.curatorUpload }, { $set: { deletedAt: new Date() } });
+
+      expect(await fabFileRepository.findTeardownIdsByDataLakeTag(scope, OWNERS)).toEqual([ids.ownerOnly]);
     });
   });
 
@@ -1308,7 +1369,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('writes the caller stamp on every row it flips', async () => {
         const rows = await seedLakeRows();
 
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         for (const id of rows.memberIds) {
           expect((await readRaw(id))?.deletedAt?.getTime()).toBe(STAMP.getTime());
@@ -1319,7 +1380,7 @@ describe('FabFile data lake lifecycle membership', () => {
         const rows = await seedLakeRows();
         await deleteIndependently(rows.prefixOwned._id, EARLIER);
 
-        const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         expect(flipped.map(f => f.id)).toEqual([rows.metaTagged._id.toString()]);
         expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
@@ -1328,7 +1389,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('un-deletes the named batch and nothing deleted before it', async () => {
         const rows = await seedLakeRows();
         await deleteIndependently(rows.prefixOwned._id, EARLIER);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
 
@@ -1341,7 +1402,7 @@ describe('FabFile data lake lifecycle membership', () => {
         // The boundary a `$gt` bound would drop on the floor - every row a teardown flips carries
         // the mark itself, so an exclusive comparison skips the whole batch.
         await seedLakeRows();
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         expect(await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP)).toHaveLength(2);
       });
@@ -1350,7 +1411,7 @@ describe('FabFile data lake lifecycle membership', () => {
         // The case a lower bound readmits: the per-file delete routes keep stamping members while
         // the lake sits deleted, and those deletions are the creator's, not the teardown's.
         const rows = await seedLakeRows();
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
         const laterMember = await makeFile({
           fileName: 'added-later.txt',
           userId: CREATOR,
@@ -1370,7 +1431,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('reverses everything when no stamp is given, for a lake torn down before the mark existed', async () => {
         const rows = await seedLakeRows();
         await deleteIndependently(rows.prefixOwned._id, EARLIER);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         expect(await fabFileRepository.undeleteByDataLakeTag(scope)).toHaveLength(2);
       });
@@ -1378,7 +1439,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('narrows the dedup read to the batch', async () => {
         const rows = await seedLakeRows();
         await deleteIndependently(rows.prefixOwned._id, EARLIER);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         expect((await fabFileRepository.findDeletedByDataLakeTag(scope, STAMP)).map(f => f.fileName)).toEqual([
           'meta.txt',
@@ -1388,7 +1449,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
       it('composes the stamp with excludeIds', async () => {
         const rows = await seedLakeRows();
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()], STAMP);
 
@@ -1416,7 +1477,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('clears archivedAt alongside deletedAt when the archive stamp matches this lake', async () => {
         const rows = await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
@@ -1436,7 +1497,7 @@ describe('FabFile data lake lifecycle membership', () => {
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
         // One member's stamp diverges after the fact (e.g. re-archived by another mechanism).
         await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: OTHER_STAMP } });
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
@@ -1459,7 +1520,7 @@ describe('FabFile data lake lifecycle membership', () => {
         // aggregate modified count cannot say which rows moved.
         await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
         const spy = vi.spyOn(FabFile, 'updateOne');
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
@@ -1483,7 +1544,7 @@ describe('FabFile data lake lifecycle membership', () => {
         // Simulates a file this lake's delete swept up (matching deletedAt) but whose archivedAt
         // was written by a different lake's archive - a different stamp this restore does not own.
         await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: OTHER_STAMP } });
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
@@ -1496,7 +1557,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('leaves archivedAt untouched when no archive stamp is given (pre-mark lake, the known limitation)', async () => {
         const rows = await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
 
@@ -1511,7 +1572,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('never clears archivedAt on a dedup-discarded duplicate (excludeIds)', async () => {
         const rows = await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(
           scope,
@@ -1531,7 +1592,7 @@ describe('FabFile data lake lifecycle membership', () => {
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
         // Deleted on its own, at a stamp the teardown never wrote.
         await deleteIndependently(rows.metaTagged._id, EARLIER);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
@@ -1545,7 +1606,7 @@ describe('FabFile data lake lifecycle membership', () => {
       it('the displayed file count agrees with the Files browser after restore (the stale-count symptom)', async () => {
         const rows = await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
-        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS, STAMP);
 
         await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
