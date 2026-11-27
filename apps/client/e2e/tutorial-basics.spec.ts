@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './waf-test';
 import { apiGetAdminSettings, apiUpdateAdminSetting } from './helpers/api';
 import { isSharedRealEnv } from './helpers/env';
 import { getTestUsers } from './helpers/test-users';
