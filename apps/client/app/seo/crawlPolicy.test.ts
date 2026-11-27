@@ -74,6 +74,7 @@ describe('CORE_DISALLOWED_PATHS', () => {
     '/a/shareToken/asset.png',
     '/uc/abc123',
     '/embed/abc123',
+    '/t/article-bullets',
   ])('leaves the capability-token url %s crawlable', url => {
     const patterns = buildDisallowList([overlay({ disallowPaths: ['/widgets'] })]);
     const matched = patterns.filter(pattern => url.startsWith(pattern));

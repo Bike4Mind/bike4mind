@@ -4,6 +4,7 @@ import {
   QUEST_DISPATCH_SIGNATURE_HEADER,
   QUEST_DISPATCH_TIMESTAMP_HEADER,
   signQuestDispatch,
+  type QuestDispatchIdentity,
 } from './questDispatchSignature';
 import type { z } from 'zod';
 import type { QuestStartBodySchema } from '@bike4mind/services/llm';
@@ -38,13 +39,27 @@ const RETRY_BACKOFF_MS = 300;
  * per-environment branching - the only difference is how the URL/secret resolve.
  */
 export async function dispatchQuest(params: QuestStartBody, logger: Logger): Promise<void> {
-  const url = `${chatCompletionBaseUrl()}/process`;
-  const body = JSON.stringify(params);
-  const { timestamp, signature } = signQuestDispatch(
-    Resource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+  await dispatchSigned(
+    '/process',
     { questId: params.questId, userId: params.userId, sessionId: params.sessionId },
-    body
+    params,
+    logger
   );
+}
+
+/**
+ * POST a signed payload to a ChatCompletion internal route, with dispatchQuest's timeout and retry.
+ * Also used for a skill template's example run (server/skillMarket/templateExample.ts).
+ */
+export async function dispatchSigned(
+  path: string,
+  identity: QuestDispatchIdentity,
+  payload: unknown,
+  logger: Logger
+): Promise<void> {
+  const url = `${chatCompletionBaseUrl()}${path}`;
+  const body = JSON.stringify(payload);
+  const { timestamp, signature } = signQuestDispatch(Resource.CHAT_COMPLETION_INTERNAL_SECRET.value, identity, body);
   const deadline = Date.now() + DISPATCH_TIMEOUT_MS;
   let lastError: Error | undefined;
 
@@ -70,7 +85,7 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
       });
 
       if (res.status === 202) {
-        logger.debug('Quest dispatched to ChatCompletion', { questId: params.questId, attempt });
+        logger.debug('Dispatched to ChatCompletion', { path, questId: identity.questId, attempt });
         return;
       }
 
@@ -90,7 +105,8 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
 
     if (attempt < MAX_ATTEMPTS && deadline - Date.now() > RETRY_BACKOFF_MS) {
       logger.warn('Retrying ChatCompletion dispatch', {
-        questId: params.questId,
+        path,
+        questId: identity.questId,
         error: lastError?.message,
       });
       await new Promise(resolve => setTimeout(resolve, RETRY_BACKOFF_MS));

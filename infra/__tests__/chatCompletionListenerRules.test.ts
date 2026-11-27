@@ -30,7 +30,7 @@ describe('ChatCompletion load balancer listener rules', () => {
     expect(squashed).toContain(
       "...DIRECT_PATHS.map(path => ({ listen: forwardListen, forward: '8080/http' as const, conditions: { path } }))"
     );
-    expect(source).toContain("const DIRECT_PATHS = ['/process', '/health'] as const;");
+    expect(source).toContain("const DIRECT_PATHS = ['/process', '/template-example', '/health'] as const;");
     // An unconditional forward rule would become the listener's default action and admit everything.
     expect(squashed).toContain(": [{ listen: forwardListen, forward: '8080/http' as const }];");
     expect(source.match(/listen: forwardListen, forward: '8080\/http' as const \}/g)).toHaveLength(1);

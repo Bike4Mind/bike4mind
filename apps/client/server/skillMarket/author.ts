@@ -3,7 +3,9 @@ import {
   SkillListing,
   SkillListingImport,
   SkillListingReport,
+  deleteListingTemplate,
   SkillListingVersion,
+  markListingTemplateStale,
   skillRepository,
 } from '@bike4mind/database';
 import {
@@ -154,7 +156,7 @@ export async function publishListing(
   return { listing: fresh!, version };
 }
 
-async function requireAudienceMembership(userId: string, listing: ISkillListing): Promise<void> {
+export async function requireAudienceMembership(userId: string, listing: ISkillListing): Promise<void> {
   if (listing.visibility !== 'organization' && listing.visibility !== 'space') return;
   const audience = await audienceIdsFor(userId);
   if (listing.visibility === 'organization' && !audience.orgIds.includes(listing.organizationId ?? '')) {
@@ -197,6 +199,7 @@ export async function submitNewVersion(
   });
   // Only after the submit is accepted, so a refused resubmit leaves the listing untouched.
   if (validTags) await SkillListing.updateOne({ _id: listing.id }, { $set: { tags: validTags } });
+  await markListingTemplateStale(String(listing.id));
   const fresh = await SkillListing.findById(listing.id);
   return { listing: fresh!, version };
 }
@@ -260,6 +263,7 @@ export async function deleteOwnWithdrawnListing(userId: string, listingId: strin
     SkillListingImport.deleteMany({ listingId: id }),
     SkillListingReport.deleteMany({ listingId: id }),
     SkillBundle.updateMany({ listingIds: id }, { $pull: { listingIds: id } }),
+    deleteListingTemplate(id),
   ]);
 }
 

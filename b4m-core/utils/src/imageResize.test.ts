@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { imagePixelCount, MAX_IMAGE_PIXELS, ensureImageWithinDimensionLimit } from './imageResize';
+import { Jimp } from 'jimp';
+import {
+  coverImageToJpeg,
+  ensureImageWithinDimensionLimit,
+  ImageDecodeError,
+  imagePixelCount,
+  MAX_IMAGE_PIXELS,
+} from './imageResize';
 
 /**
  * A valid PNG header declaring `width` x `height`, optionally padded. image-size reads the
@@ -50,5 +57,31 @@ describe('ensureImageWithinDimensionLimit', () => {
   it('still processes a normal small image (the guard does not block legit images)', async () => {
     const out = await ensureImageWithinDimensionLimit(REAL_PNG);
     expect(Buffer.isBuffer(out)).toBe(true);
+  });
+});
+
+describe('coverImageToJpeg', () => {
+  it.each([
+    [400, 100],
+    [100, 400],
+    [60, 30],
+  ])('scales and crops a %ix%i image to exactly the target size as JPEG', async (w, h) => {
+    const source = await new Jimp({ width: w, height: h, color: 0x3366ccff }).getBuffer('image/png');
+    const out = await coverImageToJpeg(Buffer.from(source), { width: 120, height: 63 });
+    expect(out.subarray(0, 2).toString('hex')).toBe('ffd8');
+    const decoded = await Jimp.read(out);
+    expect([decoded.bitmap.width, decoded.bitmap.height]).toEqual([120, 63]);
+  });
+
+  it('refuses a decompression bomb without decoding it', async () => {
+    await expect(coverImageToJpeg(pngHeader(20000, 20000), { width: 120, height: 63 })).rejects.toBeInstanceOf(
+      ImageDecodeError
+    );
+  });
+
+  it('refuses bytes that are not an image', async () => {
+    await expect(
+      coverImageToJpeg(Buffer.from('not an image at all'), { width: 120, height: 63 })
+    ).rejects.toBeInstanceOf(ImageDecodeError);
   });
 });

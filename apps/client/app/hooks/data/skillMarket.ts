@@ -8,6 +8,7 @@ import type {
   ISkillListingVersion,
   ISkillSnapshot,
   SkillListingReportReason,
+  SkillListingTemplateSummary,
   SkillListingVisibility,
   SkillReviewStatus,
   SkillRiskTier,
@@ -65,7 +66,11 @@ export type MarketFilters = {
   tags: string[];
 };
 
-export type MyListing = MarketListing & { versions: ISkillListingVersion[] };
+export type MyListing = MarketListing & {
+  versions: ISkillListingVersion[];
+  /** The listing's template page, if the author created one. */
+  template?: SkillListingTemplateSummary | null;
+};
 
 export type MarketMe = {
   organizations: Array<{ id: string; name: string }>;

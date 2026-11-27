@@ -1,8 +1,8 @@
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
-import { getLlmByModel } from '@bike4mind/llm-adapters';
+import { getLlmByModel, type CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import type { ISkillHonestSummary, ISkillScanFinding, ISkillSnapshot } from '@bike4mind/common';
+import type { ISkillHonestSummary, ISkillScanFinding, ISkillSnapshot, ModelInfo } from '@bike4mind/common';
 import {
   getEffectiveApiKeyByBackend,
   OperationsModelService,
@@ -63,8 +63,11 @@ export type ClassifierResult =
 /** Sends one system + user message to a model and resolves its full text. Injected for tests. */
 export type ClassifierLlm = {
   model: string;
-  complete: (system: string, user: string) => Promise<string>;
+  /** `onUsage` receives each provider-reported usage update, for a caller that records the call. */
+  complete: (system: string, user: string, onUsage?: (info?: CompletionInfo) => void) => Promise<string>;
 };
+
+export type OperationsClassifierLlm = ClassifierLlm & { modelInfo: ModelInfo };
 
 const SYSTEM_PROMPT_BODY = `You are a strict security reviewer for a marketplace of "skills": reusable instruction templates that another user will import and run as THEIR OWN trusted instructions to an AI assistant. A malicious skill can therefore hijack the importer's assistant.
 
@@ -174,7 +177,7 @@ export async function getOperationsClassifierLlm(
   logger: Logger,
   endUserId: string,
   opts: { maxTokens?: number } = {}
-): Promise<ClassifierLlm> {
+): Promise<OperationsClassifierLlm> {
   const operationsModel = await OperationsModelService.getOperationsModel({ endUserId });
   const modelInfo = operationsModel.modelInfo;
   const apiKey = await getEffectiveApiKeyByBackend('system', modelInfo.backend);
@@ -182,7 +185,8 @@ export async function getOperationsClassifierLlm(
   if (!llm) throw new Error('No LLM backend for the operations model');
   return {
     model: modelInfo.id,
-    complete: async (system, user) => {
+    modelInfo,
+    complete: async (system, user, onUsage) => {
       let raw = '';
       await llm.complete(
         modelInfo.id,
@@ -191,7 +195,8 @@ export async function getOperationsClassifierLlm(
           { role: 'user' as const, content: user },
         ],
         { temperature: 0, maxTokens: opts.maxTokens ?? 1500, stream: false },
-        async (parts: (string | null | undefined)[]) => {
+        async (parts: (string | null | undefined)[], info?: CompletionInfo) => {
+          onUsage?.(info);
           raw += parts.filter(Boolean).join('');
         }
       );

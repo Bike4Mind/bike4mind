@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { applyExampleRunPolicy, type ExampleRunStep } from './exampleRunTools';
 import { CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { validateImageCredits } from './base/utils';
@@ -259,5 +261,35 @@ describe('ToolBuilder.buildTools child tools', () => {
         const committed = (builder as unknown as { committedToolCredits(): number }).committedToolCredits();
         expect(committed).toBe(0);
       });
+  });
+});
+
+describe('ToolBuilder.buildTools caller child wrapper', () => {
+  it("applies the caller's wrapper (the example-run dry-run policy) to a subagent's tools", async () => {
+    const { builder } = makeBuilder();
+    buildSharedToolsCalls.length = 0;
+    const steps: ExampleRunStep[] = [];
+    builder.buildTools({
+      quest: asQuest(quest()) as never,
+      saveQuest: async () => null,
+      llm: {} as never,
+      config: {},
+      wrapChildTools: tools => applyExampleRunPolicy(tools, { onStep: step => steps.push(step) }),
+    });
+
+    const wrapChildTools = buildSharedToolsCalls.at(-1)?.wrapChildTools as (
+      tools: ICompletionOptionTools[]
+    ) => ICompletionOptionTools[];
+    const realFn = vi.fn(async () => 'posted');
+    const [tool] = wrapChildTools([
+      {
+        toolSchema: { name: 'github__create_issue', description: '', parameters: { type: 'object', properties: {} } },
+        toolFn: realFn,
+      },
+    ]);
+
+    expect(JSON.parse(await tool.toolFn({}))).toMatchObject({ simulated: true });
+    expect(realFn).not.toHaveBeenCalled();
+    expect(steps).toEqual([{ label: 'Created issue in example-org/app', simulated: true }]);
   });
 });

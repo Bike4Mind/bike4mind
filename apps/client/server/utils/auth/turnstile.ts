@@ -84,6 +84,19 @@ export async function getTurnstileStepUpPolicy(): Promise<TurnstilePolicy> {
   };
 }
 
+/**
+ * The policy for the signed-out skill template free run: active whenever the secret and a site key are
+ * set, whatever the sign-in toggle says, and always fail-closed. Inactive means no free run at all.
+ */
+export async function getTurnstileFreeRunPolicy(): Promise<TurnstilePolicy> {
+  const secret = Config.TURNSTILE_SECRET_KEY;
+  if (!isTurnstileSecretConfigured(secret)) {
+    return { active: false, failClosed: true, siteKey: '', secret: '' };
+  }
+  const trimmedKey = String((await readSetting('turnstileSiteKey')) ?? '').trim();
+  return { active: trimmedKey !== '', failClosed: true, siteKey: trimmedKey, secret };
+}
+
 /** Hosts a token may be solved on: the app host plus any extra comma-separated TURNSTILE_ALLOWED_HOSTNAMES. */
 export function turnstileAllowedHostnames(): string[] {
   const hosts = (process.env.TURNSTILE_ALLOWED_HOSTNAMES ?? '')

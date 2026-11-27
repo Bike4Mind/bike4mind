@@ -6,7 +6,12 @@ import { UsageEvent, UsageEventRepository, usageEventRepository } from './UsageE
 import { CreditLot } from './CreditLotModel';
 import { User } from '../auth/UserModel';
 import { Organization } from '../infra/admin/OrganizationModel';
-import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IUsageEventInput,
+  PLATFORM_USAGE_OWNER_ID,
+  PLATFORM_USAGE_OWNER_TYPE,
+} from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -1531,5 +1536,70 @@ describe('UsageEventRepository.costByFundingCohort', () => {
     const rows = await usageEventRepository.costByFundingCohort(30);
 
     expect(rows).toEqual([expect.objectContaining({ cohortWeek: null, accounts: 1, unattributedCostUsd: 1 })]);
+  });
+});
+
+describe('platform-paid rows', () => {
+  const platformRow: Partial<IUsageEventInput> = {
+    requestId: 'quest-example',
+    userId: PLATFORM_USAGE_OWNER_ID,
+    ownerId: PLATFORM_USAGE_OWNER_ID,
+    ownerType: PLATFORM_USAGE_OWNER_TYPE,
+    source: 'system',
+    costUsd: 0.5,
+    creditsCharged: 0,
+    platformPaid: { reason: 'template_example_run', listingId: 'listing-1' },
+  };
+  const since = new Date(Date.now() - 60_000);
+
+  it('stores the platform owner and the listing it was spent on', async () => {
+    const doc = await record(platformRow);
+
+    const stored = await UsageEvent.findById(doc!.id).lean();
+    expect(stored).toMatchObject({ ownerType: 'Platform', ownerId: 'platform', creditsCharged: 0 });
+    expect(stored?.platformPaid).toEqual({ reason: 'template_example_run', listingId: 'listing-1' });
+    expect(stored?.fundingBreakdown).toBeUndefined();
+  });
+
+  it('rejects a platform-paid reason outside the vocabulary', async () => {
+    await expect(
+      record({ ...platformRow, platformPaid: { reason: 'gift' as unknown as 'template_example_run' } })
+    ).rejects.toThrow(/reason/);
+  });
+
+  it('stays out of every per-user and per-org spend read and cap', async () => {
+    await record();
+    await record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization });
+    await record(platformRow);
+
+    const user = await usageEventRepository.ownerUsageSummary('user-1', CreditHolderType.User);
+    const org = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+    expect(user.totals).toEqual({ requests: 1, cogsUsd: 0.01, creditsCharged: 50 });
+    expect(org.totals).toEqual({ requests: 1, cogsUsd: 0.01, creditsCharged: 50 });
+    expect(await usageEventRepository.findDailySpendByUser('user-1', since)).toBe(50);
+    expect(await usageEventRepository.creditsSpentByUser('user-1', since, new Date(Date.now() + 60_000))).toBe(100);
+    expect((await usageEventRepository.userTokensSince('user-1', since)).tokens).toBe(1500);
+    expect(await usageEventRepository.systemCostUsdByUserSince('user-1', since)).toBe(0);
+  });
+
+  it('counts in the admin platform reports without error', async () => {
+    await record();
+    await record(platformRow);
+
+    const platform = await usageEventRepository.platformUsageSummary({ days: 1 });
+    expect(platform.totals.requests).toBe(2);
+    expect(platform.totals.cogsUsd).toBeCloseTo(0.51, 9);
+    expect(platform.totals.creditsCharged).toBe(50);
+
+    const spend = await usageEventRepository.spendSummary({ from: since });
+    expect(spend.totals.cogsUsd).toBeCloseTo(0.51, 9);
+    expect(spend.byAccount).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ownerId: 'platform', ownerType: 'Platform' })])
+    );
+
+    const cogs = await usageEventRepository.monthlyCogsByProvider(1);
+    expect(cogs.reduce((sum, row) => sum + row.cogsUsd, 0)).toBeCloseTo(0.51, 9);
+    const margin = await usageEventRepository.marginByModelDay(since);
+    expect(margin.reduce((sum, row) => sum + row.cogsUsd, 0)).toBeCloseTo(0.51, 9);
   });
 });

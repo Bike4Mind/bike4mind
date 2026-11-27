@@ -92,6 +92,7 @@ import {
   SkillListing,
   SkillListingImport,
   SkillListingReport,
+  SkillListingTemplate,
   SkillListingVersion,
   claimSkillVersionScan,
   skillRepository,
@@ -118,6 +119,7 @@ import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
 import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
+import templateTryHandler from '@pages/api/skills/template/try/[slug]';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -148,6 +150,7 @@ beforeEach(async () => {
       'skill_listing_versions',
       'skill_listing_imports',
       'skill_listing_reports',
+      'skill_listing_templates',
       'skill_bundles',
       'spaces',
       'inboxes',
@@ -1966,5 +1969,130 @@ describe('Space audience (real mongod)', () => {
     });
     expect(approved).toBeTruthy();
     expect((await SkillListing.findById(listing.id))!.status).toBe('approved');
+  });
+});
+
+describe('template pages: try route and lifecycle (real mongod)', () => {
+  async function publishedTemplate(listing: ISkillListing, slug = 'article-bullets') {
+    return SkillListingTemplate.create({
+      listingId: listing.id,
+      slug,
+      headline: 'Bullets from any article',
+      examplePrompt: 'Turn this article into bullets',
+      status: 'published',
+      freeRunEnabled: true,
+    });
+  }
+  const tryCountOf = async (slug: string) => (await SkillListingTemplate.findOne({ slug }))!.tryCount;
+
+  it('imports on the first try, reuses the copy on the next, and counts both', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+
+    const first = await call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' });
+    expect(first._getJSONData()).toEqual({
+      skillName: listing.name,
+      examplePrompt: 'Turn this article into bullets',
+      imported: true,
+    });
+    const second = await call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' });
+    expect(second._getJSONData()).toMatchObject({ skillName: listing.name, imported: false });
+
+    expect(await Skill.countDocuments({ userId: OTHER })).toBe(1);
+    expect(await SkillListingImport.countDocuments({ listingId: listing.id, userId: OTHER })).toBe(1);
+    expect((await SkillListing.findById(listing.id))!.importCount).toBe(1);
+    expect(await tryCountOf('article-bullets')).toBe(2);
+  });
+
+  it("saves under a suffixed name when the visitor has a different skill with the listing's name", async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+    const mine = await makeSkill(OTHER, 'My own skill.', { name: listing.name });
+
+    const res = await call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' });
+    expect(res._getJSONData()).toMatchObject({ skillName: `${listing.name}-2`, imported: true });
+    const untouched = (await skillRepository.findById(mine.id))!;
+    expect(untouched.body).toBe('My own skill.');
+    expect(untouched.importedFrom).toBeUndefined();
+  });
+
+  it("imports an unlisted listing through its template page with the listing's share token", async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    await publishedTemplate(listing);
+    await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
+
+    const res = await call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' });
+    expect(res._getJSONData()).toMatchObject({ skillName: listing.name, imported: true });
+  });
+
+  it('404s for a template that is not published', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await SkillListingTemplate.create({ listingId: listing.id, slug: 'article-bullets', status: 'draft' });
+    await expect(call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(await tryCountOf('article-bullets')).toBe(0);
+  });
+
+  it('submitting a new version marks the template stale and leaves the author copy as written', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    await publishedTemplate(listing);
+    await skillRepository.update({ id: source.id, body: 'Rewrite as short bullets.' });
+
+    expect((await call(versionsHandler, 'POST', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(201);
+    const template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.stale).toBe(true);
+    expect(template.status).toBe('published');
+    expect(template.headline).toBe('Bullets from any article');
+    expect(template.examplePrompt).toBe('Turn this article into bullets');
+  });
+
+  it('withdrawing unpublishes the template and switches its free run off', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+
+    expect((await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(204);
+    const template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.status).toBe('draft');
+    expect(template.freeRunEnabled).toBe(false);
+    await expect(call(templateTryHandler, 'POST', OTHER, { slug: 'article-bullets' })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('account deletion withdraws the listing and unpublishes its template too', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+
+    expect(await withdrawAuthorListings(AUTHOR)).toBe(1);
+    expect((await SkillListingTemplate.findOne({ listingId: listing.id }))!.status).toBe('draft');
+  });
+
+  it('deleting a withdrawn listing deletes its template and frees the slug', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id });
+    await publishedTemplate(listing);
+
+    expect((await call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(204);
+    expect(await SkillListingTemplate.countDocuments({ listingId: listing.id })).toBe(0);
+
+    const other = await publish(await makeSkill(OTHER, 'Another body.'), 'public');
+    await expect(publishedTemplate(other.listing)).resolves.toBeTruthy();
+  });
+
+  it('a moderator delist unpublishes the template and switches free run off; restore does not republish', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'delist', reason: 'malware' }, true);
+    let template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.status).toBe('draft');
+    expect(template.freeRunEnabled).toBe(false);
+
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.status).toBe('draft');
+    expect(template.freeRunEnabled).toBe(false);
   });
 });

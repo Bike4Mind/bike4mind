@@ -77,6 +77,7 @@ import {
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { isCrawlerUserAgent } from '@server/utils/crawlerUserAgent';
 import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
@@ -1645,13 +1646,6 @@ function cacheControlFor(visibility: PublishVisibility): string {
   return 'private, no-store, must-revalidate';
 }
 
-/** Link-preview crawlers and indexers fetch every pasted URL automatically -
- *  merely PASTING your own link into Slack must not count as "someone saw it".
- *  Substring match on the UA, lowercased; the generic bot/crawler/spider tail
- *  catches the long tail of unfurlers. */
-const CRAWLER_UA_RE =
-  /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
-
 /** Record view analytics and verified reward evidence after page admission.
  * Writes are best-effort so analytics failures do not interrupt serving a page.
  * Bundle browser navigations also report their authenticated view via /api/publish/view.
@@ -1674,7 +1668,7 @@ function bumpViewCount(
   const { gateView, shareTokenEntryId } = opts;
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
-  const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
+  const isCrawler = isCrawlerUserAgent(userAgent);
   const signedInOther = isAuthed && !isOwner && !isCrawler;
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.

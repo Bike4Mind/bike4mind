@@ -1,4 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import {
+  ChatCompletionInvokeParamsSchema,
+  LLMApiRequestBodySchema,
+  SimplifiedChatRequestSchema,
+} from '@bike4mind/common';
 import { QuestStartBodySchema } from './questStartBody';
 
 const body = {
@@ -87,5 +92,44 @@ describe('QuestStartBodySchema.deepResearchConfig', () => {
   it('keeps values within the ceilings', () => {
     const parsed = QuestStartBodySchema.parse({ ...body, deepResearchConfig: { maxDepth: 10, duration: 10 } });
     expect(parsed.deepResearchConfig).toMatchObject({ maxDepth: 10, duration: 10 });
+  });
+});
+
+// The example-run mode (ExampleRunMode in ChatCompletionProcess) is a server-only process() argument.
+// No body a client sends, nor the queued body the ChatCompletion `/process` route parses, may carry it.
+describe('the template example-run mode is never read from a request body', () => {
+  const smuggled = { exampleRun: { onStep: 'x' }, templateExampleRun: true };
+
+  it.each([
+    ['QuestStartBodySchema', () => QuestStartBodySchema.parse({ ...body, ...smuggled })],
+    [
+      'ChatCompletionInvokeParamsSchema',
+      () =>
+        ChatCompletionInvokeParamsSchema.parse({
+          sessionId: 's1',
+          message: 'hello',
+          historyCount: 0,
+          fabFileIds: [],
+          params: { model: 'gpt-4' },
+          ...smuggled,
+        }),
+    ],
+    [
+      'LLMApiRequestBodySchema',
+      () =>
+        LLMApiRequestBodySchema.parse({
+          sessionId: 's1',
+          message: 'hello',
+          historyCount: 0,
+          fabFileIds: [],
+          params: { model: 'gpt-4' },
+          ...smuggled,
+        }),
+    ],
+    ['SimplifiedChatRequestSchema', () => SimplifiedChatRequestSchema.parse({ message: 'hello', ...smuggled })],
+  ])('%s strips it', (_name, parse) => {
+    const parsed = parse() as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('exampleRun');
+    expect(parsed).not.toHaveProperty('templateExampleRun');
   });
 });

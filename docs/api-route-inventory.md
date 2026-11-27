@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1294 routes: 139 contracted, 11 aliases of another route, 360 with no static caller in `apps/client/app`.
+1311 routes: 145 contracted, 11 aliases of another route, 370 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -118,6 +118,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | personas | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | preference-arena | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| preview-sleep | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
 | prompts | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | publish | 21 | 0 | 11 | 1 | 6 | 3 | 10 |
@@ -133,7 +134,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
 | sessions | 29 | 1 | 26 | 2 | 0 | 1 | 3 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
+| skills | 36 | 0 | 3 | 30 | 1 | 2 | 4 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
 | spaces | 13 | 0 | 0 | 13 | 0 | 0 | 9 |
@@ -152,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 137 | 133 | 118 | 12 | 0 | 7 | 123 |
+| v1 | 143 | 139 | 120 | 16 | 0 | 7 | 130 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1069,7 +1070,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/image-jobs` | POST | jwt | - | - | no | - | 1: `components/Session/chatImageSend.ts` |
-| `/api/image-jobs/[id]` | GET | jwt | - | - | no | - | 1: `hooks/data/imageJobs.ts` |
+| `/api/image-jobs/[id]` | GET | jwt | - | - | no | - | 1: `hooks/data/generationJobs.ts` |
 
 ### image-templates
 
@@ -1417,6 +1418,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/preference-arena/next` | GET | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
 | `/api/preference-arena/vote` | POST | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
 
+### preview-sleep
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/preview-sleep` | GET, POST | jwt | - | - | no | - | 1: `components/PreviewSleepBanner.tsx` |
+
 ### projects
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
@@ -1483,7 +1490,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | `/api/v1/quests/[id]` | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | `/api/v1/quests/[id]` | 2: `components/Session/VoiceSessionModal/voiceToolExecutor.ts`, `hooks/data/skillTemplate.ts` |
 | `/api/quests/[id]/check-timeout` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/quests/[id]/client-timing` | POST | jwt+key | - | - | no | - | 1: `hooks/useStreamingMetrics.ts` |
 | `/api/quests/[id]/context` | GET | jwt | - | - | no | - | 1: `hooks/data/quests.ts` |
@@ -1609,6 +1616,16 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/[id]/permanent` | DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/rating` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/report` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/template` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/draft` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/example` | POST, PUT | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/free-run` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/approve` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/from-generation` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/generate` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/preview` | GET | jwt | - | - | no | - | 0 |
+| `/api/skills/market/[id]/template/publish` | POST, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
 | `/api/skills/market/[id]/versions` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
@@ -1621,6 +1638,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/suggest-tags` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/versions/[vid]/rescan` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/versions/[vid]/review` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/template/image/[slug]` | GET | handler | - | - | no | - | 0 |
+| `/api/skills/template/run/[slug]` | POST | handler | - | - | no | - | 0 |
+| `/api/skills/template/serve` | GET | optional | - | - | no | - | 0 |
+| `/api/skills/template/try/[slug]` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
 
 ### sky-greeting
 
@@ -1703,7 +1724,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/studio/compositions/[id]/renders` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioRenders.ts` |
 | `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
 | `/api/studio/files/[id]/speech-script` | GET | jwt | - | - | no | - | 1: `hooks/data/speechScript.ts` |
-| `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
+| `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/studioImageJobs.ts` |
 | `/api/studio/image-jobs/cutouts` | POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 
 ### subscribers
@@ -1876,7 +1897,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/assistant/instructions/[id]` | DELETE | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs` | GET, POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/[id]` | GET | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/[id]/decisions/[decisionId]` | PATCH | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/[id]/decisions/[decisionId]/reply` | POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/[id]/decisions/[decisionId]/resolve` | POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/busy-blocks` | GET, PUT | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/follow-ups` | POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/schedule` | GET, PUT | jwt | - | - | yes | - | 0 |
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/client-config/public` | GET | handler | - | - | yes | - | 0 |
@@ -1925,10 +1950,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/studioImageJobs.ts` |
 | `/api/v1/me` | GET | jwt+key | `me:read` | - | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
-| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/music-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/obligations` | GET, POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/obligations/[id]` | GET, PATCH | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/pending-actions/[questId]/approve` | POST | jwt | - | - | yes | - | 0 |
@@ -1981,8 +2008,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/tools/web-search` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
-| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/video-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
 | `/api/v1/video-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
 | `/api/v1/voice/sessions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

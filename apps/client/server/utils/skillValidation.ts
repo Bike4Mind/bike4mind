@@ -19,8 +19,8 @@ const SKILL_DESCRIPTION_MAX = 500;
 const SKILL_BODY_MAX = 50_000;
 const SKILL_ARG_HINT_MAX = 200;
 
-/** kebab-case: lowercase letters, digits, hyphens; can't start/end with `-`. */
-const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+/** kebab-case: lowercase letters, digits, hyphens; no leading or trailing `-`. As SKILL_TEMPLATE_SLUG_PATTERN. */
+export const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function validateSkillName(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {

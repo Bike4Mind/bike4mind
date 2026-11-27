@@ -262,6 +262,7 @@ async function purgePersonalSkills(
       await collectionFor('SkillListingVersion').deleteMany({ listingId });
       await collectionFor('SkillListingImport').deleteMany({ listingId });
       await collectionFor('SkillListingReport').deleteMany({ listingId });
+      await collectionFor('SkillListingTemplate').deleteMany({ listingId });
       await collectionFor('SkillBundle').updateMany({ listingIds: listingId }, { $pull: { listingIds: listingId } });
       await listings.deleteOne({ _id: listing._id, ...ownedListings });
     }

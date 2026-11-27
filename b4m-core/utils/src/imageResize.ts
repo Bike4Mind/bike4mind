@@ -104,3 +104,32 @@ export async function ensureImageWithinDimensionLimit(
     return imageBuffer;
   }
 }
+
+/** The source is not an image this decoder can read within budget (no readable header, or a decompression bomb). */
+export class ImageDecodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImageDecodeError';
+  }
+}
+
+/**
+ * Scale and center-crop an image to exactly `width` x `height` (CSS `object-fit: cover`) and encode
+ * it as JPEG. Throws ImageDecodeError for a decompression bomb or bytes jimp cannot decode.
+ */
+export async function coverImageToJpeg(
+  imageBuffer: Buffer,
+  { width, height, quality = 85 }: { width: number; height: number; quality?: number }
+): Promise<Buffer> {
+  const pixels = imagePixelCount(imageBuffer);
+  if (pixels === null) throw new ImageDecodeError('The image could not be read');
+  if (pixels > MAX_IMAGE_PIXELS) {
+    throw new ImageDecodeError(`The image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel limit`);
+  }
+  const { Jimp } = await import('jimp');
+  const image = await Jimp.read(imageBuffer).catch(() => {
+    throw new ImageDecodeError('The image could not be read');
+  });
+  image.cover({ w: width, h: height });
+  return Buffer.from(await image.getBuffer('image/jpeg', { quality }));
+}

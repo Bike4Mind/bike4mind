@@ -321,6 +321,9 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/work-items/ready',
   ],
   legacySeed: new Set(LEGACY_SEED.split(/\s+/).filter(Boolean)),
-  reviewedUnscoped: {},
+  reviewedUnscoped: {
+    '/api/skills/template/serve':
+      'Public /t/<slug> template page: auth: false with optionalJwtAuth, which reads only a Bearer JWT and never an API key; read-only, rate limited.',
+  },
   unclassified: {},
 };
