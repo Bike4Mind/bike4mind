@@ -143,7 +143,7 @@ describe('BriefcasePromptModel repository — owner scoping', () => {
   });
 });
 
-describe('BriefcasePromptModel — requiredTools outside the built-in set', () => {
+describe('BriefcasePromptModel - requiredTools outside the built-in set', () => {
   it('stores, reads and re-saves a doc whose tool name is not a built-in', async () => {
     const created = await BriefcasePrompt.create(systemPrompt({ requiredTools: ['web_search', 'overlay_tool_a'] }));
     const [doc] = await briefcasePromptRepository.listSystemByType('general', null);
