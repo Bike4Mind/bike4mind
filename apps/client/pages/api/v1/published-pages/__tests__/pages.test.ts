@@ -300,6 +300,11 @@ describe('published-pages routes', () => {
     vi.mocked(assertOutboundActionAllowed).mockReset();
   });
 
+  it('keeps a 403 without an errorCode (administrator restriction, organization policy) a 403 on PATCH', async () => {
+    mockUpdatePage.mockRejectedValueOnce(new HTTPError(403, 'Outbound actions are restricted'));
+    expect((await patchPage({ visibility: 'public' }))._getStatusCode()).toBe(403);
+  });
+
   it('patches (200), mapping the access gate and camelCase fields', async () => {
     const res = await patchPage({
       comment_policy: 'open',

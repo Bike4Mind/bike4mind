@@ -14880,6 +14880,35 @@ export interface components {
         };
       }[];
     };
+    createPublishedPageUploadResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
+    };
     createPublishedPageUploadRequest: {
       /**
        * @description `user`, `project` or `organization`.
@@ -14966,6 +14995,35 @@ export interface components {
       /** @description ISO 8601 timestamp of the latest publish. */
       published_at: string;
       updated_at: string;
+    };
+    finalizePublishedPageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
     };
     /**
      * @example {
@@ -15134,6 +15192,35 @@ export interface components {
       published_at: string;
       updated_at: string;
     };
+    updatePublishedPageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
+    };
     updatePublishedPageRequest: {
       title?: string;
       description?: string;
@@ -15197,6 +15284,35 @@ export interface components {
       share_url: string;
       expires_at: string | null;
     };
+    createPublishedPageShareLinkResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
+    };
     createPublishedPageShareLinkRequest: {
       /**
        * Format: date-time
@@ -15256,6 +15372,35 @@ export interface components {
       /** @description ISO 8601 timestamp of the latest publish. */
       published_at: string;
       updated_at: string;
+    };
+    restorePublishedPageVersionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
     };
     restorePublishedPageVersionRequest: {
       /** @description The version to restore. Omitted: the previous version. */
@@ -15323,6 +15468,35 @@ export interface components {
       resolved_at: string | null;
       created_at: string;
     };
+    createPublishedPageCommentResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
+    };
     createPublishedPageCommentRequest: {
       body: string;
       anchor?: {
@@ -15359,6 +15533,35 @@ export interface components {
       artifact_version_sha: string | null;
       resolved_at: string | null;
       created_at: string;
+    };
+    updatePublishedPageCommentResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'account_trust_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      trustReason?: string;
+      trustedAfter?: string;
     };
     updatePublishedPageCommentRequest: {
       body?: string;
@@ -43543,7 +43746,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -43563,7 +43766,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createPublishedPageUploadResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -43719,7 +43922,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -43739,7 +43942,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['finalizePublishedPageResponse403'];
         };
       };
       /** @description The draft does not exist, has expired, or was not created by the caller. */
@@ -44428,7 +44631,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. Making a page more visible can also be refused by an organization sharing policy, such as blocked public links. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -44448,7 +44651,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['updatePublishedPageResponse403'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -44787,7 +44990,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -44807,7 +45010,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createPublishedPageShareLinkResponse403'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -45189,7 +45392,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -45209,7 +45412,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['restorePublishedPageVersionResponse403'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -45571,7 +45774,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -45591,7 +45794,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createPublishedPageCommentResponse403'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -45929,7 +46132,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. An edit can also be refused for the account trust or administrator restriction reasons. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -45949,7 +46152,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['updatePublishedPageCommentResponse403'];
         };
       };
       /** @description No such page of yours, or no such comment. */

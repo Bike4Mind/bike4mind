@@ -21,6 +21,8 @@ import {
   UpdatePublishedPageCommentRequestSchema,
   UpdatePublishedPageRequestSchema,
 } from '../../schemas/publishedPagePublic';
+import { z } from 'zod';
+import { ACCOUNT_SUSPENDED_ERROR_CODE, ACCOUNT_TRUST_REQUIRED_ERROR_CODE } from '../../apiErrorCodes';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 import { PaginationQuerySchema } from '../../schemas/pagination';
 
@@ -32,19 +34,33 @@ import { PaginationQuerySchema } from '../../schemas/pagination';
  * artifact. Share-link reads never return a token: the full URL is in the create response only.
  */
 const SCOPES = [ApiKeyScope.ARTIFACTS_PUBLISH];
+/** Scope and suspension refusals, plus the outbound-action trust refusal (`assertOutboundActionAllowed`). */
+const PublishForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, ACCOUNT_TRUST_REQUIRED_ERROR_CODE]).optional(),
+  trustReason: z.string().optional(),
+  trustedAfter: z.string().optional(),
+});
+const TRUST_403 =
+  'The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: ' +
+  '`errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an ' +
+  'administrator restriction.';
 const FORBIDDEN = { description: 'The API key lacks `artifacts:publish`.', schema: ScopeForbiddenErrorSchema } as const;
-const FORBIDDEN_OR_TRUST = {
+const FORBIDDEN_OR_TRUST = { description: TRUST_403, schema: PublishForbiddenErrorSchema } as const;
+const FORBIDDEN_PATCH = {
   description:
-    'The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: ' +
-    '`errorCode: account_trust_required` (new or unverified account) or an administrator restriction. ' +
-    'On a page update only a widening change is refused.',
-  schema: ApiErrorSchema,
+    TRUST_403 +
+    ' Making a page more visible can also be refused by an organization sharing policy, such as blocked public links.',
+  schema: PublishForbiddenErrorSchema,
 } as const;
 const RATE_LIMITED = { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema } as const;
 const INVALID = { description: 'The request failed validation.', schema: ApiErrorSchema } as const;
 const AUTHOR_ONLY =
   'The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its ' +
   'author may edit the text, and only its author, the page owner or an admin may resolve or delete it.';
+const AUTHOR_OR_TRUST = {
+  description: AUTHOR_ONLY + ' An edit can also be refused for the account trust or administrator restriction reasons.',
+  schema: PublishForbiddenErrorSchema,
+} as const;
 const NOT_YOURS = {
   description:
     'No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do ' +
@@ -110,7 +126,7 @@ export const createPublishedPageUploadContract = defineEndpoint({
         ],
       },
     },
-    403: FORBIDDEN,
+    403: FORBIDDEN_OR_TRUST,
     422: {
       description:
         'The body failed validation, the file list breaks the bundle limits, the visibility or embed origins are not allowed, or the publish quota is used up.',
@@ -147,7 +163,7 @@ export const finalizePublishedPageContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The published page.', schema: PublishedPageResourceSchema, example: PAGE_EXAMPLE },
-    403: FORBIDDEN,
+    403: FORBIDDEN_OR_TRUST,
     404: {
       description: 'The draft does not exist, has expired, or was not created by the caller.',
       schema: ApiErrorSchema,
@@ -217,7 +233,7 @@ export const updatePublishedPageContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The updated page.', schema: PublishedPageResourceSchema, example: PAGE_EXAMPLE },
-    403: FORBIDDEN_OR_TRUST,
+    403: FORBIDDEN_PATCH,
     404: NOT_YOURS,
     422: {
       description:
@@ -436,7 +452,7 @@ export const updatePublishedPageCommentContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The comment.', schema: PublishedPageCommentSchema, example: COMMENT_EXAMPLE },
-    403: { description: AUTHOR_ONLY, schema: ApiErrorSchema },
+    403: AUTHOR_OR_TRUST,
     404: { description: 'No such page of yours, or no such comment.', schema: ApiErrorSchema },
     422: INVALID,
     429: RATE_LIMITED,

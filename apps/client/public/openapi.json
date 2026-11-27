@@ -31336,6 +31336,79 @@
           ]
         }
       },
+      "createPublishedPageUploadResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createPublishedPageUploadRequest": {
         "type": "object",
         "properties": {
@@ -31587,6 +31660,79 @@
           "published_at": "2026-10-01T12:00:00.000Z",
           "updated_at": "2026-10-01T12:00:00.000Z"
         }
+      },
+      "finalizePublishedPageResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "listPublishedPagesResponse200": {
         "type": "object",
@@ -32040,6 +32186,79 @@
           "updated_at": "2026-10-01T12:00:00.000Z"
         }
       },
+      "updatePublishedPageResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "updatePublishedPageRequest": {
         "type": "object",
         "properties": {
@@ -32244,6 +32463,79 @@
           "expires_at": null
         }
       },
+      "createPublishedPageShareLinkResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createPublishedPageShareLinkRequest": {
         "type": "object",
         "properties": {
@@ -32397,6 +32689,79 @@
           "published_at": "2026-10-01T12:00:00.000Z",
           "updated_at": "2026-10-01T12:00:00.000Z"
         }
+      },
+      "restorePublishedPageVersionResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "restorePublishedPageVersionRequest": {
         "type": "object",
@@ -32596,6 +32961,79 @@
           "created_at": "2026-10-02T09:30:00.000Z"
         }
       },
+      "createPublishedPageCommentResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createPublishedPageCommentRequest": {
         "type": "object",
         "properties": {
@@ -32718,6 +33156,79 @@
           "resolved_at": null,
           "created_at": "2026-10-02T09:30:00.000Z"
         }
+      },
+      "updatePublishedPageCommentResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "account_trust_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "trustReason": {
+            "type": "string"
+          },
+          "trustedAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "updatePublishedPageCommentRequest": {
         "type": "object",
@@ -102108,11 +102619,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/createPublishedPageUploadResponse403"
                 }
               }
             },
@@ -102527,11 +103038,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/finalizePublishedPageResponse403"
                 }
               }
             },
@@ -103793,11 +104304,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction. Making a page more visible can also be refused by an organization sharing policy, such as blocked public links.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/updatePublishedPageResponse403"
                 }
               }
             },
@@ -105035,11 +105546,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/createPublishedPageShareLinkResponse403"
                 }
               }
             },
@@ -105978,11 +106489,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/restorePublishedPageVersionResponse403"
                 }
               }
             },
@@ -106881,11 +107392,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account, with `trustReason` and `trustedAfter`) or an administrator restriction.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/createPublishedPageCommentResponse403"
                 }
               }
             },
@@ -107321,11 +107832,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. An edit can also be refused for the account trust or administrator restriction reasons.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/updatePublishedPageCommentResponse403"
                 }
               }
             },
