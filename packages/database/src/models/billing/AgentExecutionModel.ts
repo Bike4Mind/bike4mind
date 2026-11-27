@@ -1910,7 +1910,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       {
         $set: {
           status: 'failed',
-          error,
+          // `error.message` is required and runValidators rejects '' (e.g. `new Error()`), which would leave the run active.
+          error: { ...error, message: error.message || 'Unknown error' },
           completedAt: new Date(),
         },
       },
