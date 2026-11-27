@@ -3,8 +3,15 @@ import type { IMessage } from '@bike4mind/common';
 const URL_TOKEN = /https?:\/\/[^\s"'<>`\\{}|^]+/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?'"]+$/;
 
-/** Tools whose output is a model rewrite of the call's own input, so it can never vouch for a URL. */
-const MODEL_AUTHORED_RESULT_TOOLS: ReadonlySet<string> = new Set(['prompt_enhancement', 'decide']);
+/** Tools whose output an LLM writes from the call's input, so it can never vouch for a URL. */
+const MODEL_AUTHORED_RESULT_TOOLS: ReadonlySet<string> = new Set([
+  'blog_draft',
+  'decide',
+  'deep_research',
+  'edit_file',
+  'generate_jupyter_notebook',
+  'prompt_enhancement',
+]);
 
 function trimUnbalanced(token: string, open: string, close: string): string {
   let trimmed = token;

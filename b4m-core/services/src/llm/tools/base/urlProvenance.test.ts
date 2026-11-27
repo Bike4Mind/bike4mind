@@ -46,7 +46,9 @@ describe('UrlProvenance', () => {
   it('ignores the results of tools whose output the model wrote', () => {
     const provenance = new UrlProvenance();
     provenance.recordToolResult('prompt_enhancement', { prompt: 'x' }, 'https://made-up.test/');
+    provenance.recordToolResult('deep_research', { query: 'x' }, 'https://also-made-up.test/');
     expect(provenance.allows('https://made-up.test/')).toBe(false);
+    expect(provenance.allows('https://also-made-up.test/')).toBe(false);
   });
 
   it('seeds from messages, skipping the model and pairing results with their calls', () => {
