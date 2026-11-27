@@ -36,6 +36,31 @@ function makeBaseExecution(overrides: Partial<Parameters<typeof agentExecutionRe
 describe('AgentExecutionRepository', () => {
   setupMongoTest();
 
+  describe('markFailedIfActive', () => {
+    it.each(ACTIVE_STATUSES)('marks a %s execution failed', async status => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status }));
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: 'boom' })).toBe(true);
+
+      const failed = await agentExecutionRepository.findById(execution.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.error?.message).toBe('boom');
+      expect(failed?.completedAt).toBeInstanceOf(Date);
+    });
+
+    it.each(TERMINAL_STATUSES)('leaves a %s execution untouched', async status => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status, ...(status === 'failed' ? { error: { message: 'original' } } : {}) })
+      );
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: 'late' })).toBe(false);
+
+      const after = await agentExecutionRepository.findById(execution.id);
+      expect(after?.status).toBe(status);
+      expect(after?.error?.message).not.toBe('late');
+    });
+  });
+
   describe('restoreRejectedResume', () => {
     it('atomically restores the paused marker after a definitive dispatch rejection', async () => {
       const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'continuing' }));
