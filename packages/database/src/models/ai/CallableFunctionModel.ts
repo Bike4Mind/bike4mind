@@ -8,6 +8,8 @@ import {
   CALLABLE_FUNCTION_OWNER_TYPES,
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CALLABLE_FUNCTION_SOURCE_MODES,
+  CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS,
   CALLABLE_FUNCTION_STATES,
   CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionCapError,
@@ -29,6 +31,7 @@ import {
   type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
   type ICallableFunctionSharedSource,
+  type ICallableFunctionSource,
   type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
@@ -100,6 +103,29 @@ const CallableFunctionPinSchema = new Schema(
         message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files, each under its own name`,
       },
     },
+    sourcePins: {
+      type: [
+        new Schema(
+          {
+            name: { type: String, required: true, match: CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN },
+            sha256: { type: String, required: true, match: /^[0-9a-f]{64}$/ },
+            bytes: { type: Number, required: true, min: 0 },
+            fetchedAt: { type: Date, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
+const CallableFunctionSourceSchema = new Schema(
+  {
+    name: { type: String, required: true, match: CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN },
+    url: { type: String, required: true, maxlength: CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS, match: /^https:\/\// },
+    mode: { type: String, required: true, enum: CALLABLE_FUNCTION_SOURCE_MODES },
   },
   { _id: false }
 );
@@ -152,6 +178,17 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
         validator: (examples?: unknown[]) =>
           !examples || examples.length <= CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples,
         message: `At most ${CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples} worked examples`,
+      },
+    },
+    sources: {
+      type: [CallableFunctionSourceSchema],
+      default: undefined,
+      validate: {
+        validator: (sources?: { name: string }[]) =>
+          !sources ||
+          (sources.length <= CALLABLE_FUNCTION_DATA_LIMITS.maxPins &&
+            new Set(sources.map(source => source.name)).size === sources.length),
+        message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} sources, each under its own name`,
       },
     },
     trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },
@@ -456,6 +493,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
         $set: {
           'pin.seq': update.seq,
           'pin.runtime': update.runtime,
+          'pin.sourcePins': update.sourcePins,
           lastServerRun: update.lastServerRun,
           trustLabel: update.trustLabel,
           promoted: { seq: update.seq, contract: update.contract, at },
@@ -527,6 +565,31 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       {
         $set: { 'pin.dataPins': dataPins, state: 'draft' },
         $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setSources(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    sources: ICallableFunctionSource[]
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
+      {
+        $set: { sources, state: 'draft' },
+        $unset: {
+          'pin.sourcePins': 1,
+          'pin.seq': 1,
+          'pin.runtime': 1,
+          trustLabel: 1,
+          lastServerRun: 1,
+          caseResults: 1,
+        },
       },
       { new: true, runValidators: true }
     );

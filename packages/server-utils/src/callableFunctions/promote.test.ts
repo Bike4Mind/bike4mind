@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseFunctionContract, type FunctionContract } from '@bike4mind/common';
 import type { CallableFunctionStamp, DispatchFunctionCallResult } from './dispatch';
@@ -210,6 +211,34 @@ describe('promoteCallableFunction', () => {
       },
     });
     expect(promotion.function).toMatchObject({ state: 'live', trustLabel: 'unverified', pin: { seq: 1 } });
+  });
+
+  it('fetches a pinned source once, runs the cases on those bytes, and freezes its hash', async () => {
+    const body = Buffer.from('x,y\n1,2\n');
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    const fetcher = vi.fn(async () => ({ body, sha256, bytes: body.length, fetchedAt: '2026-11-20T10:00:00.000Z' }));
+    const storage = { uploadStream: vi.fn(async () => undefined) };
+    h.fn = { ...h.fn, sources: [{ name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' }] };
+    h.results = [dispatched({ outputs: { deflection: 4 } })];
+    const sources = {
+      fetcher,
+      storage: storage as never,
+      origins: ['https://data.example.com'],
+      limits: { fileBytes: 1024, totalBytes: 4096 },
+    };
+
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner, sources });
+
+    const frozen = [{ name: 'base.csv', sha256, bytes: body.length, fetchedAt: new Date('2026-11-20T10:00:00.000Z') }];
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(storage.uploadStream).toHaveBeenCalledWith(
+      expect.anything(),
+      `data/${FUNCTION_ID}/${sha256}`,
+      body.length,
+      expect.anything()
+    );
+    expect((h.calls[0]![1] as { sources: { sourcePins: unknown } }).sources.sourcePins).toEqual(frozen);
+    expect(h.promoteArgs[0]![3]).toMatchObject({ sourcePins: frozen });
   });
 
   it('promotes as verified when a worked example passes, after the tests, at the next sequence', async () => {
@@ -458,6 +487,17 @@ describe('promotion within the budget', () => {
   ])('runs a recorded pass again when %s changed', async (_what, recordChange, caseChange) => {
     const recordedCase = { ...TEST_CASE, ...caseChange };
     h.fn = { ...h.fn, caseResults: recordOf([passOf(recordedCase)], recordChange) };
+    h.results = [dispatched({ outputs: { deflection: 4 } })];
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('runs a recorded pass again on a function with sources', async () => {
+    h.fn = {
+      ...h.fn,
+      sources: [{ name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' }],
+      caseResults: recordOf([passOf(TEST_CASE)]),
+    };
     h.results = [dispatched({ outputs: { deflection: 4 } })];
     await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
     expect(h.calls).toHaveLength(1);

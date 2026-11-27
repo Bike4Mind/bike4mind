@@ -392,7 +392,7 @@ export async function deleteCallableFunction(
   const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
   if (!fn) throw notFound();
   // The objects first: a record left behind by a failed delete can be deleted again, an object without one cannot.
-  // Always, pins or not: a lost pin race or a failed unpin delete leaves objects no pin names.
+  // Always, pins or not: a lost pin race, a failed unpin delete, or a removed source leaves objects no pin names.
   await deleteCallableFunctionDataObjects(fn.id, storage);
   if (!(await callableFunctionRepository.deleteForOwner(id, userOwner(actor)))) throw notFound();
   await callableFunctionReviewRepository.deleteForFunction(id);

@@ -175,8 +175,9 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 's3',
     bucket: 'callableFunctionDataBucket',
     holds:
-      'Data files pinned to callable functions, written by the web API and read only by the function dispatcher through the runtime S3 endpoint',
-    locatedBy: 'The `data/<prefix>/` key segment, the prefix naming the tenant or function (`callableFunctionDataKey`)',
+      'Data files and sources pinned to callable functions, and the latest fetches of their live sources, written by the web API and read only by the function dispatcher through the runtime S3 endpoint',
+    locatedBy:
+      'The `data/<prefix>/` key segment, the prefix naming the tenant or function (`callableFunctionDataKey`); live source fetches under `data/.live/<functionId>/`, which a lifecycle rule expires after one day (`callableFunctionLiveSourceKey`)',
     // Deleting one function deletes its prefix too (deleteCallableFunction in callableFunctions/registry.ts).
     erasure: { action: 'erased', erasedBy: 'purgeCallableFunctionDataForUser' },
   },

@@ -4,6 +4,7 @@ import {
   FUNCTION_DATA_DISPATCHER_ACTIONS,
   FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
+  FUNCTION_LIVE_SOURCE_KEY_PREFIX,
   namedSubnetIdsOf,
 } from './callableFunctionNetwork';
 import { PRODUCTION_STAGES } from './constants';
@@ -38,6 +39,19 @@ function secureDataBucket(bucket: aws.s3.Bucket) {
   new aws.s3.BucketCorsConfiguration('CallableFunctionDataCors', {
     bucket: bucket.bucket,
     corsRules: [{ allowedOrigins: getAllowedOrigins(domain, $app.stage), allowedMethods: ['GET'], maxAgeSeconds: 600 }],
+  });
+  // Every call stores its live source fetches, and nothing reads one once that call's 5 minute links lapse.
+  new aws.s3.BucketLifecycleConfigurationV2('CallableFunctionLiveSourceExpiry', {
+    bucket: bucket.bucket,
+    rules: [
+      {
+        id: 'expire-live-source-fetches',
+        status: 'Enabled',
+        filter: { prefix: FUNCTION_LIVE_SOURCE_KEY_PREFIX },
+        expiration: { days: 1 },
+        abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+      },
+    ],
   });
   return publicAccessBlock;
 }

@@ -7,11 +7,13 @@ import type {
   CallableFunctionExample,
   CallableFunctionGrantVisibility,
   CallableFunctionSlugHolder,
+  CallableFunctionStampData,
   FunctionContract,
   FunctionContractChange,
   FunctionContractProblem,
   ICallableFunctionPublic,
   ICallableFunctionShared,
+  ICallableFunctionSource,
   McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
@@ -358,6 +360,15 @@ export const usePinCallableFunctionData = () => {
   });
 };
 
+export const useSetCallableFunctionSources = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, sources }: { id: string; sources: ICallableFunctionSource[] }) =>
+      (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/sources`, { sources })).data,
+    onSettled: invalidate,
+  });
+};
+
 export const useUnpinCallableFunctionData = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({
@@ -382,23 +393,39 @@ export function resetCallableFunctionDataCache(): void {
   dataBytesByHash.clear();
 }
 
-async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
-  const { url } = (
-    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
-  ).data;
+/** Bytes from a link the read route answered with, checked against `sha256`; `label` names them in errors. */
+async function readVerifiedBytes(url: string, sha256: string, label: string, mismatch: string) {
   let bytes: ArrayBuffer;
   if (url.startsWith('/')) {
     bytes = (await api.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })).data;
   } else {
     // A signed link to the data bucket: no credentials, and nothing for the browser to keep.
     const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
-    if (!response.ok) throw new Error(`The data file ${pin.name} could not be read (${response.status}).`);
+    if (!response.ok) throw new Error(`The ${label} could not be read (${response.status}).`);
     bytes = await response.arrayBuffer();
   }
-  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== pin.sha256) {
-    throw new Error(`The data file ${pin.name} does not match its pinned hash.`);
+  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== sha256) {
+    throw new Error(`The ${label} ${mismatch}.`);
   }
   return bytes;
+}
+
+/** The verified bytes for `sha256`, read by `read` only when no earlier read of the same hash is cached. */
+async function cachedBytes(sha256: string, read: () => Promise<ArrayBuffer>): Promise<ArrayBuffer> {
+  let cached = dataBytesByHash.get(sha256);
+  if (!cached) {
+    cached = read();
+    dataBytesByHash.set(sha256, cached);
+    cached.catch(() => dataBytesByHash.delete(sha256));
+  }
+  return (await cached).slice(0);
+}
+
+async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
+  const { url } = (
+    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
+  ).data;
+  return readVerifiedBytes(url, pin.sha256, `data file ${pin.name}`, 'does not match its pinned hash');
 }
 
 /**
@@ -411,14 +438,33 @@ export async function fetchCallableFunctionDataFiles(
   pins: ICallableFunctionPublic['dataPins']
 ): Promise<{ name: string; bytes: ArrayBuffer }[]> {
   return Promise.all(
-    pins.map(async pin => {
-      let cached = dataBytesByHash.get(pin.sha256);
-      if (!cached) {
-        cached = fetchVerifiedDataBytes(id, pin);
-        dataBytesByHash.set(pin.sha256, cached);
-        cached.catch(() => dataBytesByHash.delete(pin.sha256));
-      }
-      return { name: pin.name, bytes: (await cached).slice(0) };
+    pins.map(async pin => ({
+      name: pin.name,
+      bytes: await cachedBytes(pin.sha256, () => fetchVerifiedDataBytes(id, pin)),
+    }))
+  );
+}
+
+/**
+ * Each source's bytes for `/data/<name>` in the browser, read through the owner-only route that fetches them as a
+ * server call would, with the stamp entry a server call would write. The bytes come from the same one-minute link and
+ * hash cache as pinned files, as fresh copies. Throws when a source cannot be read or does not match.
+ */
+export async function fetchCallableFunctionSources(
+  id: string,
+  sources: ICallableFunctionPublic['sources']
+): Promise<{ name: string; bytes: ArrayBuffer; entry: CallableFunctionStampData }[]> {
+  return Promise.all(
+    sources.map(async source => {
+      const { entry, url } = (
+        await api.get<{ entry: CallableFunctionStampData; url: string }>(
+          `${COLLECTION}/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.name)}`
+        )
+      ).data;
+      const bytes = await cachedBytes(entry.sha256, () =>
+        readVerifiedBytes(url, entry.sha256, `source ${source.name}`, 'does not match the hash it was read with')
+      );
+      return { name: source.name, bytes, entry: { ...entry, name: source.name } };
     })
   );
 }

@@ -341,6 +341,37 @@ describe('pinCallableFunctionData', () => {
     expect(result.dataPins).toEqual([]);
     expect(storage.delete).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the copy on unpin when a frozen pinned source holds the same bytes', async () => {
+    const { objects, storage } = memoryStorage();
+    const shared = sha(CSV);
+    objects.set(`data/${FN_ID}/${shared}`, CSV);
+    withPins([pinOf('a.csv', 8, shared)]);
+    (h.fn!.pin as Record<string, unknown>).sourcePins = [
+      { name: 'base.csv', sha256: shared, bytes: 8, fetchedAt: new Date(0) },
+    ];
+    await unpinCallableFunctionData(OWNER, FN_ID, 'a.csv', { storage });
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(objects.has(`data/${FN_ID}/${shared}`)).toBe(true);
+  });
+
+  it('counts each declared source at the most one fetch can return against the total', async () => {
+    withPins([pinOf('a.csv', 2 * MIB)]);
+    h.fn!.sources = [{ name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' }];
+    const { storage } = memoryStorage();
+    const limits = { fileBytes: 100 * MIB, totalBytes: 6 * MIB };
+    h.access.mockResolvedValue({
+      id: 'file1',
+      userId: OWNER.id,
+      filePath: 'files/u/points.csv',
+      fileSize: 1 * MIB,
+      moderationStatus: 'clean',
+    });
+    await expect(
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits })
+    ).rejects.toMatchObject({ statusCode: 400, additionalInfo: { code: 'data_total_too_large' } });
+    expect(storage.uploadStream).not.toHaveBeenCalled();
+  });
 });
 
 describe('linkCallableFunctionDataForBrowser', () => {
@@ -482,10 +513,19 @@ describe('purgeCallableFunctionDataForUser', () => {
   it("deletes every function's prefix and the account's own, and nobody else's", async () => {
     const { objects, storage } = memoryStorage();
     objects.set(`data/${FN_ID}/${sha(CSV)}`, CSV);
+    objects.set(`data/.live/${FN_ID}/${sha(CSV)}`, CSV);
     objects.set(`data/${'d'.repeat(24)}/${sha(CSV)}`, CSV);
+    objects.set(`data/.live/${'d'.repeat(24)}/${sha(CSV)}`, CSV);
     h.listForOwner.mockResolvedValue([{ id: FN_ID }]);
     await purgeCallableFunctionDataForUser(OWNER.id, storage);
-    expect([...objects.keys()]).toEqual([`data/${'d'.repeat(24)}/${sha(CSV)}`]);
-    expect(storage.deletePrefix.mock.calls.map(call => call[0])).toEqual([`data/${FN_ID}/`, `data/${OWNER.id}/`]);
+    expect([...objects.keys()]).toEqual([
+      `data/${'d'.repeat(24)}/${sha(CSV)}`,
+      `data/.live/${'d'.repeat(24)}/${sha(CSV)}`,
+    ]);
+    expect(storage.deletePrefix.mock.calls.map(call => call[0])).toEqual([
+      `data/${FN_ID}/`,
+      `data/.live/${FN_ID}/`,
+      `data/${OWNER.id}/`,
+    ]);
   });
 });
