@@ -663,7 +663,6 @@ describe('POST /api/user-api-keys - analytics is best effort', () => {
   });
 });
 
-// Wiring only: the containment rule itself is covered by the service's create.test.ts.
 describe('POST /api/user-api-keys - MCP key is session-only', () => {
   beforeEach(() => createUserApiKey.mockClear());
 
@@ -702,6 +701,7 @@ describe('POST /api/user-api-keys - MCP key is session-only', () => {
   });
 });
 
+// Wiring only: the containment rule itself is covered by the service's create.test.ts.
 describe('POST /api/user-api-keys - caller key scopes forwarded for containment', () => {
   beforeEach(() => createUserApiKey.mockClear());
 

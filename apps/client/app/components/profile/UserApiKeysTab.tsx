@@ -309,6 +309,8 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const applyFunctions = () => setFormData(fd => ({ ...leaveMcp(fd), scopes: [ApiKeyScope.FUNCTIONS_INVOKE] }));
   // Scopes the account is not offered are left out, so a hidden scope can't be submitted.
   const applyMcp = () => {
+    // Re-clicking the active chip must not discard ticked scopes, the ceiling or the chosen expiry.
+    if (mcpKey) return;
     setFormData(fd => ({
       ...fd,
       scopes: MCP_SCOPES.filter(scope => scopeModel.scopeValues.includes(scope)),
@@ -478,7 +480,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                     }
                     checked={formData.scopes.includes(scope)}
                     onChange={() => toggleScope(scope)}
-                    data-testid={`api-key-mcp-${scope}-checkbox`}
+                    data-testid={`api-key-mcp-${scope.replace(':', '-')}-checkbox`}
                   />
                 ))}
               <FormControl sx={{ mt: 1.5 }}>

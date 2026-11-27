@@ -9,7 +9,14 @@ import {
   MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
   MAX_ACTIVE_KEYS_PER_USER,
 } from '../create';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  BadRequestError,
+  MCP_FORBIDDEN_API_KEY_SCOPES,
+  CreditHolderType,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -1290,16 +1297,13 @@ describe('createUserApiKey - MCP key', () => {
     await expect(result).resolves.toBeDefined();
   });
 
-  it.each([ApiKeyScope.ADMIN, ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.PERSONAS_MINT, ApiKeyScope.AI_GENERATE])(
-    'refuses %s, naming it',
-    async scope => {
-      const { result } = mint({ scopes: [ApiKeyScope.ME_READ, scope] });
-      await expect(result).rejects.toThrow(scope);
-    }
-  );
+  it.each([...MCP_FORBIDDEN_API_KEY_SCOPES, ApiKeyScope.AI_GENERATE])('refuses %s, naming it', async scope => {
+    const { result } = mint({ scopes: [ApiKeyScope.ME_READ, scope] });
+    await expect(result).rejects.toThrow(scope);
+  });
 
-  it('refuses a key with no scopes', async () => {
-    await expect(mint({ scopes: [] }).result).rejects.toThrow();
+  it('refuses a key with no scopes, before the MCP rules run', async () => {
+    await expect(mint({ scopes: [] }).result).rejects.toThrow(/scope/i);
   });
 
   it('refuses a ceiling without the flag', async () => {
@@ -1315,8 +1319,14 @@ describe('createUserApiKey - MCP key', () => {
   it.each([
     ['org-owned', { orgOwned: { createdByUserId: 'u' } }],
     ['product-bound', { productId: 'p' }],
+    ['agent-bound', { agentId: 'a' }],
   ])('refuses an %s MCP key', async (_label, extra) => {
     await expect(mint(extra).result).rejects.toThrow('cannot be org-owned');
+  });
+
+  it('refuses an oauth-exchange MCP key', async () => {
+    const { result } = mint({ metadata: { createdFrom: 'oauth-exchange' } });
+    await expect(result).rejects.toThrow('oauth-exchange keys are minted only');
   });
 
   it('leaves an ordinary key without the fields', async () => {

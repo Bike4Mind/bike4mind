@@ -49,8 +49,7 @@ interface CreateApiKeyRequest {
    * (and platform admins) - enforced below.
    */
   organizationId?: string;
-  /** MCP key: admitted only on routes naming a scope it holds. Session callers only. */
-  /** Only `true` is valid; the service rejects anything else. */
+  /** MCP key: admitted only on routes naming a scope it holds. Session callers only; only `true` is valid. */
   explicitScopeOnly?: true;
   exposureCeiling?: ApiKeyExposureCeiling;
   /** Embed key (epic #41): the agent to bind, its https origin allow-list, and optional branding. */

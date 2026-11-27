@@ -545,9 +545,17 @@ describe('exchange keys', () => {
   });
 
   it('holdsApiKeyScope honors the MCP flag on the request', () => {
-    const apiKeyInfo = { keyId: 'k', scopes: [ApiKeyScope.ME_READ], explicitScopeOnly: true };
-    expect(holdsApiKeyScope({ apiKeyInfo }, [ApiKeyScope.ME_READ])).toBe(true);
-    expect(holdsApiKeyScope({ apiKeyInfo }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
+    // A staged scope is where the flag changes the answer: an ordinary key rides the window, an MCP key never does.
+    vi.stubEnv(SCOPE_STAGING_ENV_VAR, ApiKeyScope.READ_NOTEBOOKS);
+    try {
+      const mcp = { keyId: 'k', scopes: [ApiKeyScope.ME_READ], explicitScopeOnly: true };
+      const ordinary = { keyId: 'k', scopes: [ApiKeyScope.ME_READ] };
+      expect(holdsApiKeyScope({ apiKeyInfo: mcp }, [ApiKeyScope.ME_READ])).toBe(true);
+      expect(holdsApiKeyScope({ apiKeyInfo: mcp }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
+      expect(holdsApiKeyScope({ apiKeyInfo: ordinary }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   describe('in-handler check', () => {

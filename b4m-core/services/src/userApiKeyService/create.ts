@@ -277,14 +277,8 @@ const mintUserApiKey = async (
     if (adapters.callerScopes) {
       throw new ForbiddenError('An MCP key can only be created from a signed-in session');
     }
-    if (params.metadata.createdFrom === 'oauth-exchange') {
-      throw new BadRequestError('An oauth-exchange key cannot be an MCP key');
-    }
     if (params.orgOwned || params.productId !== undefined || params.agentId !== undefined) {
       throw new BadRequestError('An MCP key cannot be org-owned, product-bound or agent-bound');
-    }
-    if (params.scopes.length === 0) {
-      throw new BadRequestError('An MCP key needs at least one scope');
     }
     const allowed = MCP_API_KEY_SCOPES as readonly string[];
     const disallowed = params.scopes.filter(scope => !allowed.includes(scope));

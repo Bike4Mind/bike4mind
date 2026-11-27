@@ -769,6 +769,67 @@ describe('UserApiKeysTab - MCP access level', () => {
     expect(sent).not.toHaveProperty('exposureCeiling');
   });
 
+  it('keeps the ticked functions scope, the ceiling and the expiry when the active MCP chip is clicked again', () => {
+    h.functionsEnabled = true;
+    try {
+      openModal();
+      fireEvent.click(mcpChip());
+      fireEvent.click(screen.getByTestId('api-key-mcp-functions-invoke-checkbox').querySelector('input')!);
+      fireEvent.click(mcpChip());
+      const sent = submit();
+      expect(sent.scopes).toContain(ApiKeyScope.FUNCTIONS_INVOKE);
+    } finally {
+      h.functionsEnabled = false;
+    }
+  });
+
+  it('posts both functions scopes once their opt-in checkboxes are ticked', () => {
+    h.functionsEnabled = true;
+    try {
+      openModal();
+      fireEvent.click(mcpChip());
+      fireEvent.click(screen.getByTestId('api-key-mcp-functions-invoke-checkbox').querySelector('input')!);
+      fireEvent.click(screen.getByTestId('api-key-mcp-functions-author-checkbox').querySelector('input')!);
+      const sent = submit();
+      expect(sent.scopes).toEqual(expect.arrayContaining([ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR]));
+      expect(sent.explicitScopeOnly).toBe(true);
+    } finally {
+      h.functionsEnabled = false;
+    }
+  });
+
+  it('posts a non-default exposure ceiling', () => {
+    openModal();
+    fireEvent.click(mcpChip());
+    fireEvent.click(within(screen.getByTestId('api-key-exposure-ceiling-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: /organization/i }));
+    expect(submit().exposureCeiling).toBe('organization');
+  });
+
+  it('keeps the MCP selection and its functions scope when the offered scopes change', () => {
+    h.hasOptiAccess = false;
+    h.functionsEnabled = true;
+    try {
+      const view = renderTab();
+      fireEvent.click(screen.getByText('Create API Key'));
+      fireEvent.click(mcpChip());
+      fireEvent.click(screen.getByTestId('api-key-mcp-functions-invoke-checkbox').querySelector('input')!);
+      h.hasOptiAccess = true;
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <UserApiKeysTab />
+        </CssVarsProvider>
+      );
+      expect(mcpChip()).toHaveAttribute('aria-pressed', 'true');
+      const sent = submit();
+      expect(sent.explicitScopeOnly).toBe(true);
+      expect(sent.scopes).toContain(ApiKeyScope.FUNCTIONS_INVOKE);
+    } finally {
+      h.hasOptiAccess = false;
+      h.functionsEnabled = false;
+    }
+  });
+
   it('badges an MCP key in the list with its ceiling', () => {
     h.keys = [{ ...activeKey, explicitScopeOnly: true, exposureCeiling: 'organization' }];
     renderTab();
