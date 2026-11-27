@@ -368,6 +368,30 @@ describe('checkCreditGrantCap', () => {
     });
   });
 
+  it('releases an acquired hold when the post-hold confirmation read fails', async () => {
+    const failure = new Error('post-hold history read unavailable');
+    mocks.received.mockResolvedValueOnce(0).mockResolvedValueOnce(0).mockRejectedValueOnce(failure);
+
+    await expect(checkCreditGrantCap(request({ actor: APPROVER, credits: 60_000 }), mocks.audit)).rejects.toBe(failure);
+
+    expect(reservations.rows.size).toBe(0);
+    const retry = await checkCreditGrantCap(request({ actor: APPROVER, credits: 60_000 }), mocks.audit);
+    expect(retry.outcome).toBe('immediate');
+    if (retry.outcome === 'immediate') await retry.release();
+    expect(reservations.rows.size).toBe(0);
+  });
+
+  it('releases the first subject hold when acquiring the second subject fails', async () => {
+    const failure = new Error('organization history read unavailable');
+    mocks.orgReceived.mockResolvedValueOnce(0).mockRejectedValueOnce(failure);
+
+    await expect(
+      checkCreditGrantCap(confirmed({ credits: 60_000, organizationId: 'organization' }), mocks.audit)
+    ).rejects.toBe(failure);
+
+    expect(reservations.rows.size).toBe(0);
+  });
+
   it('writes every refusal to the admin audit log as user.credits.denied', async () => {
     mocks.received.mockResolvedValue(90_000);
 

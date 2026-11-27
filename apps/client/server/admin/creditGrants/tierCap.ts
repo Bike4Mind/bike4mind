@@ -241,40 +241,45 @@ export async function checkCreditGrantCap(
   const releaseAll: ReleaseWindow = async () => {
     for (const release of held.splice(0)) await release();
   };
-  for (const { subject, id } of subjects) {
-    const passed = await reserveWithinWindow(id, SUBJECTS[subject].kind, credits, runLimit, DAY_MS, () =>
-      SUBJECTS[subject].audited(id, windowStart())
-    );
-    if (passed) {
-      held.push(passed);
-      continue;
-    }
-    // Another grant landed since the read: judge again on what others now hold, as the pre-check would have.
-    await releaseAll();
-    const again = (await read()).find(j => j.subject === subject) ?? { subject, id, received: 0 };
-    if (again.received + credits > hardLimit) return refuse('hard_limit', again, hardLimit);
-    if (!request.approvalAvailable) return refuse('approval_unavailable', again, runLimit);
-    if (!confirmed) return refuse('confirmation_required', again, runLimit);
-    return { outcome: 'approval' };
-  }
-  // reserveWithinWindow judges only against runLimit, so concurrent unconfirmed grants from an admin whose
-  // limit is above ADMIN_GRANT_IMMEDIATE_LIMIT could pass the phrase threshold together. Judge again with this
-  // grant held, and refuse it if the total is now past the threshold.
-  if (!confirmed && !request.approved && runLimit > ADMIN_GRANT_IMMEDIATE_LIMIT) {
-    const over = (await read()).find(({ received }) => received > ADMIN_GRANT_IMMEDIATE_LIMIT);
-    if (over) {
-      await releaseAll();
-      const reason = request.confirmable === false ? 'approval_unavailable' : 'confirmation_required';
-      // `received` counted this grant's own hold, released above.
-      return refuse(
-        reason,
-        { ...over, received: over.received - credits },
-        ADMIN_GRANT_IMMEDIATE_LIMIT,
-        'confirmation'
+  try {
+    for (const { subject, id } of subjects) {
+      const passed = await reserveWithinWindow(id, SUBJECTS[subject].kind, credits, runLimit, DAY_MS, () =>
+        SUBJECTS[subject].audited(id, windowStart())
       );
+      if (passed) {
+        held.push(passed);
+        continue;
+      }
+      // Another grant landed since the read: judge again on what others now hold, as the pre-check would have.
+      await releaseAll();
+      const again = (await read()).find(j => j.subject === subject) ?? { subject, id, received: 0 };
+      if (again.received + credits > hardLimit) return refuse('hard_limit', again, hardLimit);
+      if (!request.approvalAvailable) return refuse('approval_unavailable', again, runLimit);
+      if (!confirmed) return refuse('confirmation_required', again, runLimit);
+      return { outcome: 'approval' };
     }
+    // reserveWithinWindow judges only against runLimit, so concurrent unconfirmed grants from an admin whose
+    // limit is above ADMIN_GRANT_IMMEDIATE_LIMIT could pass the phrase threshold together. Judge again with this
+    // grant held, and refuse it if the total is now past the threshold.
+    if (!confirmed && !request.approved && runLimit > ADMIN_GRANT_IMMEDIATE_LIMIT) {
+      const over = (await read()).find(({ received }) => received > ADMIN_GRANT_IMMEDIATE_LIMIT);
+      if (over) {
+        await releaseAll();
+        const reason = request.confirmable === false ? 'approval_unavailable' : 'confirmation_required';
+        // `received` counted this grant's own hold, released above.
+        return refuse(
+          reason,
+          { ...over, received: over.received - credits },
+          ADMIN_GRANT_IMMEDIATE_LIMIT,
+          'confirmation'
+        );
+      }
+    }
+    return { outcome: 'immediate', release: releaseAll };
+  } catch (error) {
+    await releaseAll();
+    throw error;
   }
-  return { outcome: 'immediate', release: releaseAll };
 }
 
 /**

@@ -1,15 +1,7 @@
 import { ConflictError, ForbiddenError, NotFoundError, type AdminApproval } from '@bike4mind/common';
-import {
-  Organization,
-  creditTransactionRepository,
-  friendshipRepository,
-  realtimeConnectionRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { userService } from '@bike4mind/services';
-import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { CreditHolderType } from '@bike4mind/common';
+import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { creditService } from '@bike4mind/services';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 import { z } from 'zod';
@@ -57,17 +49,18 @@ export async function applyApprovedCreditGrant(
 /** Held to the hard limit (tierCap.ts) and reserved until written: the approval lifts only the immediate limit. */
 async function applyApprovedCreditAdjustment(
   req: Request,
-  { userId, creditDelta, creditReason }: SelfCreditAdjustmentParams,
+  params: SelfCreditAdjustmentParams,
   approval: AdminApproval,
   { selfGrant }: { selfGrant: boolean }
 ) {
+  const { userId, creditDelta, creditReason } = SelfCreditAdjustmentParamsSchema.parse(params);
   const target = await userRepository.findById(userId);
   if (!target) throw new NotFoundError('User not found');
-  const displayName = target.name || target.username || target.email || userId;
+  const displayName = target.name || target.username || target.email || target.id;
   const release = await enforceImmediateCreditGrant(
     {
       actor: req.user!,
-      recipient: { id: userId, displayName },
+      recipient: { id: target.id, displayName },
       credits: creditDelta,
       // The actor is the approver, never the target (isOwnRequest, assertApproverOutsideTargets).
       targetsSelf: false,
@@ -80,33 +73,50 @@ async function applyApprovedCreditAdjustment(
   );
   try {
     return await withTransaction(async () => {
-      const { creditAdjustment } = await userService.adminUpdateUser(
-        userId,
-        { id: userId, creditDelta, creditReason },
+      const recipient = await userRepository.findById(target.id);
+      if (!recipient) throw new NotFoundError('User not found');
+      const previousBalance = recipient.currentCredits;
+      const note = creditReason.trim() || undefined;
+      // A grant repairs an existing unreversed purchase stamp; it does not confer paid standing alone.
+      const restoresPurchaseStamp =
+        (await creditTransactionRepository.findUnreversedPurchase(recipient.id, CreditHolderType.User)) !== null;
+      const { creditHolder, creditTransactionId } = await creditService.addCreditsWithLedgerRow(
         {
-          db: {
-            users: userRepository,
-            organizations: Organization,
-            friendship: friendshipRepository,
-            userApiKeys: userApiKeyRepository,
-            realtimeConnections: realtimeConnectionRepository,
-            creditTransactions: creditTransactionRepository,
+          ownerId: recipient.id,
+          ownerType: CreditHolderType.User,
+          credits: creditDelta,
+          type: 'generic_add',
+          reason: 'admin_adjustment',
+          description: note || 'Admin credit adjustment',
+          metadata: {
+            actorId: req.user!.id,
+            previousBalance,
+            resultingBalance: previousBalance + creditDelta,
+            ...(note ? { note } : {}),
           },
-          resolveAdminRoles: resolveRoleAdminPermissions,
+        },
+        {
+          db: { creditTransactions: creditTransactionRepository },
+          creditHolderMethods: {
+            incrementCredits: (id, credits) =>
+              userRepository.incrementCredits(id, credits, {
+                updateLastCreditsPurchasedAt: restoresPurchaseStamp,
+              }),
+          },
         }
       );
-      if (!creditAdjustment) throw new ConflictError('No credits were applied.');
-      const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
+      const resultingBalance = creditHolder.currentCredits;
+      const credits = creditDelta;
       await recordAdminActionFromRequest(req, {
         action: 'user.credits.adjusted',
-        target: { kind: 'user', id: userId, displayName },
+        target: { kind: 'user', id: target.id, displayName },
         summary: `granted ${credits} credits`,
-        reason: creditAdjustment.note,
+        reason: note,
         changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
         details: { credits, ...(selfGrant && { selfGrant: true }), ...approvalDetails(approval) },
         related: creditTransactionId ? { creditTransactionId } : undefined,
       });
-      return { userId, appliedCreditDelta: credits, currentCredits: resultingBalance };
+      return { userId: target.id, appliedCreditDelta: credits, currentCredits: resultingBalance };
     });
   } finally {
     await release();

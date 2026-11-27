@@ -122,12 +122,15 @@ export async function checkGrantSubscriptionCap(
   }: { targetIds: readonly string[]; approval?: AdminApproval; reserve?: boolean; approvalAvailable: boolean }
 ) {
   const team = params.subscriptionType === 'team';
+  const organization =
+    team && params.organizationId ? await organizationRepository.findById(params.organizationId) : undefined;
+  if (team && params.organizationId && !organization) throw new NotFoundError('Organization not found');
   return enforceCreditGrantCap(
     {
       actor: req.user!,
       recipient: { id: recipient.id, displayName: recipient.email ?? recipient.username ?? recipient.id },
       countRecipient: !team,
-      organizationId: team ? params.organizationId : undefined,
+      organizationId: organization?.id,
       credits,
       targetsSelf: targetIds.some(id => isSelfOrImpersonator(req.user!, id)),
       exemptFromHardLimit: true,

@@ -2,12 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdminApproval } from '@bike4mind/common';
 import type { Request } from 'express';
 
-const mocks = vi.hoisted(() => ({ adminUpdateUser: vi.fn(), findById: vi.fn(), audit: vi.fn(), received: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  addCreditsWithLedgerRow: vi.fn(),
+  findUnreversedPurchase: vi.fn(),
+  findById: vi.fn(),
+  audit: vi.fn(),
+  received: vi.fn(),
+}));
 const reservations = vi.hoisted(() => new Map<string, number>());
 
 vi.mock('@bike4mind/database', () => ({
   Organization: {},
-  creditTransactionRepository: {},
+  creditTransactionRepository: { findUnreversedPurchase: mocks.findUnreversedPurchase },
   friendshipRepository: {},
   realtimeConnectionRepository: {},
   userRepository: { findById: mocks.findById },
@@ -25,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
-vi.mock('@bike4mind/services', () => ({ userService: { adminUpdateUser: mocks.adminUpdateUser } }));
+vi.mock('@bike4mind/services', () => ({ creditService: { addCreditsWithLedgerRow: mocks.addCreditsWithLedgerRow } }));
 vi.mock('@bike4mind/server-utils/auth/adminRoles', () => ({ resolveRoleAdminPermissions: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
@@ -51,31 +57,30 @@ const params = { userId: REQUESTER, creditDelta: 50, creditReason: 'Testing cred
 
 beforeEach(() => {
   reservations.clear();
+  mocks.findUnreversedPurchase.mockResolvedValue(null);
   mocks.received.mockReset().mockResolvedValue(0);
 });
 
 describe('applyApprovedSelfCreditAdjustment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.findById.mockResolvedValue({ id: REQUESTER, name: 'Ada' });
-    mocks.adminUpdateUser.mockResolvedValue({
-      creditAdjustment: {
-        credits: 50,
-        previousBalance: 10,
-        resultingBalance: 60,
-        note: 'Testing credits',
-        creditTransactionId: 'ctx1',
-      },
+    mocks.findById.mockResolvedValue({ id: REQUESTER, name: 'Ada', currentCredits: 10 });
+    mocks.addCreditsWithLedgerRow.mockResolvedValue({
+      creditHolder: { currentCredits: 60 },
+      creditTransactionId: 'ctx1',
     });
   });
 
-  it('applies the stored delta as the requester, not the approver, and audits it as an approved self-grant', async () => {
+  it('credits the requester with the real approver on its ledger and audit', async () => {
     const result = await applyApprovedSelfCreditAdjustment(req, params, approval);
 
     expect(result).toEqual({ userId: REQUESTER, appliedCreditDelta: 50, currentCredits: 60 });
-    expect(mocks.adminUpdateUser).toHaveBeenCalledWith(
-      REQUESTER,
-      { id: REQUESTER, creditDelta: 50, creditReason: 'Testing credits' },
+    expect(mocks.addCreditsWithLedgerRow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: REQUESTER,
+        credits: 50,
+        metadata: expect.objectContaining({ actorId: 'approver1', previousBalance: 10 }),
+      }),
       expect.anything()
     );
     expect(mocks.audit).toHaveBeenCalledWith(
@@ -92,7 +97,7 @@ describe('applyApprovedSelfCreditAdjustment', () => {
     await expect(
       applyApprovedSelfCreditAdjustment(req, { ...params, userId: 'someone-else' }, approval)
     ).rejects.toMatchObject({ statusCode: 409 });
-    expect(mocks.adminUpdateUser).not.toHaveBeenCalled();
+    expect(mocks.addCreditsWithLedgerRow).not.toHaveBeenCalled();
   });
 
   it('accepts only a positive whole delta', () => {
@@ -108,21 +113,16 @@ describe('applyApprovedCreditGrant', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.findById.mockResolvedValue({ id: RECIPIENT, name: 'Grace' });
+    mocks.findById.mockResolvedValue({ id: RECIPIENT, name: 'Grace', currentCredits: 0 });
   });
 
   it('runs the whole grant past the immediate limit on the approval, held until written', async () => {
     let heldDuringWrite = 0;
-    mocks.adminUpdateUser.mockImplementation(async () => {
+    mocks.addCreditsWithLedgerRow.mockImplementation(async () => {
       heldDuringWrite = reservations.size;
       return {
-        creditAdjustment: {
-          credits: 300_000,
-          previousBalance: 0,
-          resultingBalance: 300_000,
-          note: grantParams.creditReason,
-          creditTransactionId: 'ctx2',
-        },
+        creditHolder: { currentCredits: 300_000 },
+        creditTransactionId: 'ctx2',
       };
     });
 
@@ -147,7 +147,7 @@ describe('applyApprovedCreditGrant', () => {
       statusCode: 403,
       additionalInfo: expect.objectContaining({ reason: 'hard_limit' }),
     });
-    expect(mocks.adminUpdateUser).not.toHaveBeenCalled();
+    expect(mocks.addCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(mocks.audit).toHaveBeenCalledWith(
       req,
       expect.objectContaining({
@@ -161,6 +161,6 @@ describe('applyApprovedCreditGrant', () => {
     await expect(applyApprovedCreditGrant(req, { ...grantParams, userId: 'approver1' }, approval)).rejects.toThrow(
       'You cannot approve a credit grant to your own account'
     );
-    expect(mocks.adminUpdateUser).not.toHaveBeenCalled();
+    expect(mocks.addCreditsWithLedgerRow).not.toHaveBeenCalled();
   });
 });
