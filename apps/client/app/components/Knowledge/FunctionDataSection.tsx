@@ -38,6 +38,7 @@ export default function FunctionDataSection({ tool }: { tool: ICallableFunctionP
   const browser = useRef<EmbeddedFileBrowserHandle>(null);
   const [file, setFile] = useState<Pick<IFabFileDocument, 'id' | 'fileName'> | null>(null);
   const [name, setName] = useState('');
+  const autoName = useRef('');
   const used = tool.dataPins.length;
   const full = used >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins;
   const onError = (error: unknown) =>
@@ -50,7 +51,10 @@ export default function FunctionDataSection({ tool }: { tool: ICallableFunctionP
     }
     const [picked] = files;
     setFile({ id: picked!.id, fileName: picked!.fileName });
-    if (!name.trim()) setName(dataName(picked!.fileName));
+    if (!name.trim() || name === autoName.current) {
+      autoName.current = dataName(picked!.fileName);
+      setName(autoName.current);
+    }
   };
 
   return (

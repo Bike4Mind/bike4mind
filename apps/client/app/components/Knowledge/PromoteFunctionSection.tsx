@@ -8,6 +8,7 @@ import type {
   FunctionContractProblem,
   ICallableFunctionPublic,
 } from '@bike4mind/common';
+import { CALLABLE_FUNCTION_TRUST_LABEL_TEXT } from '@bike4mind/common';
 import {
   callableFunctionCasesLeft,
   callableFunctionErrorMessage,
@@ -43,7 +44,8 @@ type RecentCall = CallableFunctionCallSummary['recent'][number];
 function callDuration(call: RecentCall): string {
   if (NO_RUN_TIME.has(call.outcome)) return '-';
   if (call.durationMs < 1000) return `${call.durationMs} ms`;
-  if (call.durationMs < 60_000) return `${(call.durationMs / 1000).toFixed(1)} s`;
+  const tenths = Math.round(call.durationMs / 100) / 10;
+  if (tenths < 60) return `${tenths.toFixed(1)} s`;
   const seconds = Math.round(call.durationMs / 1000);
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
 }
@@ -56,7 +58,7 @@ function callCaller(call: RecentCall): string {
 }
 
 const LABEL_HELP = {
-  platform: 'Platform: curated and checked by Bike4Mind. A cited worked example passed on the server.',
+  platform: `${CALLABLE_FUNCTION_TRUST_LABEL_TEXT.platform} A cited worked example passed on the server.`,
   verified: 'A cited worked example passed on the server.',
   unverified: 'Only declared tests ran on the server. Add a cited worked example and promote again to verify it.',
 } as const;
