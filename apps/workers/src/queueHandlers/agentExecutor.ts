@@ -283,6 +283,7 @@ import {
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { createInflightStepPersister } from './agentExecutor.inflightSteps';
+import { markFailedWithRetry } from './agentExecutor.failureCleanup';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
@@ -4102,10 +4103,12 @@ async function runExecution(
     logger.error('[Error] Agent execution failed', { error: errorMessage, stack: errorStack });
 
     try {
-      await agentExecutionRepository.markFailed(executionId, {
-        message: errorMessage,
-        stack: errorStack,
-      });
+      await markFailedWithRetry(
+        (id, failure) => agentExecutionRepository.markFailed(id, failure),
+        executionId,
+        { message: errorMessage, stack: errorStack },
+        logger
+      );
       // Don't leak internal error details to client. Recognized, non-sensitive failure
       // categories (billing/rate-limit/timeout/auth) get a specific message; everything else stays
       // generic. Full details remain in the logs above.
@@ -5521,10 +5524,12 @@ async function processSubagentDispatch(
     const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error('[SubagentDispatch] Fatal error', { error: errorMessage });
     try {
-      await agentExecutionRepository.markFailed(childExecutionId, {
-        message: errorMessage,
-        timedOut: false,
-      });
+      await markFailedWithRetry(
+        (id, failure) => agentExecutionRepository.markFailed(id, failure),
+        childExecutionId,
+        { message: errorMessage, timedOut: false },
+        logger
+      );
       // `parentId` is set inside the try block; if we threw before resolving
       // it (e.g., child doc missing), we don't know the real parent. Omit the
       // `executionId` field entirely rather than aliasing it to the child id -
