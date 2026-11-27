@@ -944,13 +944,22 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * status: an archived or deleted lake can be restored with its gate intact.
    */
   async findGateValues(): Promise<{ userTags: string[]; entitlements: string[] }> {
-    const [userTags, entitlements] = await Promise.all([
-      this.dataLakeModel.distinct('requiredUserTag'),
-      this.dataLakeModel.distinct('requiredEntitlement'),
-    ]);
-    const nonBlank = (values: unknown[]): string[] =>
-      values.filter((v): v is string => typeof v === 'string' && v.trim() !== '');
-    return { userTags: nonBlank(userTags), entitlements: nonBlank(entitlements) };
+    const gated = await this.dataLakeModel
+      .find({
+        $or: [
+          { requiredUserTag: { $exists: true, $nin: [null, ''] } },
+          { requiredEntitlement: { $exists: true, $nin: [null, ''] } },
+        ],
+      })
+      .select({ _id: 0, requiredUserTag: 1, requiredEntitlement: 1 })
+      .lean<{ requiredUserTag?: unknown; requiredEntitlement?: unknown }[]>();
+    const nonBlank = (values: unknown[]): string[] => [
+      ...new Set(values.filter((v): v is string => typeof v === 'string' && v.trim() !== '')),
+    ];
+    return {
+      userTags: nonBlank(gated.map(lake => lake.requiredUserTag)),
+      entitlements: nonBlank(gated.map(lake => lake.requiredEntitlement)),
+    };
   }
 
   async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
