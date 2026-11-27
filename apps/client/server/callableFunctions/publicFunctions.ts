@@ -4,14 +4,16 @@ import {
   REQUEST_TIMEOUT_ERROR_CODE,
   projectFunctionSchema,
   type FunctionContractProblem,
-  type ICallableFunctionDetail,
   type ICallableFunctionResult,
-  type ICallableFunctionPublic,
 } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
-import { getCallableFunction, listCallableFunctions } from '@bike4mind/server-utils/callableFunctions/registry';
+import {
+  findCallerFunction,
+  listCallerFunctions,
+  type CallerFunction,
+} from '@bike4mind/server-utils/callableFunctions/callerFunctions';
 import {
   CALLABLE_FUNCTION_SURFACE_CAPS,
   type DispatchFunctionCallResult,
@@ -19,8 +21,9 @@ import {
 import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS } from '@bike4mind/server-utils/callableFunctions/runtimeParent';
 
 /*
- * Pieces the public /api/v1/functions routes share. Only the key owner's live functions are reachable: a draft, a
- * turned-off function, a deleted source, another person's function, and a missing one all throw the same 404.
+ * Pieces the public /api/v1/functions routes share. A key reaches its owner's live functions and those shared with
+ * them (`callerFunctions`): a draft, a turned-off function, a deleted source, a function out of reach, and a missing
+ * one all throw the same 404.
  */
 
 export const functionsRateLimit = (bucket: string) =>
@@ -63,6 +66,9 @@ export const FUNCTION_INVOKE_MAX_BODY_BYTES = CALLABLE_FUNCTION_SURFACE_CAPS.res
 
 export const FUNCTION_NOT_FOUND_MESSAGE = 'Function not found';
 
+export const FUNCTION_REVIEW_REQUIRED_MESSAGE =
+  'This function was shared with you. Review it in Bike4Mind under Integrations before calling it.';
+
 const notFound = () => new NotFoundError(FUNCTION_NOT_FOUND_MESSAGE);
 
 export async function assertFunctionsEnabled(user: { id: string }): Promise<void> {
@@ -71,38 +77,42 @@ export async function assertFunctionsEnabled(user: { id: string }): Promise<void
   }
 }
 
-/** The owner's live function, or the one 404 every other case shares. */
-export async function loadLiveFunction(user: { id: string }, id: string): Promise<ICallableFunctionDetail> {
-  let fn: ICallableFunctionDetail;
-  try {
-    fn = await getCallableFunction(user, id);
-  } catch (error) {
-    if (error instanceof NotFoundError) throw notFound();
-    throw error;
-  }
-  if (fn.status !== 'live') throw notFound();
-  return fn;
+/**
+ * A function the caller reaches by access (their own, or one shared with them), even one still awaiting their
+ * review, which the dispatcher then refuses; a draft, a missing one, or one out of reach throws the one 404.
+ */
+export async function resolveCallableFunction(user: { id: string }, id: string): Promise<CallerFunction> {
+  const lookup = await findCallerFunction(user, { id });
+  if (!('found' in lookup)) throw notFound();
+  return lookup.found;
 }
 
-export async function listLiveFunctions(user: { id: string }): Promise<ICallableFunctionPublic[]> {
-  return (await listCallableFunctions(user)).filter(fn => fn.status === 'live');
+/** A function the caller can call now: their own live one, or one shared with them that they have reviewed. */
+export async function loadLiveFunction(user: { id: string }, id: string): Promise<CallerFunction> {
+  const entry = await resolveCallableFunction(user, id);
+  if (!entry.reviewed) throw notFound();
+  return entry;
 }
 
-export function toPublicFunction(fn: ICallableFunctionPublic) {
+export async function listLiveFunctions(user: { id: string }): Promise<CallerFunction[]> {
+  return listCallerFunctions(user);
+}
+
+export function toPublicFunction({ fn, name }: CallerFunction) {
   return {
     id: fn.id,
-    slug: fn.slug,
+    slug: name,
     description: fn.description,
-    trust_label: fn.trustLabel,
+    trust_label: fn.trustLabel ?? null,
     pin_version: fn.pin.version,
     pin_seq: fn.pin.seq ?? null,
     updated_at: new Date(fn.updatedAt).toISOString(),
   };
 }
 
-export function toPublicFunctionDetail(fn: ICallableFunctionDetail) {
-  const rest = projectFunctionSchema(fn.contract, 'rest');
-  return { ...toPublicFunction(fn), input_schema: rest.inputs, output_schema: rest.outputs };
+export function toPublicFunctionDetail(entry: CallerFunction) {
+  const rest = projectFunctionSchema(entry.fn.contract, 'rest');
+  return { ...toPublicFunction(entry), input_schema: rest.inputs, output_schema: rest.outputs };
 }
 
 /** One sentence naming the first field that does not fit, and how many more do not. */
@@ -176,6 +186,9 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
       }
       if (call.reason === 'runtime_unavailable') {
         return { status: 503, body: { error: 'No function runtime is available.' } };
+      }
+      if (call.reason === 'review_required') {
+        return { status: 403, body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE } };
       }
       if (call.reason && FUNCTION_NOT_FOUND_REASONS.has(call.reason)) {
         return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };

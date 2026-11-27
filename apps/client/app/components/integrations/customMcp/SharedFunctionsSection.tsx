@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { isAxiosError } from 'axios';
 import { Box, Button, Chip, Option, Select, Sheet, Stack, Switch, Typography } from '@mui/joy';
-import type { CallableFunctionApprovalMode, ICallableFunctionShared } from '@bike4mind/common';
+import type { SxProps } from '@mui/joy/styles/types';
+import {
+  describeFunctionContractChange,
+  type CallableFunctionApprovalMode,
+  type ICallableFunctionShared,
+} from '@bike4mind/common';
 import {
   useCallableFunctionsEnabled,
   useReviewSharedCallableFunction,
@@ -92,6 +97,35 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
             ? 'You turned it off.'
             : 'You reviewed it.'}
       </Typography>
+      {pending && fn.changes && fn.changes.length > 0 && (
+        <Stack gap="2px" sx={{ mt: 0.5 }} data-testid="shared-function-changes">
+          <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+            Changed since your review:
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {fn.changes.map(change => {
+              const { subject, field, words } = describeFunctionContractChange(change);
+              return (
+                <Typography
+                  component="li"
+                  level="body-sm"
+                  key={`${change.path}:${change.kind}`}
+                  data-testid="shared-function-change"
+                >
+                  {subject}
+                  {field && (
+                    <>
+                      {' '}
+                      <code>{field}</code>
+                    </>
+                  )}{' '}
+                  {words}
+                </Typography>
+              );
+            })}
+          </Box>
+        </Stack>
+      )}
       {open && (
         <Stack gap="12px" sx={{ mt: 1.5 }} data-testid="shared-function-review-card">
           <Stack gap="4px">
@@ -188,13 +222,16 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
   );
 }
 
-/** Functions other people shared with this person: each runs for them only after they review its interface. */
-export default function SharedFunctionsSection() {
+/**
+ * Functions other people shared with this person: each runs for them only after they review its interface. Shown
+ * on the Integrations page whenever callable functions are on, whatever the MCP settings are.
+ */
+export default function SharedFunctionsSection({ sx }: { sx?: SxProps }) {
   const enabled = useCallableFunctionsEnabled();
-  const { data } = useSharedCallableFunctions();
+  const { data } = useSharedCallableFunctions(enabled);
   if (!enabled || !data || data.length === 0) return null;
   return (
-    <Stack gap="8px" data-testid="shared-functions-section">
+    <Stack gap="8px" sx={sx} data-testid="shared-functions-section">
       <Typography level="title-sm">Functions shared with you</Typography>
       {data.map(fn => (
         <SharedFunctionCard key={`${fn.id}:${fn.reviewHash}`} fn={fn} />

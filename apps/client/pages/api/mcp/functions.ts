@@ -1,10 +1,10 @@
 /**
- * POST /api/mcp/functions - an MCP endpoint (streamable HTTP, JSON responses) serving the key owner's live functions as
- * tools. Stateless: each request builds its own server and transport, so no session id is issued or honored.
- * The key's `functions:invoke` scope is the approval: the owner's own key always runs their live function.
+ * POST /api/mcp/functions - an MCP endpoint (streamable HTTP, JSON responses) serving as tools the functions the key's
+ * owner can call: their own live ones and those shared with them and reviewed. Stateless: each request builds its own
+ * server and transport, so no session id is issued or honored. The key's `functions:invoke` scope is the approval.
  */
 import type { Request } from 'express';
-import { ApiKeyScope, ForbiddenError, NotFoundError, projectFunctionSchema } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError, projectFunctionSchema } from '@bike4mind/common';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import {
@@ -13,8 +13,8 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { callableFunctionRepository } from '@bike4mind/database';
 import { resolveCallableFunctionsMcpEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import { findCallerFunction } from '@bike4mind/server-utils/callableFunctions/callerFunctions';
 import {
   CALLABLE_FUNCTION_SURFACE_CAPS,
   dispatchFunctionCall,
@@ -29,7 +29,6 @@ import {
   functionsRateLimit,
   invokeAnswer,
   listLiveFunctions,
-  loadLiveFunction,
   OUTPUT_TOO_LARGE_MESSAGE,
 } from '@server/callableFunctions/publicFunctions';
 
@@ -50,30 +49,17 @@ interface Caller {
   deadline: number;
 }
 
-/** A function that left `live` after the list was read drops out of the answer instead of failing it. */
 async function listTools(caller: Caller): Promise<Tool[]> {
-  const user = { id: caller.userId };
-  const live = await listLiveFunctions(user);
-  const loaded = await Promise.all(
-    live.map(fn =>
-      loadLiveFunction(user, fn.id).catch(error => {
-        if (error instanceof NotFoundError) return null;
-        throw error;
-      })
-    )
-  );
-  return loaded
-    .flatMap(fn => (fn ? [fn] : []))
-    .map(fn => {
-      const { description, inputSchema, outputSchema } = projectFunctionSchema(fn.contract, 'mcp');
-      return {
-        name: fn.slug,
-        description,
-        inputSchema: { ...inputSchema },
-        outputSchema: { ...outputSchema },
-        annotations: { readOnlyHint: true },
-      };
-    });
+  return (await listLiveFunctions({ id: caller.userId })).map(({ fn, name }) => {
+    const { description, inputSchema, outputSchema } = projectFunctionSchema(fn.contract, 'mcp');
+    return {
+      name,
+      description,
+      inputSchema: { ...inputSchema },
+      outputSchema: { ...outputSchema },
+      annotations: { readOnlyHint: true },
+    };
+  });
 }
 
 const toolError = (text: string, meta: { stamp?: unknown; problems?: unknown } = {}): CallToolResult => {
@@ -89,21 +75,18 @@ const toolError = (text: string, meta: { stamp?: unknown; problems?: unknown } =
 async function callTool(caller: Caller, name: string, args: unknown): Promise<CallToolResult> {
   const user = { id: caller.userId };
   const request = { caller: user, surface: 'mcp' as const, apiKeyId: caller.apiKeyId };
-  const found = await callableFunctionRepository.findBySlugForOwner(name, { ownerType: 'user', ownerKey: user.id });
-  if (!found) {
-    await recordCallableFunctionRefusal({ ...request, functionId: name }, 'not_found');
-    return toolError(FUNCTION_NOT_FOUND_MESSAGE);
-  }
-  try {
-    await loadLiveFunction(user, found.id);
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) throw error;
-    await recordCallableFunctionRefusal({ ...request, functionId: found.id }, 'not_live', found);
+  const lookup = await findCallerFunction(user, { name });
+  if (!('found' in lookup)) {
+    if (lookup.refused === 'not_live') {
+      await recordCallableFunctionRefusal({ ...request, functionId: lookup.fn.id }, 'not_live', lookup.fn);
+    } else {
+      await recordCallableFunctionRefusal({ ...request, functionId: name }, 'not_found');
+    }
     return toolError(FUNCTION_NOT_FOUND_MESSAGE);
   }
 
   const call = await dispatchFunctionCall(
-    { ...request, functionId: found.id, args: args ?? {} },
+    { ...request, functionId: lookup.found.fn.id, args: args ?? {} },
     { timeoutMs: FUNCTION_INVOKE_RUN_TIMEOUT_MS, deadline: caller.deadline, minWaitMs: FUNCTION_MIN_WAIT_MS }
   );
   const answer = invokeAnswer(call);

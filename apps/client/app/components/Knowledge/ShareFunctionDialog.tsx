@@ -29,10 +29,10 @@ import {
 import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
 import {
   callableFunctionErrorMessage,
+  lookupCallableFunctionRecipient,
   useCallableFunctionShare,
   useShareCallableFunction,
 } from '@client/app/hooks/data/callableFunctions';
-import { lookupUserByEmail } from '@client/app/hooks/data/skills';
 import { useGetJoinedProjects } from '@client/app/hooks/data/projects';
 import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -107,7 +107,7 @@ function ShareForm({
     setLooking(true);
     setError(null);
     try {
-      const found = await lookupUserByEmail(address);
+      const found = await lookupCallableFunctionRecipient(tool.id, address);
       if (!found) setError(`No account uses ${address}.`);
       else if (found.id === userId) setError('You already own this tool.');
       else {

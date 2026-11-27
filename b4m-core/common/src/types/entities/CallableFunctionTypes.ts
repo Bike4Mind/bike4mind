@@ -110,6 +110,14 @@ export interface CallableFunctionPromotion {
   seq: number;
   contract: FunctionContract;
   at: Date;
+  /**
+   * The promoted version as it ran, which recipients keep calling while the owner's edits leave the function a
+   * draft. Absent on promotions recorded before it was kept.
+   */
+  pin?: ICallableFunctionPin;
+  description?: string;
+  trustLabel?: CallableFunctionTrustLabel;
+  sources?: ICallableFunctionSource[];
 }
 
 /** A share has no public rung: every recipient is a named person or a member of the project or organization. */
@@ -291,8 +299,33 @@ export interface ICallableFunctionPublic {
   updatedAt: Date;
 }
 
-/** The list read plus the contract, for a recipient's review: still no pinned code. */
-export type ICallableFunctionSharedSource = ICallableFunctionSummary & Pick<ICallableFunctionDocument, 'contract'>;
+/** The list read plus the contract and the last promotion, for a recipient's review: still no pinned code. */
+export type ICallableFunctionSharedSource = ICallableFunctionSummary &
+  Pick<ICallableFunctionDocument, 'contract' | 'promoted'>;
+
+type RecipientReadable = Pick<
+  ICallableFunction,
+  'state' | 'contract' | 'description' | 'trustLabel' | 'sources' | 'promoted'
+> & { pin: Omit<ICallableFunctionPin, 'source'> };
+
+/**
+ * The version a recipient calls and reviews: the record while live, otherwise the last promotion kept on it, so an
+ * owner's edit never takes the function away; null when neither is there.
+ */
+export function recipientCallableFunction<T extends RecipientReadable>(fn: T): T | null {
+  if (fn.state === 'live') return fn;
+  const kept = fn.promoted;
+  if (!kept?.pin) return null;
+  return {
+    ...fn,
+    state: 'live',
+    pin: kept.pin,
+    contract: kept.contract,
+    description: kept.description ?? kept.contract.description,
+    trustLabel: kept.trustLabel,
+    sources: kept.sources,
+  };
+}
 
 /** `pending_review` with no review or one of an earlier interface; `disabled` when the recipient turned it off. */
 export type CallableFunctionSharedStatus = 'pending_review' | 'reviewed' | 'disabled';
@@ -323,6 +356,11 @@ export interface ICallableFunctionShared {
   /** The live pin's interface hash; a review names it, so an interface changed since is not approved unseen. */
   reviewHash: string;
   review: ICallableFunctionReviewView | null;
+  /**
+   * What changed in the interface since the recipient's review, field by field; empty when the review is current,
+   * absent when there is none or it predates keeping the reviewed interface.
+   */
+  changes?: FunctionContractChange[];
   /** Names only of the data files and sources the live pin reads: never their bytes or a link to them. */
   dataPins: string[];
   sources: string[];
@@ -397,9 +435,14 @@ export function toCallableFunctionPublic(
 export function toCallableFunctionShared(
   doc: ICallableFunctionDocument | ICallableFunctionSharedSource,
   sharedVia: ICallableFunctionShared['sharedVia'],
-  context: { ownerName: string; reviewHash: string; review: ICallableFunctionReview | null }
+  context: {
+    ownerName: string;
+    reviewHash: string;
+    review: ICallableFunctionReview | null;
+    changes?: FunctionContractChange[];
+  }
 ): ICallableFunctionShared {
-  const { review, reviewHash } = context;
+  const { review, reviewHash, changes } = context;
   return {
     id: doc.id,
     slug: doc.slug,
@@ -418,6 +461,7 @@ export function toCallableFunctionShared(
           current: review.reviewHash === reviewHash,
         }
       : null,
+    ...(changes ? { changes } : {}),
     dataPins: (doc.pin.dataPins ?? []).map(({ name }) => name),
     sources: (doc.sources ?? []).map(({ name }) => name),
     pin: {
@@ -579,6 +623,10 @@ export interface CallableFunctionPromote {
   contract: FunctionContract;
   /** The `pinned` sources as fetched for this promotion. */
   sourcePins: ICallableFunctionSourcePin[];
+  /** The pin being promoted and the record fields beside it, kept as `promoted` for recipients. */
+  pin: ICallableFunctionPin;
+  description: string;
+  sources?: ICallableFunctionSource[];
 }
 
 export interface ICallableFunctionRepository extends IBaseRepository<ICallableFunctionDocument> {

@@ -616,6 +616,8 @@ async function promoteDirectly(id: string, seq = 1) {
       sourcePins: [],
       trustLabel: 'verified',
       contract: fn!.contract,
+      pin: fn!.pin,
+      description: fn!.description,
     }
   );
   expect(promoted).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq } });
@@ -863,6 +865,8 @@ describe('callableFunctionRepository.promote', () => {
         sourcePins: [],
         trustLabel: 'unverified',
         contract: read!.contract,
+        pin: read!.pin,
+        description: read!.description,
       }
     );
     expect(promoted).toBeNull();
@@ -900,9 +904,10 @@ describe('summarizeCallableFunctionCalls', () => {
   const row = (
     functionId: string,
     daysAgo: number,
-    outcome: 'ok' | 'error' | 'timeout',
+    outcome: 'ok' | 'error' | 'timeout' | 'refused',
     caller = OWNER.id,
-    op: 'call' | 'read_contract' = 'call'
+    op: 'call' | 'read_contract' = 'call',
+    reason?: 'not_caller'
   ) =>
     CallableFunctionCall.create({
       op,
@@ -915,6 +920,7 @@ describe('summarizeCallableFunctionCalls', () => {
       startedAt: new Date(NOW.getTime() - daysAgo * DAY),
       durationMs: 10,
       outcome,
+      ...(reason ? { reason } : {}),
     });
 
   afterEach(async () => {
@@ -935,7 +941,6 @@ describe('summarizeCallableFunctionCalls', () => {
       await row(view.id, days, outcome);
     }
     await row(view.id, 31, 'ok');
-    await row(view.id, 1, 'ok', STRANGER.id);
     await row('6650f0a1b2c3d4e5f6a7b8c9', 1, 'ok');
     await row(view.id, 0.5, 'ok', OWNER.id, 'read_contract');
 
@@ -948,7 +953,20 @@ describe('summarizeCallableFunctionCalls', () => {
       startedAt: new Date(NOW.getTime() - DAY),
       outcome: 'ok',
       surface: 'test',
+      byRecipient: false,
     });
+  });
+
+  it("counts a recipient's calls as the owner's to see, and leaves out a refused caller it was never shared with", async () => {
+    const view = await save();
+    await row(view.id, 1, 'ok');
+    await row(view.id, 0.5, 'ok', STRANGER.id);
+    await row(view.id, 0.25, 'refused', 'outsider-1', 'call', 'not_caller');
+
+    const summary = await summarizeCallableFunctionCalls(OWNER, view.id, NOW);
+    expect(summary).toMatchObject({ total: 2, outcomes: { ok: 2 } });
+    expect(summary.recent.map(call => call.byRecipient)).toEqual([true, false]);
+    await expect(summarizeCallableFunctionCalls(STRANGER, view.id, NOW)).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("answers 404 for another owner's function", async () => {

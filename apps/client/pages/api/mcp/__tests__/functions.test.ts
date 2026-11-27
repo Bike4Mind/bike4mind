@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { ApiKeyScope, TooManyRequestsError, type FunctionContract } from '@bike4mind/common';
+import { ApiKeyScope, TooManyRequestsError, reviewHash, type FunctionContract } from '@bike4mind/common';
 import type {
   CallableFunctionRunPayload,
   CallableFunctionRunResult,
@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
+  reviews: [] as Record<string, unknown>[],
   runner: vi.fn(),
   listForOwner: vi.fn(),
   findBySlug: vi.fn(),
@@ -105,7 +106,24 @@ vi.mock('@bike4mind/database', async () => ({
       h.functions.find(fn => fn.id === id && owned(owner)(fn)) ?? null,
     findBySlugForOwner: (slug: string, owner: Owner) => h.findBySlug(slug, owner),
     listForOwner: (owner: Owner) => h.listForOwner(owner),
+    listLiveForOwner: (owner: Owner) => h.listForOwner(owner),
+    listSharedWith: async ({ userId }: { userId: string }) =>
+      h.functions.filter(
+        fn =>
+          fn.ownerKey !== userId &&
+          fn.enabled &&
+          fn.state === 'live' &&
+          (fn.grants as { userIds: string[] } | undefined)?.userIds.includes(userId)
+      ),
   },
+  callableFunctionReviewRepository: {
+    findFor: async (functionId: string, userId: string) =>
+      h.reviews.find(r => r.functionId === functionId && r.userId === userId) ?? null,
+    findForUser: async (userId: string, ids: string[]) =>
+      h.reviews.filter(r => r.userId === userId && ids.includes(r.functionId as string)),
+  },
+  projectRepository: { find: async () => [] },
+  organizationRepository: { findMembershipOrgIds: async () => [] },
   artifactRepository: {
     find: async (filter: { id: { $in: string[] }; userId: string }) =>
       h.artifacts.filter(a => filter.id.$in.includes(a.id) && a.userId === filter.userId),
@@ -121,7 +139,8 @@ vi.mock('@bike4mind/database', async () => ({
 }));
 
 const { default: route, config } = await import('@pages/api/mcp/functions');
-const { FUNCTION_RUNTIME_FAULT_MESSAGE, TIMEOUT_MESSAGE } = await import('@server/callableFunctions/publicFunctions');
+const { FUNCTION_REVIEW_REQUIRED_MESSAGE, FUNCTION_RUNTIME_FAULT_MESSAGE, TIMEOUT_MESSAGE } =
+  await import('@server/callableFunctions/publicFunctions');
 const rateLimitBuckets = h.rateLimitOptions.map(o => o.bucket);
 
 const CONTRACT: FunctionContract = {
@@ -270,6 +289,7 @@ const callResult = (result: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   exchanges = [];
+  h.reviews = [];
   h.limited.value = false;
   h.enabled.value = true;
   h.mcpEnabled.value = true;
@@ -383,25 +403,112 @@ describe('tools/list', () => {
     await client.close();
   });
 
-  it('leaves out a function that stopped being live after the list was read, and lists the rest', async () => {
+  it('leaves out a draft and a function whose artifact is gone, and lists the rest', async () => {
     h.functions.push(
       fnDoc('6b0000000000000000000004', { slug: 'beam_second' }),
-      fnDoc('6b0000000000000000000005', { slug: 'beam_removed' })
+      fnDoc('6b0000000000000000000005', { slug: 'beam_removed' }),
+      fnDoc('6b0000000000000000000006', { slug: 'beam_draft', state: 'draft' })
     );
-    h.artifacts = h.functions.map(fn => ({
-      id: (fn.pin as { artifactId: string }).artifactId,
-      userId: fn.userId as string,
-      version: 5,
-      deletedAt: null,
-    }));
-    h.listForOwner.mockImplementationOnce(async (owner: Owner) => {
-      const read = h.functions.filter(owned(owner)).map(fn => ({ ...fn }));
-      h.functions.find(fn => fn.slug === 'beam_midspan_deflection')!.state = 'draft';
-      h.functions = h.functions.filter(fn => fn.slug !== 'beam_removed');
-      return read;
-    });
+    h.artifacts = h.functions
+      .filter(fn => fn.slug !== 'beam_removed')
+      .map(fn => ({
+        id: (fn.pin as { artifactId: string }).artifactId,
+        userId: fn.userId as string,
+        version: 5,
+        deletedAt: null,
+      }));
     const client = await connect();
-    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_second']);
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection', 'beam_second']);
+    await client.close();
+  });
+});
+
+describe('a function shared with the caller', () => {
+  const SHARED_ID = '6b0000000000000000000007';
+  const sharedName = `beam_midspan_deflection_${SHARED_ID.slice(-6)}`;
+  const share = (userIds: string[]) => {
+    h.functions = h.functions.filter(fn => fn.id !== SHARED_ID);
+    h.functions.push(fnDoc(SHARED_ID, { ownerKey: 'u2', userId: 'u2', grants: { visibility: 'private', userIds } }));
+    h.artifacts.push({ id: `artifact-${SHARED_ID}`, userId: 'u2', version: 5, deletedAt: null });
+  };
+
+  it('is refused before review, listed and run as the recipient after it, and gone once revoked', async () => {
+    share(['u1']);
+    const client = await connect();
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+    const before = await client.callTool({ name: sharedName, arguments: { load: 2, span: 4 } });
+    expect(before).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: FUNCTION_REVIEW_REQUIRED_MESSAGE }],
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+    expect(h.calls.at(-1)).toMatchObject({ callerUserId: 'u1', ownerUserId: 'u2', reason: 'review_required' });
+
+    h.reviews.push({
+      functionId: SHARED_ID,
+      userId: 'u1',
+      reviewHash: await reviewHash(CONTRACT),
+      approval: 'default',
+      enabled: true,
+    });
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection', sharedName]);
+    const after = await client.callTool({ name: sharedName, arguments: { load: 2, span: 4 } });
+    expect(after).toMatchObject({ structuredContent: { deflection: 0.0081 } });
+    expect(h.calls.at(-1)).toMatchObject({
+      functionId: SHARED_ID,
+      callerUserId: 'u1',
+      ownerUserId: 'u2',
+      surface: 'mcp',
+      outcome: 'ok',
+    });
+
+    share([]);
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+    const revoked = await client.callTool({ name: sharedName, arguments: { load: 2, span: 4 } });
+    expect(revoked).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Function not found' }] });
+    expect(h.runner).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it('refuses at once after a revoke, a change to the reviewed interface, or the owner turning it off', async () => {
+    const reviewed = async () => {
+      share(['u1']);
+      h.reviews = [
+        {
+          functionId: SHARED_ID,
+          userId: 'u1',
+          reviewHash: await reviewHash(CONTRACT),
+          approval: 'default',
+          enabled: true,
+        },
+      ];
+      return h.functions.find(fn => fn.id === SHARED_ID)!;
+    };
+    const client = await connect();
+    const call = () => client.callTool({ name: sharedName, arguments: { load: 2, span: 4 } });
+    const notFound = { isError: true, content: [{ type: 'text', text: 'Function not found' }] };
+
+    await reviewed();
+    expect(await call()).toMatchObject({ structuredContent: { deflection: 0.0081 } });
+
+    // As revokeCallableFunctionShare leaves it: no grants and no reviews.
+    (await reviewed()).grants = null;
+    h.reviews = [];
+    expect(await call()).toMatchObject(notFound);
+    expect(h.calls.at(-1)).toMatchObject({ callerUserId: 'u1', outcome: 'refused' });
+
+    (await reviewed()).contract = { ...CONTRACT, description: 'Midspan deflection, now in millimeters.' };
+    expect(await call()).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: FUNCTION_REVIEW_REQUIRED_MESSAGE }],
+    });
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+
+    (await reviewed()).enabled = false;
+    expect(await call()).toMatchObject(notFound);
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+
+    expect(h.runner).toHaveBeenCalledTimes(1);
     await client.close();
   });
 });

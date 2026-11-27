@@ -1,5 +1,6 @@
 /**
- * GET /api/v1/functions - the key owner's live functions, cursor-paginated (`listFunctionsContract`).
+ * GET /api/v1/functions - the functions the key's owner can call, their own and those shared with them and reviewed,
+ * cursor-paginated (`listFunctionsContract`).
  */
 import { listFunctionsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -18,8 +19,9 @@ const handler = nextRouteForContract(listFunctionsContract, {
 }).get(async (req, res) => {
   await assertFunctionsEnabled(req.user);
   const { limit, cursor } = req.validatedQuery;
-  const page = paginateById(await listLiveFunctions(req.user), { limit, cursor, scope: CURSOR_SCOPE });
-  return res.json({ data: page.items.map(toPublicFunction), next_cursor: page.nextCursor });
+  const rows = (await listLiveFunctions(req.user)).map(toPublicFunction);
+  const page = paginateById(rows, { limit, cursor, scope: CURSOR_SCOPE });
+  return res.json({ data: page.items, next_cursor: page.nextCursor });
 });
 
 export default handler;

@@ -361,6 +361,8 @@ describe('CallableFunctionModel', () => {
           lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
           trustLabel: 'verified',
           contract: created.contract,
+          pin: created.pin,
+          description: created.description,
           sourcePins: [sourcePin],
         }
       );
@@ -387,6 +389,8 @@ describe('CallableFunctionModel', () => {
           lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
           trustLabel: 'verified',
           contract: created.contract,
+          pin: created.pin,
+          description: created.description,
         }
       );
       expect(live).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq: 1 } });

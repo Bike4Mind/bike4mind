@@ -1,7 +1,8 @@
 /**
  * POST /api/v1/functions/{id}/invoke - run one live function and return `{ output, stamp }` (`invokeFunctionContract`),
  * or with `mode: "async"` queue it and answer 202 with a `call_id` to poll at /api/v1/functions/calls/{call_id}.
- * The key's `functions:invoke` scope is the approval: the owner's own key always runs their live function.
+ * The key's `functions:invoke` scope is the approval: the owner's own key always runs their live function, and a
+ * recipient's key runs a function shared with them once they have reviewed it.
  */
 import { invokeFunctionContract } from '@bike4mind/common';
 import { dispatchFunctionCall } from '@bike4mind/server-utils/callableFunctions/dispatch';
@@ -27,7 +28,7 @@ const handler = nextRouteForContract(invokeFunctionContract, {
 }).post(async (req, res) => {
   const startedAt = Date.now();
   await assertFunctionsEnabled(req.user);
-  const fn = await loadLiveFunctionForCall(req.validatedParams.id, {
+  const { fn } = await loadLiveFunctionForCall(req.validatedParams.id, {
     user: req.user,
     apiKeyId: req.apiKeyInfo?.keyId,
     logger: req.logger,

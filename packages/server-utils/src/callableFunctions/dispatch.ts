@@ -4,6 +4,7 @@ import {
   canonicalJson,
   effectiveCallableFunctionStatus,
   functionJsonBytes,
+  recipientCallableFunction,
   validateFunctionValue,
   type CallableFunctionCallOutcome,
   type CallableFunctionCallSurface,
@@ -19,6 +20,7 @@ import {
   artifactRepository,
   callableFunctionCallRepository,
   callableFunctionRepository,
+  callableFunctionReviewRepository,
   mongoose,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -48,7 +50,7 @@ import {
   type CallableFunctionRunner,
   type CallableFunctionTenant,
 } from './runtimeRunner';
-import { hasCurrentReview } from './reviews';
+import { isCurrentReview } from './reviews';
 import { canCallFunction } from './sharing';
 
 /**
@@ -466,24 +468,32 @@ export async function dispatchFunctionCall(
 
     if (!(await resolveCallableFunctionsEnabled(caller))) return refuse('setting_off');
 
-    const fn = await callableFunctionRepository.findById(functionId);
-    if (!fn) return refuse('not_found');
-    row.ownerUserId = fn.userId;
+    const record = await callableFunctionRepository.findById(functionId);
+    if (!record) return refuse('not_found');
+    row.ownerUserId = record.userId;
+    row.codeHash = record.pin.contentHash;
+    if (record.pin.seq !== undefined) row.pinSeq = record.pin.seq;
+
+    const access = await canCallFunction(caller, record);
+    if (!access) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
+    // A recipient runs the last promotion while the owner's edits leave the record a draft.
+    const fn = access === 'owner' ? record : recipientCallableFunction(record);
+    if (!fn) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
     row.codeHash = fn.pin.contentHash;
     if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
-
     const contract = options.contract ?? fn.contract;
-    const access = await canCallFunction(caller, fn);
-    if (!access) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
-    if (access !== 'owner' && !(await hasCurrentReview(caller.id, { id: fn.id, contract }))) {
-      return refuse('review_required');
+    let approval = fn.approval;
+    if (access !== 'owner') {
+      const review = await callableFunctionReviewRepository.findFor(fn.id, caller.id);
+      if (!review || !(await isCurrentReview(review, contract))) return refuse('review_required');
+      approval = review.approval;
     }
 
     const status = effectiveCallableFunctionStatus(fn, await readHead(fn));
     if (status === 'disabled' || status === 'source_deleted') return refuse(status);
     if (surface === 'chat' || surface === 'agent') {
       if (status !== 'live') return refuse('not_live');
-      if (fn.approval === 'always_ask' && request.approved !== true) return refuse('approval_required');
+      if (approval === 'always_ask' && request.approved !== true) return refuse('approval_required');
     }
 
     // Measured before validation, so an input of any size is never walked.

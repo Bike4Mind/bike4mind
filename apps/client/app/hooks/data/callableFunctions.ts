@@ -256,6 +256,18 @@ export function useCallableFunctionCalls(id: string) {
 
 const shareQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'grants'] as const;
 
+/** The account holding exactly `email`, in any organization, for the owner of tool `id` to share with; null if none. */
+export async function lookupCallableFunctionRecipient(
+  id: string,
+  email: string
+): Promise<{ id: string; name: string } | null> {
+  return (
+    await api.get<{ id: string; name: string } | null>(`${COLLECTION}/${encodeURIComponent(id)}/recipient`, {
+      params: { email },
+    })
+  ).data;
+}
+
 /**
  * The owner's share of the tool: its grants and the named people's names. Not kept once nothing watches it: the share
  * dialog seeds its form from this once, so a cached copy from before a save would be saved back over it.
@@ -336,12 +348,12 @@ export const useUpdateSharedCallableFunctionReview = () => {
 };
 
 /** Tools other people shared with this person, with this person's review of each. */
-export function useSharedCallableFunctions() {
+export function useSharedCallableFunctions(enabled = true) {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   return useQuery({
     queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'shared'],
     queryFn: async () => (await api.get<ICallableFunctionShared[]>(`${COLLECTION}/shared`)).data,
-    enabled: hasAccessToken,
+    enabled: hasAccessToken && enabled,
   });
 }
 
