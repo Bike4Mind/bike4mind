@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatHeldRelay, ChatMessage } from '@shared/chat';
 import { pendingDecisionsOf, type PendingDecision } from '@shared/pendingDecisions';
 import { hostChat } from '../../host/hostChat';
+import { useSessionsEvents } from '../../host/useSessionEvents';
 import { refreshKeyOf } from './AgentPeekDrawer';
 import type { AgentState, AgentView } from './roster';
 
@@ -83,31 +84,30 @@ export function useTreeDecisions(agents: readonly AgentView[], enabled = true): 
   }, [enabled, waiting, revision]);
 
   // A held relay can arrive while the agent already needs the user, which moves nothing on the roster.
+  const unmounted = useRef(false);
   useEffect(() => {
-    if (!enabled || waiting.length === 0) return;
-    const ids = new Set(waiting.map(([id]) => id));
-    let unmounted = false;
-    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
-      if (event.type !== 'held-relays' || !ids.has(event.sessionId)) return;
-      const id = event.sessionId;
-      const key = currentKeys.current.get(id);
-      if (key === undefined) return;
-      loadSource(id, key).then(
-        source => {
-          if (unmounted) return;
-          setLoaded(current => new Map(current).set(id, source));
-          setErrors(current => withoutKey(current, id));
-        },
-        (error: unknown) => {
-          if (!unmounted) setErrors(current => new Map(current).set(id, errorText(error)));
-        }
-      );
-    });
+    unmounted.current = false;
     return () => {
-      unmounted = true;
-      unsubscribe();
+      unmounted.current = true;
     };
-  }, [enabled, waiting]);
+  }, []);
+  const watchedIds = useMemo(() => new Set(enabled ? waiting.map(([id]) => id) : []), [enabled, waiting]);
+  useSessionsEvents(watchedIds, event => {
+    if (event.type !== 'held-relays') return;
+    const id = event.sessionId;
+    const key = currentKeys.current.get(id);
+    if (key === undefined) return;
+    loadSource(id, key).then(
+      source => {
+        if (unmounted.current) return;
+        setLoaded(current => new Map(current).set(id, source));
+        setErrors(current => withoutKey(current, id));
+      },
+      (error: unknown) => {
+        if (!unmounted.current) setErrors(current => new Map(current).set(id, errorText(error)));
+      }
+    );
+  });
 
   const byId = useMemo(() => {
     const tree = new Map<string, PendingDecision[]>();

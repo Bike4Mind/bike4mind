@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Snackbar from '@mui/joy/Snackbar';
 import Typography from '@mui/joy/Typography';
+import { hostClient } from '../host/HostClient';
 
 interface SpawnFailure {
   title: string;
@@ -14,11 +15,10 @@ interface SpawnFailure {
 export function SpawnFailureToast() {
   const [failure, setFailure] = useState<SpawnFailure | null>(null);
 
+  // Host-wide, since nothing is subscribed to a session that never started. A failure while
+  // disconnected is not replayed; the session list, re-read on reconnect, shows the outcome.
   useEffect(
-    () =>
-      window.b4m.chat.onStreamEvent(event => {
-        if (event.type === 'spawn-failed') setFailure({ title: event.title, message: event.message });
-      }),
+    () => hostClient.onNotification('session/spawnFailed', ({ title, message }) => setFailure({ title, message })),
     []
   );
 

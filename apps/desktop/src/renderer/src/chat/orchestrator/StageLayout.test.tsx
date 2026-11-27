@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { HostBridgeApi } from '@shared/hostBridge';
 import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -315,23 +316,26 @@ describe('panes pinned to another session', () => {
   });
 
   it('subscribes to activity only while a pane is pinned, and re-subscribes when the pin moves', async () => {
-    const disposers: ReturnType<typeof vi.fn>[] = [];
-    const onStreamEvent = vi.fn(() => {
-      const dispose = vi.fn();
-      disposers.push(dispose);
-      return dispose;
-    });
-    (window as unknown as { b4m: { chat: { onStreamEvent: unknown } } }).b4m.chat.onStreamEvent = onStreamEvent;
-    const live = () => disposers.filter(dispose => dispose.mock.calls.length === 0).length;
+    const bridge = (window as unknown as { b4m: { host: HostBridgeApi } }).b4m.host;
+    const request = vi.spyOn(bridge, 'request');
+    // The sessions this window holds a subscription to, from the subscribe and unsubscribe requests.
+    const live = () => {
+      const held = new Set<string>();
+      for (const [, method, params] of request.mock.calls) {
+        const sessionId = (params as { sessionId: string }).sessionId;
+        if (method === 'session/subscribe') held.add(sessionId);
+        if (method === 'session/unsubscribe') held.delete(sessionId);
+      }
+      return held;
+    };
 
     await renderPinned(pinnedSplit('follow-active'));
     expect(query('orchestrator-pinned-pane')).toBeNull();
-    const baseline = onStreamEvent.mock.calls.length;
-    const baselineLive = live();
+    const baseline = live();
 
     await renderPinned(pinnedSplit('other'));
-    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 1);
-    expect(live()).toBe(baselineLive + 1);
+    const pinnedOther = live();
+    expect(pinnedOther.size).toBeGreaterThan(baseline.size);
 
     const sessions = [...SESSIONS, sessionFixture('third', undefined, { orchestrate: true, title: 'Third run' })];
     await themed.render(
@@ -346,11 +350,10 @@ describe('panes pinned to another session', () => {
         paneSessions={{ ...paneSessions, sessions }}
       />
     );
-    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 2);
-    expect(live()).toBe(baselineLive + 1);
+    expect(live()).not.toEqual(pinnedOther);
+    expect(live().has('third')).toBe(true);
 
     await renderPinned({ ...SIDE_BY_SIDE });
-    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 2);
-    expect(live()).toBe(baselineLive);
+    expect(live()).toEqual(baseline);
   });
 });

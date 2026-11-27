@@ -1,3 +1,4 @@
+import { ContextNotices } from './ContextNotices';
 import {
   acceptTask,
   assertReportCoversCriteria,
@@ -94,6 +95,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
+  ActiveContextNotice,
   ContextNoticeKind,
   ChatChildReport,
   ChatChildWaiting,
@@ -1045,6 +1047,15 @@ export class ChatService {
    * mid-turn; every summary pushed, listed or returned by a setter or folder grant goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
+
+  /** Context notices go out through this, so the ones in force stay readable; see session/get. */
+  private readonly contextNotices = new ContextNotices(event => this.emit(event));
+
+  /** The held context notices in force for a session; see ContextNotices. */
+  contextNoticesOf(sessionId: string): ActiveContextNotice[] {
+    return this.contextNotices.active(sessionId);
+  }
+
   /** The sorted listing later pages are cut from; see listSessionPage. */
   private pageSnapshot: { at: number; sessions: ChatSessionSummary[] } | null = null;
 
@@ -2323,7 +2334,7 @@ export class ChatService {
       // Another round of the run may have shown it while this one read.
       if (!recorded || recorded.orchestrationPolicy?.budgetWarnedAt !== budget) return;
       for (const id of new Set([session.id, policy.rootSessionId])) {
-        this.emit({ type: 'context-notice', sessionId: id, message: warning, kind: 'run-budget' });
+        this.contextNotices.show(id, warning, 'run-budget');
       }
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not check the run budget: ${err instanceof Error ? err.message : err}`);
@@ -2379,7 +2390,7 @@ export class ChatService {
       );
       if (updated) this.deps.summaryChanged?.(updated);
       // The 80% warning named the old budget.
-      this.emit({ type: 'context-notice-cleared', sessionId: id, kind: 'run-budget' });
+      this.contextNotices.clear(id, 'run-budget');
     }
     if (!serverRun) return { ok: true, resumed: 0 };
     let resumed = 0;
@@ -3500,6 +3511,7 @@ export class ChatService {
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.livePlans.delete(sessionId);
+    this.contextNotices.forget(sessionId);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
     if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
@@ -5318,7 +5330,7 @@ export class ChatService {
               onCompletionEvent,
               controller.signal,
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
-              (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
+              (message, kind) => this.contextNotices.show(sessionId, message, kind)
             )
           : await this.withPrefixWarm(
               warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,

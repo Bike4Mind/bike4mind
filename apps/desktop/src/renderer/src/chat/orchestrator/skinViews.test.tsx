@@ -18,6 +18,7 @@ import {
 import { agentFixture, createThemedMount, el } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 
 const themed = createThemedMount('dark');
 const agents: AgentView[] = [
@@ -93,6 +94,7 @@ const SKINNED: Partial<Record<OrchestratorViewId, () => void>> = {
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       onStreamEvent: vi.fn(() => () => undefined),
