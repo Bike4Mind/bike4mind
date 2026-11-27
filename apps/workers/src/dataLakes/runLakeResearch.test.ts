@@ -67,6 +67,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
       autoApproveDataLakeProposal: h.autoApprove,
       loadActiveLakeGrants: h.loadActiveLakeGrants,
       resolveEffectiveOwnerIds: h.resolveEffectiveOwnerIds,
+      // Real: the author check is the manage rule itself.
+      canManageLake: actual.dataLakeService.canManageLake,
     },
     dataLakeResearchService: {
       executeResearchRun: h.executeResearchRun,
@@ -149,6 +151,7 @@ const liveConfig = (overrides: Record<string, unknown> = {}) => ({
   query: 'coastal erosion',
   autoAdmitTrusted: true,
   trustedDomains: ['example.com'],
+  createdByUserId: 'owner-1',
   ...overrides,
 });
 
@@ -1401,6 +1404,50 @@ describe('runLakeResearch', () => {
         expect.stringMatching(/stopped by the live config/),
         expect.objectContaining({ reason: 'auto_admit_off' })
       );
+    });
+
+    describe('config author', () => {
+      const expectStoppedForAuthor = (result: string | undefined) => {
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringMatching(/stopped by the live config/),
+          expect.objectContaining({ reason: 'author_cannot_manage' })
+        );
+      };
+
+      it('leaves the proposal pending when the author no longer manages the lake', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ createdByUserId: 'former-curator' }));
+        h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+        h.findIdsWithAdminRights.mockResolvedValue([]);
+
+        expectStoppedForAuthor((await runWithPort()).result);
+      });
+
+      it('judges the last editor rather than the creator', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ lastUpdatedByUserId: 'former-curator' }));
+        h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+        h.findIdsWithAdminRights.mockResolvedValue([]);
+
+        expectStoppedForAuthor((await runWithPort()).result);
+      });
+
+      it('leaves the proposal pending when the author account is gone', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ createdByUserId: 'deleted-user' }));
+        h.findUserById.mockImplementation(async (id: string) => (id === 'deleted-user' ? null : { id }));
+
+        expectStoppedForAuthor((await runWithPort()).result);
+      });
+
+      it('admits while the author still holds a curator grant', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ createdByUserId: 'curator-1' }));
+        h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+        h.loadActiveLakeGrants.mockResolvedValue([
+          { principalType: 'user', principalId: 'curator-1', role: 'curator' },
+        ]);
+
+        expect((await runWithPort()).result).toBe('admitted');
+      });
     });
 
     it('leaves the proposal pending when the config was deleted mid-run', async () => {

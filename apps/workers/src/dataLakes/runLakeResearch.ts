@@ -26,7 +26,12 @@ import { fetchAndParseURL, ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { isSpendFrozenError, RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
-import type { ResearchFeedCursor, ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
+import type {
+  IDataLakeResearchConfigDocument,
+  ResearchFeedCursor,
+  ResearchRunTotals,
+  SettleResearchRunInput,
+} from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
@@ -438,6 +443,23 @@ export async function runLakeResearch(
     }
     judgeProvider = models.find(m => m.id === model)?.backend;
 
+    // The trust rule is whoever last saved the config (any save re-submits its site lists), so
+    // auto-admit acts only while that person can still manage the lake; otherwise results wait for review.
+    const configAuthorCanManage = async (
+      config: Pick<IDataLakeResearchConfigDocument, 'createdByUserId' | 'lastUpdatedByUserId'>,
+      grants: readonly dataLakeService.LakeGrant[]
+    ): Promise<boolean> => {
+      const authorId = config.lastUpdatedByUserId || config.createdByUserId;
+      const author = authorId ? await userRepository.findById(authorId) : null;
+      if (!author) return false;
+      const administeredOrgIds = await organizationRepository.findIdsWithAdminRights(author.id);
+      return dataLakeService.canManageLake(
+        lake,
+        { userId: author.id, isAdmin: author.isAdmin === true, administeredOrgIds },
+        grants
+      );
+    };
+
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
     // owns the lake now. The live config's off switch and site lists can only narrow admits mid-run;
     // enabling it, adding sites or adding item rules applies from the next run. Never throws: a failure leaves it pending.
@@ -451,7 +473,13 @@ export async function runLakeResearch(
         if (!ownerUser || aiAccessDeniedMessage(ownerUser)) return 'left_pending';
         const administeredOrgIds = await organizationRepository.findIdsWithAdminRights(ownerUser.id);
         const config = await dataLakeResearchConfigRepository.findByIdInLake(claimed.configId, lake.id);
-        const stopReason = !config ? 'config_missing' : config.autoAdmitTrusted !== true ? 'auto_admit_off' : null;
+        const stopReason = !config
+          ? 'config_missing'
+          : config.autoAdmitTrusted !== true
+            ? 'auto_admit_off'
+            : !(await configAuthorCanManage(config, grants))
+              ? 'author_cannot_manage'
+              : null;
         if (!config || stopReason) {
           logger.info('[lakeResearch] auto-admit stopped by the live config', {
             runId,
