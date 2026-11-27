@@ -842,7 +842,11 @@ function withOrgToolPolicy<T extends { toolSchema: { name: string } }>(
   organization: { modelPolicy?: unknown } | null | undefined,
   logger: Pick<Logger, 'info'>
 ): T[] {
-  const { tools: kept, stripped } = applyOrgToolPolicy(tools, readOrgModelPolicy(organization?.modelPolicy));
+  const { tools: kept, stripped } = applyOrgToolPolicy(
+    tools,
+    readOrgModelPolicy(organization?.modelPolicy),
+    new Set(Object.keys(premiumLlmTools))
+  );
   if (stripped.length > 0) {
     logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: stripped });
   }

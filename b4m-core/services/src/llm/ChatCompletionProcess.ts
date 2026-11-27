@@ -3997,7 +3997,11 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
       if (allTools) {
-        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        const orgFiltered = applyOrgToolPolicy(
+          allTools,
+          readOrgModelPolicy(organization?.modelPolicy),
+          new Set(Object.keys(externalTools ?? {}))
+        );
         if (orgFiltered.stripped.length > 0) {
           logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
             tools: orgFiltered.stripped,
