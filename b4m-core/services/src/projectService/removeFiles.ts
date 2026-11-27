@@ -27,6 +27,7 @@ interface RemoveProjectFilesAdapters {
     users: IUserRepository;
     invites: Pick<IInviteRepository, 'findAllByDocumentId'>;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const removeFiles = async (
@@ -100,6 +101,7 @@ export const removeFiles = async (
   await revokeProjectFileGrants(
     project.id,
     {
+      project,
       files: files.filter(file => !stillShared(String(file.id))),
       softDeletedIds: softDeletedIds.filter(id => !stillShared(id)),
     },

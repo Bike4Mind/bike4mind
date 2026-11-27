@@ -2,6 +2,7 @@ import { IFabFileRepository, IProjectRepository, ISessionRepository, IUserReposi
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { revokeFromProject } from '../sharingService';
+import { projectAccessRecipients } from '../sharingService/projectGrantor';
 
 const deleteProjectSchema = z.object({
   id: z.string(),
@@ -16,6 +17,7 @@ interface DeleteProjectAdapters {
     fabFiles: IFabFileRepository;
     users: IUserRepository;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const deleteProject = async (
@@ -64,6 +66,7 @@ export const deleteProject = async (
   project.name = `[Deleted] ${project.id}`;
 
   await db.projects.update({ id: project.id, deletedAt: project.deletedAt, name: project.name });
+  adapters.onAccessRemoved?.(await projectAccessRecipients(project, db.users));
 
   return project;
 };

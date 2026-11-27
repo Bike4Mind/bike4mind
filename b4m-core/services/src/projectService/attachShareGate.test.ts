@@ -270,12 +270,24 @@ describe('removeSystemPrompts revokes project grants', () => {
     const fileShares = createShareableFake([file]);
     const adapters = {
       db: {
-        projects: { shareable: createShareableFake([project as never]), update: vi.fn(async () => ({})) },
+        projects: {
+          shareable: createShareableFake([project as never]),
+          update: vi.fn(async () => ({})),
+          findParticipatingReferencing: vi.fn(async () => []),
+        },
         fabFiles: {
           shareable: fileShares,
           findAllByIds: vi.fn(async (ids: string[]) => [file].filter(f => ids.includes(f.id))),
+          updateGuarded: vi.fn(async (write: { id: string; users?: Row[] }) => {
+            if (write.id === file.id && write.users) file.users = write.users;
+            return file;
+          }),
         },
-        users: { findByIds: vi.fn(async () => []) },
+        users: {
+          findByIds: vi.fn(async () => []),
+          findById: vi.fn(async (id: string) => ({ id, groups: [] })),
+          findUserIdsByGroupIds: vi.fn(async () => ({})),
+        },
         invites: { findAllByDocumentId: vi.fn(async () => []) },
       },
     };

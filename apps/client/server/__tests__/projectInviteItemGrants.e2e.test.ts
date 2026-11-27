@@ -96,7 +96,8 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
    * A project whose member holds [read, share] on it. `shared` items carry project-tagged rows that
    * give the member [read, share]; `readOnly` items give the owner and the member read; `unheld` items
    * belong to a third user and carry no row for either; `ownedByMember` is the member's own file, on
-   * which the owner holds [read, update], as when a member attaches it.
+   * which the owner holds [read, update], as when a member attaches it; `memberAttached` is an
+   * outsider's file the member holds [read, share] on directly and attached to the project.
    */
   const seed = async () => {
     const owner = await makeUser('owner');
@@ -111,6 +112,10 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
       readOnly: await makeFile(outsider.id, 'read-only.txt', [tagged(owner.id, readOnly), tagged(member.id, readOnly)]),
       unheld: await makeFile(outsider.id, 'unheld.txt'),
       ownedByMember: await makeFile(member.id, 'mine.txt', [tagged(owner.id, [Permission.read, Permission.update])]),
+      memberAttached: await makeFile(outsider.id, 'attached.txt', [
+        { userId: member.id, permissions: memberGrant },
+        tagged(owner.id, [Permission.read, Permission.update]),
+      ]),
     };
     const prompts = {
       shared: await makeFile(owner.id, 'prompt-shared.txt', [tagged(member.id, memberGrant)]),
@@ -161,7 +166,9 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
     expect(await fileRows(files.shared, accepter.id)).toEqual(full);
     expect(await fileRows(files.ownedByMember, accepter.id)).toEqual(full);
-    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    expect(await fileRows(files.memberAttached, accepter.id)).toEqual(full);
+    // An outsider's file no participant holds share on is not passed on.
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([]);
     expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
     expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
     expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);
@@ -178,7 +185,10 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
     expect(await fileRows(files.shared, accepter.id)).toEqual(full);
     expect(await fileRows(files.ownedByMember, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
-    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    // The member who attached it still holds share, so the owner's invite passes on what the owner holds.
+    expect(await fileRows(files.memberAttached, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    // An outsider's file no participant holds share on is not passed on.
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([]);
     expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
     expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
     expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);

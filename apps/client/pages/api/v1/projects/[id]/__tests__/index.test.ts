@@ -17,7 +17,9 @@ const {
   mockUpdate,
   mockDeleteProject,
   mockLogEvent,
+  mockRescope,
 } = vi.hoisted(() => ({
+  mockRescope: vi.fn(),
   mockFindAccessibleById: vi.fn(),
   mockFindUser: vi.fn(),
   mockRateLimitOptions: vi.fn(),
@@ -54,6 +56,11 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: async () => [{ userId: 'member-1', fileIds: ['file-1'] }],
+  cleanUpRevokedFileReferences: async () => undefined,
+}));
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
 vi.mock('@bike4mind/database', () => ({
   projectRepository: {
     shareable: { findAccessibleById: mockFindAccessibleById },
@@ -63,6 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockFindUser },
   sessionRepository: {},
   fabFileRepository: {},
+  withTransaction: async (operation: () => Promise<unknown>) => operation(),
 }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<{ projectService: object }>();
@@ -242,6 +250,27 @@ describe('DELETE /api/v1/projects/{id}', () => {
     expect(res._getStatusCode()).toBe(204);
     expect(res._getData()).toBe('');
     expect(mockDeleteProject).toHaveBeenCalledWith('u1', { id: PROJECT_ID }, expect.anything());
+  });
+
+  it("rebuilds the affected members' live subscriptions after the delete", async () => {
+    mockRescope.mockClear();
+    mockDeleteProject.mockImplementationOnce(
+      async (
+        _user: unknown,
+        _params: unknown,
+        adapters: {
+          onAccessRemoved: (ids: string[]) => void;
+        }
+      ) => {
+        expect(mockRescope).not.toHaveBeenCalled();
+        adapters.onAccessRemoved(['actual-recipient']);
+        return OWNED_PROJECT;
+      }
+    );
+
+    await call('DELETE', PROJECT_ID);
+
+    expect(mockRescope).toHaveBeenCalledWith(['actual-recipient'], expect.anything());
   });
 
   it('answers 404 for a project only shared with the caller', async () => {

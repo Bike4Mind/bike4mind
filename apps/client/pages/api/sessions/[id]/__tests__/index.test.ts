@@ -20,6 +20,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
+const mockRescope = vi.hoisted(() => vi.fn());
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
+
 const {
   mockValidate,
   mockFindById,
@@ -476,6 +479,28 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(res._getStatusCode()).toBe(200);
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       expect(cascadeSawTransaction).toBe(true);
+    });
+
+    it('fences committed recipients before unpublishing or media cleanup', async () => {
+      mockDeleteSession.mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          expect(mockRescope).not.toHaveBeenCalled();
+          adapters.onAccessRemoved(['actual-recipient']);
+          return { id: 'other-session' };
+        }
+      );
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRescope).toHaveBeenCalledWith(['actual-recipient'], expect.anything());
+      expect(mockRescope.mock.invocationCallOrder[0]).toBeLessThan(mockUnpublish.mock.invocationCallOrder[0]);
+      expect(mockRescope.mock.invocationCallOrder[0]).toBeLessThan(mockPurgeMedia.mock.invocationCallOrder[0]);
     });
 
     it('deletes the session by the path id and returns the new last-notebook id', async () => {
