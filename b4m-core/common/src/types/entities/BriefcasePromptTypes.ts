@@ -1,5 +1,4 @@
 import { IBaseRepository, IMongoDocument } from '.';
-import { B4MLLMTools } from '../../schemas/llm';
 
 /**
  * Briefcase capability - a curated catalog of one-click AI prompts.
@@ -21,9 +20,8 @@ import { B4MLLMTools } from '../../schemas/llm';
 export type ExecutionMode = 'inject' | 'auto-fire' | 'hidden';
 
 /**
- * Tools the chat surface must run a briefcase send with. Constrained to the
- * host's closed tool set (`B4MLLMTools`), never free text - a stored prompt
- * cannot reference a tool that no longer exists.
+ * Tools the chat surface must run a briefcase send with. Identifier-shaped
+ * names (built-in or contributed); see BriefcaseRequiredToolsSchema.
  */
 export type BriefcasePromptToolFlag = string;
 
