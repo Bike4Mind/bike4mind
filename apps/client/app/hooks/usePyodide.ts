@@ -1,6 +1,9 @@
 /**
  * Wraps the pyodideManager singleton to provide React-friendly state.
  * Supports interrupt capability for stopping infinite loops.
+ *
+ * `owner` identifies whose code runs (the artifact id): code from a different owner never reuses the sandbox
+ * another owner's code ran in.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -8,7 +11,7 @@ import { pyodideManager, PyodideManagerState, type PythonFunctionCall } from '@c
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import type { ExecutionResult } from '@client/app/workers/pyodide/types';
 
-export function usePyodide() {
+export function usePyodide(owner: string) {
   const [state, setState] = useState<PyodideManagerState>(pyodideManager.getState());
 
   // usePublicConfig (not useConfig) avoids the auth-timing race: the Pyodide mirror is a
@@ -23,13 +26,16 @@ export function usePyodide() {
   }, []);
 
   const initialize = useCallback(async () => {
-    await pyodideManager.initialize();
-  }, []);
+    await pyodideManager.initialize(owner);
+  }, [owner]);
 
-  const execute = useCallback(async (code: string, packages?: string[]): Promise<ExecutionResult> => {
-    const detectedPackages = packages || pyodideManager.detectPackages(code);
-    return await pyodideManager.execute(code, detectedPackages);
-  }, []);
+  const execute = useCallback(
+    async (code: string, packages?: string[]): Promise<ExecutionResult> => {
+      const detectedPackages = packages || pyodideManager.detectPackages(code);
+      return await pyodideManager.execute(owner, code, detectedPackages);
+    },
+    [owner]
+  );
 
   const callFunction = useCallback(
     async (
@@ -39,9 +45,9 @@ export function usePyodide() {
       files?: { name: string; bytes: ArrayBuffer }[]
     ): Promise<PythonFunctionCall> => {
       const detectedPackages = packages || pyodideManager.detectPackages(code);
-      return await pyodideManager.callFunction(code, detectedPackages, params, undefined, files);
+      return await pyodideManager.callFunction(owner, code, detectedPackages, params, undefined, files);
     },
-    []
+    [owner]
   );
 
   const interrupt = useCallback(() => {
