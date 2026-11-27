@@ -20,7 +20,7 @@ describe('business metric labels', () => {
     ['spendUsd:voyage', 'Estimated Voyage spend', 'usd'],
     ['credits', 'Credits charged', 'credits'],
     ['requests:user', 'API requests (third-party keys)', 'count'],
-    ['requests:firstParty', 'API requests (CLI and desktop)', 'count'],
+    ['requests:firstParty', 'API requests (CLI, desktop and MCP-host)', 'count'],
     ['requests:unclassified', 'API requests (unstamped source)', 'count'],
     ['completions:user', 'API completions (third-party keys)', 'count'],
     ['revenueMinor:usd', 'Stripe receipts (USD)', 'minor'],

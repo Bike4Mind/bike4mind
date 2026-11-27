@@ -466,7 +466,8 @@ export function formatReport(report: ExternalActivityReport): string {
 
   lines.push(
     '',
-    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop + MCP-host. API and Internal users are counted separately.`
+    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop + MCP-host. ` +
+      'API and Internal users are counted separately.'
   );
   lines.push(pad(['Day', 'DAU', 'API users', 'Internal'], SERIES_WIDTHS));
   report.dau.forEach((row, i) => {

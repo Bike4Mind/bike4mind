@@ -25,7 +25,7 @@ export interface MetricFamily {
 
 const SOURCE_CUTS: Record<string, string> = {
   user: 'third-party keys',
-  firstParty: 'CLI and desktop',
+  firstParty: 'CLI, desktop and MCP-host',
   unclassified: 'unstamped source',
 };
 
