@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
+import { hasAutoNamePlaceholderName, TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
+import { sessionRepository } from '@bike4mind/database';
+import { getOrCreateSession } from '../../managers/sessionCrud';
 import type { TutorialRequest } from '../routes/types';
 
 const found = vi.hoisted(() => ({ session: undefined as Record<string, unknown> | undefined }));
@@ -114,5 +116,26 @@ describe('tutorial notebook deletion', () => {
     expect(await deps().deleteSession('s1', 'owner')).toBe(false);
     expect(mocks.transaction).not.toHaveBeenCalled();
     expect(mocks.rescope).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSession', () => {
+  it('names the notebook after the tutorial and leaves it out of auto-naming', async () => {
+    const session = { id: 's1', name: 'Tutorial: First steps' } as Record<string, unknown>;
+    vi.mocked(getOrCreateSession).mockResolvedValue({
+      session,
+      sessionId: 's1',
+      asyncPromises: [],
+    } as unknown as Awaited<ReturnType<typeof getOrCreateSession>>);
+    vi.mocked(sessionRepository.update).mockImplementation(async update => {
+      Object.assign(session, update);
+      return session as never;
+    });
+    const deps = coreTutorialDepsFor({ user: { id: 'u1' }, logger: { warn: vi.fn() } } as unknown as TutorialRequest);
+
+    await deps.createSession({ id: 'first-steps', title: 'First steps' } as never);
+
+    expect(vi.mocked(getOrCreateSession).mock.calls[0][0]).toMatchObject({ sessionName: 'Tutorial: First steps' });
+    expect(hasAutoNamePlaceholderName(session as { name: string; autoNamePlaceholder?: string })).toBe(false);
   });
 });

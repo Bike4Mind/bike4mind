@@ -21,6 +21,9 @@ const mockRefs = vi.hoisted(() => ({
   tagCallArgs: [] as unknown[][],
   namespaceArgs: undefined as unknown[] | undefined,
   baseApiOptions: undefined as unknown,
+  // Appended to every count, so a test can add rows without touching the fixed results above.
+  extraTags: [] as { tag: string; count: number }[],
+  extraNamespaces: [] as { namespace: string; fileCount: number }[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -41,11 +44,11 @@ vi.mock('@bike4mind/database', () => ({
     countFilesByTagForUser: (...args: unknown[]) => {
       mockRefs.tagCallArgs.push(args);
       const isNarrowed = (args[1] as { excludePersonalShares?: boolean } | undefined)?.excludePersonalShares === true;
-      return Promise.resolve(isNarrowed ? NARROWED_RESULT : UNNARROWED_RESULT);
+      return Promise.resolve([...(isNarrowed ? NARROWED_RESULT : UNNARROWED_RESULT), ...mockRefs.extraTags]);
     },
     countUniqueFilesByNamespaceForUser: (...args: unknown[]) => {
       mockRefs.namespaceArgs = args;
-      return Promise.resolve([]);
+      return Promise.resolve(mockRefs.extraNamespaces);
     },
   },
 }));
@@ -77,6 +80,29 @@ describe('GET /api/files/tags/counts', () => {
   beforeEach(() => {
     mockRefs.tagCallArgs = [];
     mockRefs.namespaceArgs = undefined;
+    mockRefs.extraTags = [];
+    mockRefs.extraNamespaces = [];
+  });
+
+  it("leaves out the tutorial sheet's bookkeeping tags, so the File Browser shows no folder for them", async () => {
+    mockRefs.extraTags = [
+      { tag: 'tutorial:grounded-answers', count: 1 },
+      { tag: 'tutorial-csv:0123456789abcdef', count: 1 },
+      { tag: 'tutorials:my-notes', count: 2 },
+    ];
+    mockRefs.extraNamespaces = [
+      { namespace: 'tutorial', fileCount: 1 },
+      { namespace: 'tutorial-csv', fileCount: 1 },
+      { namespace: 'tutorials', fileCount: 2 },
+    ];
+    const { req, res } = invokeGet({ id: 'user-1', groups: [], tags: [] });
+
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body.tagCounts).toEqual([...UNNARROWED_RESULT, { tag: 'tutorials:my-notes', count: 2 }]);
+    expect(body.workspaceTagCounts).toEqual([...NARROWED_RESULT, { tag: 'tutorials:my-notes', count: 2 }]);
+    expect(body.namespaceCounts).toEqual([{ namespace: 'tutorials', fileCount: 2 }]);
   });
 
   it('calls countFilesByTagForUser exactly twice - once unnarrowed, once narrowed', async () => {

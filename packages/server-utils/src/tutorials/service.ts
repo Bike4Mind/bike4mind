@@ -191,8 +191,9 @@ async function seedCanvas(
 }
 
 /**
- * A restart supersedes the module's previous session. An unfinished one holding only recorded turns goes,
- * so the sidebar keeps at most one untouched session per module. One the user finished, left, or wrote in, stays.
+ * A restart or replay supersedes the module's previous session. One holding only recorded turns goes, whether the
+ * walk was running, finished or left, so the sidebar keeps one tutorial notebook per module. One the user wrote in,
+ * renamed, uploaded to or moved stays (deleteSession and ownsSession refuse those).
  * Best effort: a failed check or delete keeps the session and never fails the restart.
  */
 async function discardUntouchedSession(
@@ -202,7 +203,7 @@ async function discardUntouchedSession(
   prior: ITutorialModuleProgress | undefined,
   current: string
 ): Promise<void> {
-  if (!prior || prior.status !== 'in_progress' || prior.sessionId === current) return;
+  if (!prior || prior.sessionId === current) return;
   try {
     if (!(await deps.ownsSession(prior.sessionId, userId))) return;
     const quests = await deps.quests.findAllBySessionId(prior.sessionId);

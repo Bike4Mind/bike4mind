@@ -15,10 +15,10 @@ import { sessionService } from '@bike4mind/services';
 import { getOrCreateSession } from '../managers/sessionCrud';
 import { setCoreSessionMarker } from './sessionMarker';
 import { tutorialSheets } from './sheet';
+import { CORE_TUTORIAL_SHEET_TAG } from './sheetTags';
 import type { TutorialServiceDeps } from './service';
 
-/** Names the user's sheet copies; the overlay keeps its own tag, so the two never touch each other's files. */
-export const CORE_TUTORIAL_SHEET_TAG = 'tutorial';
+export { CORE_TUTORIAL_SHEET_TAG };
 
 const sheets = tutorialSheets({ tag: CORE_TUTORIAL_SHEET_TAG });
 
@@ -30,14 +30,14 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
     },
     createSession: async module => {
       const name = `${TUTORIAL_SESSION_PREFIX}${module.title}`;
-      const { session, sessionId, asyncPromises } = await getOrCreateSession({
+      const { sessionId, asyncPromises } = await getOrCreateSession({
         sessionName: name,
         user: req.user!,
         ability: req.ability,
         logger: req.logger,
       });
-      // Held on the name it was born with, so auto-naming leaves the sidebar badge alone until the user renames it.
-      await sessionRepository.update({ id: session.id, autoNamePlaceholder: name });
+      // No autoNamePlaceholder: a placeholder name is what makes a notebook eligible for auto-naming
+      // (hasAutoNamePlaceholderName), and the badge and the walk's last step both rely on the tutorial name.
       Promise.all(asyncPromises).catch(error => req.logger.warn('tutorial: session side effects failed', error));
       return { id: sessionId };
     },

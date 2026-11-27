@@ -184,17 +184,28 @@ describe('startModule', () => {
     expect(deleted).toEqual([]);
   });
 
-  it('restart keeps a previous session the user left', async () => {
-    const { deps, progress, deleted } = makeDeps();
+  it('a replay deletes a previous session the user left that holds only recorded turns', async () => {
+    const { deps, progress, sessions, deleted } = makeDeps();
     await startModule(deps, 'u1', 'demo');
     progress.get('u1')!.demo.status = 'left';
     await startModule(deps, 'u1', 'demo');
-    expect(deleted).toEqual([]);
+    expect(deleted).toEqual([sessions[0].id]);
   });
 
-  it('restart keeps a previous session the user finished', async () => {
-    const { deps, progress, deleted } = makeDeps();
+  it('a replay deletes a previous session the user finished that holds only recorded turns', async () => {
+    const { deps, progress, sessions, deleted } = makeDeps();
     await startModule(deps, 'u1', 'demo');
+    progress.get('u1')!.demo.status = 'finished';
+    await startModule(deps, 'u1', 'demo');
+    expect(deleted).toEqual([sessions[0].id]);
+  });
+
+  it('a replay keeps a finished session the user wrote in', async () => {
+    const { deps, quests, progress, deleted } = makeDeps();
+    const first = await startModule(deps, 'u1', 'demo');
+    if (!first.ok) throw new Error('start failed');
+    await advanceModule(deps, 'u1', { moduleId: 'demo', sessionId: first.sessionId, turn: 0 });
+    quests.push({ ...quests[0], id: 'mine', prompt: 'what is this?', uiSideEffects: [] });
     progress.get('u1')!.demo.status = 'finished';
     await startModule(deps, 'u1', 'demo');
     expect(deleted).toEqual([]);

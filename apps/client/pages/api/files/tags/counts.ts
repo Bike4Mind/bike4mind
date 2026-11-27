@@ -4,6 +4,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFileRepository } from '@bike4mind/database';
 import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
+import { isCoreTutorialSheetTag } from '@bike4mind/server-utils/tutorials/sheetTags';
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -32,7 +33,14 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id, workspaceScope),
     ]);
 
-    return res.json({ tagCounts, workspaceTagCounts, namespaceCounts });
+    // The tutorial sheet's bookkeeping tags are not folders the user made; listed, the File Browser would show
+    // them as folders beside the sample file the tutorial asks the user to pick.
+    const shown = <T extends { tag: string }>(rows: T[]) => rows.filter(row => !isCoreTutorialSheetTag(row.tag));
+    return res.json({
+      tagCounts: shown(tagCounts),
+      workspaceTagCounts: shown(workspaceTagCounts),
+      namespaceCounts: namespaceCounts.filter(row => !isCoreTutorialSheetTag(row.namespace)),
+    });
   })
 );
 
