@@ -602,6 +602,10 @@ if (!$dev) {
   // path is on this origin; /api/embed/session is a normal Next app route.
   router.route(`${routePrefix}/api/embed/chat`, originUrl);
 
+  // Public session turns endpoint (sessionTurns.contract.ts): an SSE stream of a turn run in this
+  // service. A top-level path because routing is by prefix and Next serves /api/v1/sessions/*.
+  router.route(`${routePrefix}/api/v1/turns`, originUrl);
+
   // The shared preview load balancer's equivalent rule is owned with that load balancer.
   if (!sharedListenerTarget) {
     const defaultSecurityGroupId = aws.ec2

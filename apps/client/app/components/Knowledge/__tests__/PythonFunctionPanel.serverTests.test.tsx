@@ -84,7 +84,7 @@ const caseResult = (overrides: Record<string, unknown>) => ({
 
 const panel = (code = CODE, save: PythonFunctionSave = TARGET) => (
   <CssVarsProvider theme={appTheme}>
-    <PythonFunctionPanel code={code} packages={[]} disabled={false} save={save} />
+    <PythonFunctionPanel sandboxOwner="artifact-1" code={code} packages={[]} disabled={false} save={save} />
   </CssVarsProvider>
 );
 
@@ -400,7 +400,7 @@ describe('PythonFunctionPanel server tests', () => {
     callFunction.mockResolvedValueOnce({ success: true, contract: CONTRACT, output: '', executionTime: 4 });
     render(
       <CssVarsProvider theme={appTheme}>
-        <PythonFunctionPanel code={CODE} packages={[]} disabled={false} save={null} />
+        <PythonFunctionPanel sandboxOwner="artifact-1" code={CODE} packages={[]} disabled={false} save={null} />
       </CssVarsProvider>
     );
     const section = await screen.findByTestId('python-function-tests', {}, { timeout: 2000 });

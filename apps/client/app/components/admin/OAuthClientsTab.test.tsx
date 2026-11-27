@@ -10,7 +10,8 @@ import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { useAdminModal } from './useAdminModal';
 import { useUser } from '@client/app/contexts/UserContext';
 
-const { api, copy, adminSettings } = vi.hoisted(() => ({
+const { api, copy, adminSettings, navigate } = vi.hoisted(() => ({
+  navigate: vi.fn(),
   adminSettings: {
     loaded: true,
     values: {
@@ -23,6 +24,9 @@ const { api, copy, adminSettings } = vi.hoisted(() => ({
   },
   api: {
     fetchOAuthClients: vi.fn(),
+    fetchOAuthClientStats: vi.fn(),
+    OAUTH_CLIENTS_QUERY_KEY: 'admin-oauth-clients',
+    OAUTH_CLIENT_STATS_QUERY_KEY: 'admin-oauth-client-stats',
     createOAuthClient: vi.fn(),
     updateOAuthClient: vi.fn(),
     rotateOAuthClientSecret: vi.fn(),
@@ -31,6 +35,7 @@ const { api, copy, adminSettings } = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/utils/oauthClientAPICalls', () => api);
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
   useCopyToClipboard: () => ({ copied: false, handleCopyToClipboard: copy }),
 }));
@@ -92,8 +97,18 @@ const pickReason = (dialog: 'rotate' | 'deactivate') =>
 
 beforeEach(() => {
   // Not resetAllMocks: that also wipes global setup mocks (matchMedia) the theme provider needs.
-  for (const fn of [...Object.values(api), copy, toast.success, toast.error]) vi.mocked(fn).mockReset();
+  for (const fn of [
+    ...Object.values(api).filter(v => typeof v === 'function'),
+    copy,
+    navigate,
+    toast.success,
+    toast.error,
+  ])
+    vi.mocked(fn).mockReset();
   api.fetchOAuthClients.mockResolvedValue([client]);
+  api.fetchOAuthClientStats.mockResolvedValue({
+    [client.clientId]: { signups7d: 2, signups30d: 5, activeUsers7d: 3, activeUsers30d: 9 },
+  });
   adminSettings.loaded = true;
   adminSettings.trustGate = true;
   signInAs({ isAdmin: true });
@@ -493,6 +508,49 @@ describe('OAuthClientsTab', () => {
   });
 });
 
+describe('OAuthClientsTab usage columns', () => {
+  it('shows sign-ups and active users per client', async () => {
+    renderTab();
+    expect(await screen.findByTestId(`oauth-client-signups-link-${client.clientId}`)).toHaveTextContent('2 / 5');
+    expect(screen.getByTestId(`oauth-client-active-users-${client.clientId}`)).toHaveTextContent('3 / 9');
+  });
+
+  it('shows dashes while the stats load', async () => {
+    api.fetchOAuthClientStats.mockReturnValue(new Promise(() => undefined));
+    renderTab();
+    const row = await screen.findByTestId(`oauth-client-row-${client.clientId}`);
+    expect(row).toHaveTextContent('\u2014');
+    expect(screen.queryByTestId(`oauth-client-signups-link-${client.clientId}`)).not.toBeInTheDocument();
+  });
+
+  it('keeps the list and shows dashes when the stats request fails', async () => {
+    api.fetchOAuthClientStats.mockRejectedValue(new Error('boom'));
+    renderTab();
+    const row = await screen.findByTestId(`oauth-client-row-${client.clientId}`);
+    await waitFor(() => expect(api.fetchOAuthClientStats).toHaveBeenCalled());
+    expect(row).toHaveTextContent('My App');
+    expect(screen.queryByTestId(`oauth-client-signups-link-${client.clientId}`)).not.toBeInTheDocument();
+  });
+
+  it('shows a dash for a client missing from the stats', async () => {
+    api.fetchOAuthClientStats.mockResolvedValue({});
+    renderTab();
+    const row = await screen.findByTestId(`oauth-client-row-${client.clientId}`);
+    await waitFor(() => expect(api.fetchOAuthClientStats).toHaveBeenCalled());
+    expect(row).toHaveTextContent('\u2014');
+    expect(screen.queryByTestId(`oauth-client-signups-link-${client.clientId}`)).not.toBeInTheDocument();
+  });
+
+  it('opens the Users tab filtered to the client from the sign-ups link', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`oauth-client-signups-link-${client.clientId}`));
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/admin',
+      search: expect.objectContaining({ tab: 'users', signupClient: client.clientId, signedUp: 'month' }),
+    });
+  });
+});
+
 describe('OAuthClientsTab rotate and deactivate confirms', () => {
   const open = async (dialog: 'rotate' | 'deactivate') => {
     if (dialog === 'rotate') await openRowAction('rotate');
@@ -552,7 +610,7 @@ describe('OAuthClientsTab page frame', () => {
     renderTab();
     await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
 
-    expect(screen.getByTestId('oauth-clients-table')).toHaveStyle({ minWidth: '68rem' });
+    expect(screen.getByTestId('oauth-clients-table')).toHaveStyle({ minWidth: '85rem' });
     expect(screen.getByTestId('oauth-clients-table-frame').parentElement).toBe(screen.getByTestId('oauth-clients-tab'));
     expect(screen.getAllByRole('table')).toHaveLength(1);
     expect(screen.getByTestId('oauth-clients-table')).toContainElement(

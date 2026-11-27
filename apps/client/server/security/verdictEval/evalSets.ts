@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type {
   AbuseAssessmentResult,
   AutoContainmentOutcome,
+  InterventionDecider,
   ShadowDetectionVerdict,
   ShadowDetectionVerdictSource,
 } from '@bike4mind/common';
@@ -288,6 +289,7 @@ type LeanDecision = {
   mode: string;
   confidence: number;
   decidedAt: Date;
+  decidedBy?: InterventionDecider;
 };
 
 /** The current assessments, containment decisions and chart verdicts for a set's held-out examples. */
@@ -307,7 +309,7 @@ async function loadPredictions(set: AbuseEvalSetItem, deps: VerdictEvalDeps, now
     inChunks(detectionIds, chunk =>
       AutoContainmentDecisionModel.find(
         { detectionId: { $in: chunk } },
-        { detectionId: 1, outcome: 1, mode: 1, confidence: 1, decidedAt: 1 }
+        { detectionId: 1, outcome: 1, mode: 1, confidence: 1, decidedAt: 1, decidedBy: 1 }
       )
         .maxTimeMS(MAX_TIME_MS)
         .lean<LeanDecision[]>()

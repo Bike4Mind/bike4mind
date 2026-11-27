@@ -558,6 +558,21 @@
                     },
                     {
                       "ByteMatchStatement": {
+                        "SearchString": "/api/v1/turns",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "NONE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
                         "SearchString": "/api/modals/",
                         "FieldToMatch": {
                           "UriPath": {}

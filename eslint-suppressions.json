@@ -2110,11 +2110,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/elabs/voice/[id]/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1

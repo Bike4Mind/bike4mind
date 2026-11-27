@@ -88,13 +88,19 @@ const described = (contract: unknown = sampleContract()) => ({
 const renderPanel = (disabled = false, save: PythonFunctionSave | null = null) => {
   const view = render(
     <CssVarsProvider theme={appTheme}>
-      <PythonFunctionPanel code={CODE} packages={[]} disabled={disabled} save={save} />
+      <PythonFunctionPanel sandboxOwner="artifact-1" code={CODE} packages={[]} disabled={disabled} save={save} />
     </CssVarsProvider>
   );
   const rerender = (nextDisabled: boolean, nextCode = CODE) =>
     view.rerender(
       <CssVarsProvider theme={appTheme}>
-        <PythonFunctionPanel code={nextCode} packages={[]} disabled={nextDisabled} save={save} />
+        <PythonFunctionPanel
+          sandboxOwner="artifact-1"
+          code={nextCode}
+          packages={[]}
+          disabled={nextDisabled}
+          save={save}
+        />
       </CssVarsProvider>
     );
   return { rerender };

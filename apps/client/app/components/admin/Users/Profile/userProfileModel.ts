@@ -40,7 +40,7 @@ export const adminActionBlockedReason = (
  * list projection leaves out (signup channel, internal notes) are there too. List rows lack them.
  */
 export type AdminUserProfile = AdminUserListItem &
-  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt' | 'deletion'>>;
+  Partial<Pick<IUserDocument, 'acquisition' | 'userNotes' | 'emailVerifiedAt' | 'deletion' | 'signupClientId'>>;
 
 export const DELETION_SOURCE_LABELS: Readonly<Record<AccountDeletionSource, string>> = {
   self: 'Self-serve',

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import {
   Alert,
   Box,
@@ -11,6 +12,7 @@ import {
   FormLabel,
   IconButton,
   Input,
+  Link,
   MenuItem,
   Option,
   Select,
@@ -40,7 +42,10 @@ import {
   type UpdateOAuthClientInput,
 } from '@bike4mind/common';
 import {
+  OAUTH_CLIENTS_QUERY_KEY as QUERY_KEY,
+  OAUTH_CLIENT_STATS_QUERY_KEY,
   fetchOAuthClients,
+  fetchOAuthClientStats,
   createOAuthClient,
   updateOAuthClient,
   rotateOAuthClientSecret,
@@ -64,8 +69,7 @@ import {
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { RowActionsMenu } from './shared/RowActionsMenu';
 import { AdminPermissionAction, useFullAdminOnlyReason } from './shared/MissingPermission';
-
-const QUERY_KEY = 'admin-oauth-clients';
+import { usersTabLinkSearch } from './Users/usersTabSearch';
 
 type FederatedForm = {
   enabled: boolean;
@@ -615,6 +619,12 @@ function SecretModal({
   );
 }
 
+const UsageDash = () => (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    {'\u2014'}
+  </Typography>
+);
+
 /** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
 function ClientIdCell({ clientId }: { clientId: string }) {
   const { copied, handleCopyToClipboard } = useCopyToClipboard();
@@ -684,6 +694,7 @@ function ClientRowMenu({
 export default function OAuthClientsTab() {
   const queryClient = useQueryClient();
   const writeBlocked = useFullAdminOnlyReason();
+  const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -706,6 +717,11 @@ export default function OAuthClientsTab() {
     error: listError,
     refetch,
   } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
+  // Separate from the list so a stats failure never breaks the tab; it shows dashes instead.
+  const { data: usage, isError: usageFailed } = useQuery({
+    queryKey: [OAUTH_CLIENT_STATS_QUERY_KEY],
+    queryFn: fetchOAuthClientStats,
+  });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
 
   const createMutation = useMutation({
@@ -856,6 +872,45 @@ export default function OAuthClientsTab() {
       render: client => <ClientIdCell clientId={client.clientId} />,
     },
     {
+      id: 'signups',
+      label: 'Sign-ups (7d / 30d)',
+      width: '8.5rem',
+      render: client => {
+        const counts = usage?.[client.clientId];
+        if (usageFailed || !counts) return <UsageDash />;
+        return (
+          <Link
+            component="button"
+            type="button"
+            level="body-sm"
+            onClick={() =>
+              navigate({
+                to: '/admin',
+                search: usersTabLinkSearch({ signupClient: client.clientId, signedUp: 'month' }),
+              })
+            }
+            data-testid={`oauth-client-signups-link-${client.clientId}`}
+          >
+            {`${counts.signups7d} / ${counts.signups30d}`}
+          </Link>
+        );
+      },
+    },
+    {
+      id: 'activeUsers',
+      label: 'Active users (7d / 30d)',
+      width: '8.5rem',
+      render: client => {
+        const counts = usage?.[client.clientId];
+        if (usageFailed || !counts) return <UsageDash />;
+        return (
+          <Typography level="body-sm" data-testid={`oauth-client-active-users-${client.clientId}`}>
+            {`${counts.activeUsers7d} / ${counts.activeUsers30d}`}
+          </Typography>
+        );
+      },
+    },
+    {
       id: 'type',
       label: 'Type',
       width: '8rem',
@@ -937,7 +992,7 @@ export default function OAuthClientsTab() {
         title="OAuth clients"
         count={isPending || (isError && clients.length === 0) ? undefined : clients.length}
         description={
-          'Apps registered to use "Sign in with Bike4Mind". Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs (exact match).'
+          'Apps registered to use "Sign in with Bike4Mind". Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs (exact match). Active users counts people who signed in through the app since sign-in tracking began, so it includes existing accounts.'
         }
         actions={
           <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
@@ -1010,9 +1065,9 @@ export default function OAuthClientsTab() {
             }}
           />
         )}
-        // Fixed columns total 59.5rem; redirect URIs take the rest and truncate. Below 68rem the table
+        // Fixed columns total 76.5rem; redirect URIs take the rest and truncate. Below 85rem the table
         // scrolls sideways inside its frame.
-        minWidth="68rem"
+        minWidth="85rem"
         maxHeight="none"
         pagination={false}
       />

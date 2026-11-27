@@ -1,13 +1,18 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import { withTransaction } from '@bike4mind/db-core';
 import {
+  ABUSE_ASSESSMENT_RESULTS,
   AUTO_CONTAINMENT_OUTCOMES,
+  INTERVENTION_DECIDERS,
+  LINK_RULES,
   INTERVENTION_RELEASE_CONDITIONS,
   INTERVENTION_SCOPES,
   INTERVENTION_TIERS,
   type AutoContainmentDecisionItem,
   type AutoContainmentOutcome,
+  type InterventionDecider,
   type InterventionReleaseCondition,
+  type LinkRule,
   type InterventionScope,
   type InterventionTier,
 } from '@bike4mind/common';
@@ -42,6 +47,9 @@ export interface IAutoContainmentDecisionDocument extends Document {
   releasedAt?: Date | null;
   releasedBy?: string | null;
   releaseReason?: string | null;
+  decidedBy?: InterventionDecider;
+  linkRules?: LinkRule[];
+  modelJudgment?: AutoContainmentDecisionItem['modelJudgment'];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -82,6 +90,18 @@ export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocum
       releasedAt: { type: Date, default: null },
       releasedBy: { type: String, default: null },
       releaseReason: { type: String, default: null },
+      decidedBy: { type: String, enum: INTERVENTION_DECIDERS, default: 'model' },
+      linkRules: { type: [{ type: String, enum: LINK_RULES }], default: [] },
+      modelJudgment: {
+        type: new Schema(
+          {
+            result: { type: String, enum: ABUSE_ASSESSMENT_RESULTS, required: true },
+            confidence: { type: Number, default: null },
+          },
+          { _id: false }
+        ),
+        default: null,
+      },
     },
     { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
   );
@@ -104,7 +124,17 @@ export const AutoContainmentDecisionModel: Model<IAutoContainmentDecisionDocumen
   model<IAutoContainmentDecisionDocument>('AutoContainmentDecision', AutoContainmentDecisionSchema);
 
 type DecisionTierField =
-  'tier' | 'policyVersion' | 'scope' | 'expiresAt' | 'releaseCondition' | 'releasedAt' | 'releasedBy' | 'releaseReason';
+  | 'tier'
+  | 'policyVersion'
+  | 'scope'
+  | 'expiresAt'
+  | 'releaseCondition'
+  | 'releasedAt'
+  | 'releasedBy'
+  | 'releaseReason'
+  | 'decidedBy'
+  | 'linkRules'
+  | 'modelJudgment';
 
 /** The tier fields are optional so the Contain path records exactly what it did before tiers existed. */
 export type RecordAutoContainmentDecisionInput = Omit<AutoContainmentDecisionItem, 'id' | DecisionTierField> &
@@ -133,6 +163,11 @@ const toItem = (doc: LeanDecision): AutoContainmentDecisionItem => ({
   releasedAt: doc.releasedAt ?? null,
   releasedBy: doc.releasedBy ?? null,
   releaseReason: doc.releaseReason ?? null,
+  decidedBy: doc.decidedBy ?? 'model',
+  linkRules: [...(doc.linkRules ?? [])],
+  modelJudgment: doc.modelJudgment
+    ? { result: doc.modelJudgment.result, confidence: doc.modelJudgment.confidence ?? null }
+    : null,
 });
 
 const isDuplicateKey = (error: unknown) =>
