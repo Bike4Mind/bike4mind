@@ -211,4 +211,33 @@ describe('createSessionEventHub', () => {
     });
     expect(announced).toHaveBeenCalledWith('local');
   });
+
+  it('retries a first subscribe that failed when the session is next subscribed', async () => {
+    const host = fakeClient();
+    const reportError = vi.fn();
+    const hub = createSessionEventHub(host.client, reportError);
+    const first = vi.fn();
+    hub.subscribe(ref, { event: first });
+    await host.fail(0, new Error('host busy'));
+    expect(reportError).toHaveBeenCalledTimes(1);
+
+    const second = vi.fn();
+    hub.subscribe(ref, { event: second });
+    expect(host.calls.filter(call => call.method === 'session/subscribe')).toHaveLength(2);
+    await host.answer(1, cursor(4));
+    host.send(5);
+    expect(seqsOf(first)).toEqual([5]);
+    expect(seqsOf(second)).toEqual([5]);
+  });
+
+  it('applies events held before the subscribe answer in seq order', async () => {
+    const host = fakeClient();
+    const hub = createSessionEventHub(host.client, vi.fn());
+    const handler = vi.fn();
+    hub.subscribe(ref, { event: handler });
+    host.send(3);
+    host.send(2);
+    await host.answer(0, cursor(1));
+    expect(seqsOf(handler)).toEqual([2, 3]);
+  });
 });

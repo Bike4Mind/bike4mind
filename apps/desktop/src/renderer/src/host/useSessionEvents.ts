@@ -19,12 +19,23 @@ export function useSessionEvents(
 ): void {
   const latest = useRef(callbacks);
   latest.current = callbacks;
+  const rendered = useRef(sessionId);
+  rendered.current = sessionId;
 
   useEffect(() => {
     if (!sessionId) return;
     return hub.subscribe(
       { hostId: hostForSession(sessionId), sessionId },
-      { event: event => latest.current.event(event), resync: () => latest.current.resync?.() }
+      {
+        // Between a render with a new sessionId and this effect's cleanup, the callbacks already
+        // belong to the new session, so the old one's events are dropped.
+        event: event => {
+          if (event.sessionId === rendered.current) latest.current.event(event);
+        },
+        resync: () => {
+          if (rendered.current === sessionId) latest.current.resync?.();
+        },
+      }
     );
   }, [sessionId, hub]);
 }

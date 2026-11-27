@@ -96,13 +96,14 @@ export function createSessionEventHub(
         // Replayed events can arrive after this answer as well as before it, so the start is the
         // cursor resumed from, not the host's present.
         subscription.cursor = after ?? cursor;
-        const held = subscription.pending ?? [];
+        const held = [...(subscription.pending ?? [])].sort((a, b) => a.seq - b.seq);
         subscription.pending = null;
         for (const event of held) accept(subscription, event);
       })
       .catch((error: unknown) => {
         if (!isCurrent(subscription) || attempt !== subscription.attempt) return;
         if (after && isSnapshotRequired(error)) return resync(subscription);
+        // Without a cursor this leaves the entry unopened; the next subscribe() or resumeHost retries it.
         subscription.pending = null;
         reportError(`Could not subscribe to ${sessionId} on host ${hostId}`, error);
       });
@@ -147,6 +148,8 @@ export function createSessionEventHub(
       if (!subscription) {
         subscription = { ref: { ...ref }, handlers: new Set(), attempt: 0, pending: null, cursor: null };
         subscriptions.set(key, subscription);
+        open(subscription);
+      } else if (!subscription.cursor && !subscription.pending) {
         open(subscription);
       }
       const held = subscription;

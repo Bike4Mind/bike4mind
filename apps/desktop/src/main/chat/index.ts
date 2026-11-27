@@ -524,7 +524,8 @@ export function registerChat(
         : null;
     },
     emit: (sessionId, job) => {
-      broadcast(runtime.eventLog.append({ type: 'video-job', sessionId, job }));
+      // Through the relay, so windows hear it over the host protocol as well as main reacting.
+      runtimeEvents.streamEvent(runtime.eventLog.append({ type: 'video-job', sessionId, job }));
       if (job.state === 'succeeded' && job.media)
         void studioIntegration
           .indexChatSession(sessionId, true)
