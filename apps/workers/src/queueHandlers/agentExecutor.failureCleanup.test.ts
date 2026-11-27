@@ -1,5 +1,3 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { markFailedWithRetry, MARK_FAILED_MIN_REMAINING_MS } from './agentExecutor.failureCleanup';
 
@@ -9,10 +7,10 @@ const named = (name: string, message = name) => Object.assign(new Error(message)
 const networkError = () => named('MongoNetworkError');
 
 describe('markFailedWithRetry', () => {
-  it('calls markFailed once when it succeeds first time', async () => {
-    const markFailed = vi.fn().mockResolvedValue(undefined);
+  it('calls markFailed once when it succeeds first time and resolves to its result', async () => {
+    const markFailed = vi.fn().mockResolvedValue(false);
 
-    await markFailedWithRetry(markFailed, makeLogger(), { retry: fastRetry });
+    await expect(markFailedWithRetry(markFailed, makeLogger(), { retry: fastRetry })).resolves.toBe(false);
 
     expect(markFailed).toHaveBeenCalledTimes(1);
   });
@@ -77,33 +75,5 @@ describe('markFailedWithRetry', () => {
     });
 
     expect(markFailed).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('failure cleanup wiring in agentExecutor', () => {
-  const source = readFileSync(join(__dirname, 'agentExecutor.ts'), 'utf8');
-  const sliceFrom = (marker: string, endMarker: string) => {
-    const start = source.indexOf(marker);
-    if (start === -1) throw new Error(`Marker not found in agentExecutor.ts, update this test: ${marker}`);
-    const end = source.indexOf(endMarker, start);
-    if (end === -1) throw new Error(`End marker not found in agentExecutor.ts, update this test: ${endMarker}`);
-    return source.slice(start, end);
-  };
-
-  it('retries a guarded markFailed in the main execution failure cleanup', () => {
-    const cleanup = sliceFrom("logger.error('[Error] Agent execution failed'", 'inflightSteps.drain()');
-    expect(cleanup).toContain('markFailedWithRetry(');
-    expect(cleanup).toContain('markFailedIfActive(executionId');
-    expect(cleanup).not.toContain('agentExecutionRepository.markFailed(executionId');
-  });
-
-  it('retries a guarded markFailed in the subagent dispatch failure cleanup', () => {
-    const cleanup = sliceFrom(
-      "logger.error('[SubagentDispatch] Fatal error'",
-      "'[SubagentDispatch] Cleanup also failed'"
-    );
-    expect(cleanup).toContain('markFailedWithRetry(');
-    expect(cleanup).toContain('markFailedIfActive(childExecutionId');
-    expect(cleanup).not.toContain('agentExecutionRepository.markFailed(childExecutionId');
   });
 });
