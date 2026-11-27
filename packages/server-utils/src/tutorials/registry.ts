@@ -46,6 +46,14 @@ export const CORE_TUTORIALS: readonly CoreTutorial[] = [
     track: 'different',
     order: 50,
   },
+  {
+    id: 'import-history',
+    title: 'Bring your chat history',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 60,
+  },
 ];
 
 /** Resolves only core's own tutorials, so an owner's module id never reaches a core route. */
