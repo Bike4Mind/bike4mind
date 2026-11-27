@@ -149,6 +149,15 @@ test('preview dispatch executes trusted main only, fetches diff data and preserv
   assert.match(read('e2e-run.yml'), /uses: actions\/checkout@[^\n]+\n\s+with:\n\s+ref: \$\{\{ github.sha \}\}/);
   assert.match(read('e2e-run.yml'), /TRUSTED_PREVIEW:.*github.ref == 'refs\/heads\/main'.*inputs.preview_deploy_id != ''.*inputs.preview_head_sha != ''/);
   assert.match(read('e2e-run.yml'), /\.verify\(\{ github, context \}\)/);
+  const run = read('e2e-run.yml');
+  const verifyAt = run.indexOf('- name: Verify immutable preview readiness');
+  const wakeAt = run.indexOf('- name: Wake a sleeping preview before testing');
+  const testsAt = run.indexOf('- name: Run E2E tests');
+  assert.ok(verifyAt >= 0 && verifyAt < wakeAt && wakeAt < testsAt, 'wake step sits between readiness verify and the test run');
+  const wake = run.slice(wakeAt, run.indexOf('\n      - name:', wakeAt + 1));
+  assert.match(wake, /if: inputs.pr_number != '' && inputs.preview_deploy_id != ''/);
+  assert.match(wake, /timeout-minutes: 10\n/);
+  assert.match(wake, /\. \.github\/scripts\/derive-preview-e2e-secret.sh "\$SST_STAGE"\n\s+node \.github\/scripts\/preview-e2e.cjs/);
   assert.match(read('e2e-manual.yml'), /schedule:/);
   assert.match(read('e2e-manual.yml'), /""\|"All tests"\)\s+ARGS=""/);
   assert.match(read('e2e-manual.yml'), /timeout_minutes: {4}85\n\s+global_timeout_minutes: 50\n\s+execution_timeout_minutes: 52/);
