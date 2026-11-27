@@ -4,21 +4,15 @@ import {
   SAFE_ERROR_CODE,
   type ApiCompletionOutcome,
   type ApiKeyCompletionSource,
-  parseMcpClient,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
-import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
+import { resolveRequestMcpClient } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 
 const CLIENT_CLOSED_REQUEST = 499;
-
-const mcpClientField = (req: Request) => {
-  const mcpClient = parseMcpClient(flattenHeaders(req.headers))?.client;
-  return mcpClient ? { mcpClient } : {};
-};
 
 type LogApiKeyUsageOnResponseParams = {
   req: Request;
@@ -66,7 +60,7 @@ export function logApiKeyUsageOnResponse({
     endpoint,
     method: req.method,
     source,
-    ...mcpClientField(req),
+    mcpClient: resolveRequestMcpClient(req),
     ownerType: resolveApiKeyOwnerType(apiKey),
     ...exchangeAttribution(apiKey),
     logger,

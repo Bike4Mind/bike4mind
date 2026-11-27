@@ -34,6 +34,15 @@ const log = (userId: string, keyId: string, timestamp: Date) => ({
   statusCode: 200,
 });
 
+describe('ApiKeyUsageLog schema', () => {
+  it('persists mcpClient alongside the mcp source', async () => {
+    const created = await ApiKeyUsageLog.create({ ...log('u1', 'k1', now), source: 'mcp', mcpClient: 'claude-code' });
+
+    const row = await ApiKeyUsageLog.findById(created._id).lean();
+    expect(row).toMatchObject({ source: 'mcp', mcpClient: 'claude-code' });
+  });
+});
+
 describe('ApiKeyUsageLogRepository latency statistics', () => {
   it('counts unfinished requests while excluding them from mean and p95 latency', async () => {
     const timestamp = new Date();

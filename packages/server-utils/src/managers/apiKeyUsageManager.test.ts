@@ -111,6 +111,19 @@ describe('ApiKeyUsageManager.logUsage', () => {
     expect(beginMock).toHaveBeenCalledWith(expect.objectContaining(attribution));
   });
 
+  it('stamps mcpClient on both writers and omits it when absent', async () => {
+    const params = { ...baseParams, source: 'mcp' as const, ownerType: CreditHolderType.User };
+    await ApiKeyUsageManager.logUsage({ ...params, mcpClient: 'claude-code' });
+    await ApiKeyUsageManager.beginCompletionUsage({ ...params, mcpClient: 'claude-code' });
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ mcpClient: 'claude-code' }));
+    expect(beginMock).toHaveBeenCalledWith(expect.objectContaining({ mcpClient: 'claude-code' }));
+
+    await ApiKeyUsageManager.logUsage(params);
+    await ApiKeyUsageManager.beginCompletionUsage(params);
+    expect(createMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('mcpClient');
+    expect(beginMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('mcpClient');
+  });
+
   it('drops a standing that has no app and stamps nothing for a personal key', async () => {
     await ApiKeyUsageManager.logUsage({
       ...baseParams,

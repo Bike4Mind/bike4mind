@@ -32,6 +32,7 @@ const SOURCE_LABELS: Record<string, string> = {
   web: 'Web',
   cli: 'CLI',
   desktop: 'Desktop',
+  mcp: 'MCP',
   api: 'API',
   agent: 'Agent',
   [UNCLASSIFIED_SOURCE]: 'Unclassified',

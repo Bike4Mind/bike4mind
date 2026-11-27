@@ -5,7 +5,6 @@ import {
   ApiKeyScope,
   ApiKeyScopeValue,
   resolveApiCompletionSource,
-  parseMcpClient,
   type ScopeForbiddenErrorSchema,
 } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -17,6 +16,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
+import { resolveRequestMcpClient } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
@@ -340,8 +340,6 @@ export const apiKeyAuth = (
         throw new UnauthorizedError('API key validation missing user id');
       }
 
-      const mcpClientName = parseMcpClient(flattenHeaders(req.headers))?.client;
-      const mcpClient = mcpClientName ? { mcpClient: mcpClientName } : {};
       const usageInfo: Express.ApiKeyUsageInfo = {
         keyId: validation.keyId!,
         userId,
@@ -353,7 +351,7 @@ export const apiKeyAuth = (
         // billing owner. Some routes stamp UsageEvent.source differently, so the
         // credit sections can disagree with this view.
         source: resolveApiCompletionSource(flattenHeaders(req.headers)),
-        ...mcpClient,
+        mcpClient: resolveRequestMcpClient(req),
         ownerType: resolveApiKeyOwnerType(validation),
         ...exchangeAttribution(validation),
       };

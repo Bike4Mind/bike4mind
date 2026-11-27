@@ -190,8 +190,9 @@ export interface IAdminLegacyApiKeys {
 
 /**
  * The client signal a request carries: User-Agent, then x-b4m-client. Header names are matched
- * case-insensitively. The `b4m-mcp/` prefix is matched on this same value ({@link parseMcpClient}). Source attribution and per-client rate limiting both read this, so the two
- * cannot disagree about which client made a request.
+ * case-insensitively. The `b4m-mcp/` prefix is matched on this same value ({@link parseMcpClient}).
+ * Source attribution and per-client rate limiting both read this, so the two cannot disagree about
+ * which client made a request.
  */
 export function resolveRequestClient(headers: Record<string, string | undefined>): string | undefined {
   const lookup = (name: string): string | undefined => {

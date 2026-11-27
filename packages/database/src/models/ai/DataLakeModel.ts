@@ -24,7 +24,6 @@ import type {
   LakeSettleFields,
   TaxonomyStatus,
   IDataLakeBatch,
-  API_KEY_COMPLETION_SOURCES,
 } from '@bike4mind/common';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -41,6 +40,7 @@ import {
   DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
   LAKE_MANAGE_RUNGS,
+  API_KEY_COMPLETION_SOURCES,
 } from '@bike4mind/common';
 
 // --- Data Lake Schema ---

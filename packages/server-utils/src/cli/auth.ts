@@ -524,7 +524,7 @@ const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
   // Never applies: a desktop request matches the client bucket below first and gets its cap.
   desktop: 100,
   agent: 1000,
-  // Never applies: MCP traffic is API-key authed, so this JWT table is not consulted.
+  // Same as api: a JWT caller sending a b4m-mcp UA was api before and keeps its limit.
   mcp: 100,
   api: 100,
   web: 100,
