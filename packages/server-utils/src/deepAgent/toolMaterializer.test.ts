@@ -4,6 +4,7 @@ import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { URL_NOT_IN_CONVERSATION_MESSAGE, type ToolBuilderDeps } from '@bike4mind/services/llm';
 
 // Collaborators of the materializer, stubbed so the REAL buildSharedTools still runs: a mocked
 // builder could only prove the availability map was passed, not that an unavailable tool fails to
@@ -124,6 +125,17 @@ describe('createDeepAgentToolMaterializer', () => {
     // api-key table, storage, or buildSharedTools.
     await expect(materialize()([], 'owner-1')).resolves.toEqual([]);
     expect(resolveToolAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it('lets web_fetch open only URLs from the charter text', async () => {
+    const tools = await materialize()(['web_fetch'], 'owner-1', ['Track https://paper.test/a']);
+    const toolDeps = buildSharedToolsSpy.mock.calls[0][0] as ToolBuilderDeps;
+    expect(toolDeps.urlProvenance?.allows('https://paper.test/a')).toBe(true);
+
+    const webFetch = tools.find(tool => tool.toolSchema.name === 'web_fetch');
+    await expect(webFetch!.toolFn({ url: 'https://paper.test/a?d=secret' })).rejects.toThrow(
+      URL_NOT_IN_CONVERSATION_MESSAGE
+    );
   });
 
   it('resolves current owner entitlements lazily without precomputed keys', async () => {

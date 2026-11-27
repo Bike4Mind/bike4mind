@@ -217,6 +217,28 @@ describe('processSubagentDispatch tool deps', () => {
     }
   });
 
+  it("seeds the subagent's URL provenance from its root run's messages", async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.findById).mockImplementation((async (id: string) =>
+      id === 'parent-1'
+        ? {
+            ...childDoc,
+            id: 'parent-1',
+            parentExecutionId: undefined,
+            checkpoint: { messages: [{ role: 'user', content: 'Read https://root.test/doc' }] },
+          }
+        : childDoc) as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+      const provenance = deps.urlProvenance as { allows(url: string): boolean };
+
+      expect(provenance.allows('https://root.test/doc')).toBe(true);
+      expect(provenance.allows('https://root.test/doc?d=x')).toBe(false);
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
   it('runs a child row saved with a retired model id on its successor', async () => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');

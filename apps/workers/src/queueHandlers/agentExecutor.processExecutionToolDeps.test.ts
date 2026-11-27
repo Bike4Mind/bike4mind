@@ -359,6 +359,14 @@ describe('processExecution tool deps', () => {
     vi.useRealTimers();
   });
 
+  it('hands the tools a URL provenance registry, so web_fetch refuses a URL the run never saw', async () => {
+    const { UrlProvenance } = await import('@bike4mind/services/llm');
+    const deps = await runWithSession(baseSession);
+
+    expect(deps.urlProvenance).toBeInstanceOf(UrlProvenance);
+    expect((deps.urlProvenance as InstanceType<typeof UrlProvenance>).allows('https://made-up.test/?d=x')).toBe(false);
+  });
+
   it('passes every attached file and the resolved library opt-out to the tools', async () => {
     const deps = await runWithSession({ ...baseSession, knowledgeIds: ['file-k'], includeLibraryFiles: false });
 

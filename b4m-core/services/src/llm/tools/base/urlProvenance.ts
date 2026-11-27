@@ -3,15 +3,16 @@ import type { IMessage } from '@bike4mind/common';
 const URL_TOKEN = /https?:\/\/[^\s"'<>`\\{}|^]+/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?'"]+$/;
 
-/** Tools whose output an LLM writes from the call's input, so it can never vouch for a URL. */
-const MODEL_AUTHORED_RESULT_TOOLS: ReadonlySet<string> = new Set([
-  'blog_draft',
-  'decide',
-  'deep_research',
-  'edit_file',
-  'generate_jupyter_notebook',
-  'prompt_enhancement',
-]);
+/**
+ * Native tools whose results come from outside the model. Every other native tool is left out, so a
+ * tool that computes text from its input (or reads back text the model stored) cannot vouch for a URL.
+ */
+const SOURCE_TOOLS: ReadonlySet<string> = new Set(['web_search', 'web_fetch']);
+
+/** Connector (MCP) tools are namespaced `server__tool`; no native tool name contains `__`. */
+export function isUrlSourceTool(toolName: string): boolean {
+  return SOURCE_TOOLS.has(toolName) || toolName.includes('__');
+}
 
 function trimUnbalanced(token: string, open: string, close: string): string {
   let trimmed = token;
@@ -21,12 +22,22 @@ function trimUnbalanced(token: string, open: string, close: string): string {
   return trimmed;
 }
 
-/** The comparable form of a URL: prose punctuation and a trailing slash dropped, `&amp;` decoded. */
+/**
+ * The comparable form of a URL: prose punctuation, the fragment and a trailing slash dropped, `&amp;`
+ * decoded, scheme and host lower-cased.
+ */
 export function normalizeUrl(url: string): string {
   let token = url.trim().replace(/&amp;/g, '&');
   for (let previous = ''; previous !== token;) {
     previous = token;
     token = trimUnbalanced(trimUnbalanced(token.replace(TRAILING_PUNCTUATION, ''), '(', ')'), '[', ']');
+  }
+  try {
+    const parsed = new URL(token);
+    parsed.hash = '';
+    token = parsed.href;
+  } catch {
+    token = token.replace(/#.*$/, '');
   }
   return token.replace(/\/+$/, '');
 }
@@ -55,9 +66,10 @@ export function urlsIn(value: unknown): Set<string> {
 
 /**
  * The URLs a turn may fetch: those that appear word for word in text the model did not write - the
- * user's prompts, attachments, system context and tool results. A model-chosen URL (one that carries
- * conversation data in its path or query) appears in none of them, so it is refused. A tool result
- * counts minus the URLs its own call passed in, so a tool that echoes its input cannot vouch for one.
+ * user's prompts, attachments, system context and the results of tools that read from outside the
+ * model (isUrlSourceTool). A model-chosen URL (one that carries conversation data in its path or query)
+ * appears in none of them, so it is refused. A source tool's result counts minus the URLs its own call
+ * passed in, so one that echoes its input cannot vouch for one.
  *
  * One instance per turn or agent run, shared by every tool built for it (subagents included);
  * consumers are web_fetch and edit_image (ToolContext.urlProvenance).
@@ -70,7 +82,7 @@ export class UrlProvenance {
   }
 
   recordToolResult(toolName: string, args: unknown, result: unknown): void {
-    if (MODEL_AUTHORED_RESULT_TOOLS.has(toolName)) return;
+    if (!isUrlSourceTool(toolName)) return;
     const echoed = urlsIn(args);
     for (const url of urlsIn(result)) if (!echoed.has(url)) this.seen.add(url);
   }

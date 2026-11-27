@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IMessage } from '@bike4mind/common';
-import { normalizeUrl, UrlProvenance, urlsIn } from './urlProvenance';
+import { b4mTools } from '../index';
+import { isUrlSourceTool, normalizeUrl, UrlProvenance, urlsIn } from './urlProvenance';
 
 describe('normalizeUrl', () => {
   it('drops prose punctuation, unbalanced brackets and a trailing slash', () => {
@@ -8,6 +9,10 @@ describe('normalizeUrl', () => {
     expect(normalizeUrl('https://example.com/a),')).toBe('https://example.com/a');
     expect(normalizeUrl('https://en.wikipedia.org/wiki/Foo_(bar)')).toBe('https://en.wikipedia.org/wiki/Foo_(bar)');
     expect(normalizeUrl('https://example.com/?a=1&amp;b=2')).toBe('https://example.com/?a=1&b=2');
+  });
+
+  it('drops the fragment and lower-cases scheme and host, not the path', () => {
+    expect(normalizeUrl('HTTPS://Example.COM/Page#top')).toBe('https://example.com/Page');
   });
 });
 
@@ -43,12 +48,22 @@ describe('UrlProvenance', () => {
     expect(provenance.allows('https://docs.test/page')).toBe(true);
   });
 
-  it('ignores the results of tools whose output the model wrote', () => {
+  it('records only tools that read from outside the model', () => {
     const provenance = new UrlProvenance();
-    provenance.recordToolResult('prompt_enhancement', { prompt: 'x' }, 'https://made-up.test/');
-    provenance.recordToolResult('deep_research', { query: 'x' }, 'https://also-made-up.test/');
-    expect(provenance.allows('https://made-up.test/')).toBe(false);
-    expect(provenance.allows('https://also-made-up.test/')).toBe(false);
+    provenance.recordToolResult('math_evaluate', { expression: 'x' }, 'https://computed.test/?d=secret');
+    provenance.recordToolResult('deep_research', { query: 'x' }, 'https://written.test/');
+    provenance.recordToolResult('notion__notion_search', { query: 'x' }, 'https://notion.test/page');
+
+    expect(provenance.allows('https://computed.test/?d=secret')).toBe(false);
+    expect(provenance.allows('https://written.test/')).toBe(false);
+    expect(provenance.allows('https://notion.test/page')).toBe(true);
+  });
+
+  it('allows a URL whose fragment or host case the model changed', () => {
+    const provenance = new UrlProvenance();
+    provenance.recordText('See https://Example.com/Page#top');
+    expect(provenance.allows('https://example.com/Page')).toBe(true);
+    expect(provenance.allows('https://example.com/page')).toBe(false);
   });
 
   it('seeds from messages, skipping the model and pairing results with their calls', () => {
@@ -75,5 +90,11 @@ describe('UrlProvenance', () => {
     expect(provenance.allows('https://found.test/b')).toBe(true);
     expect(provenance.allows('https://model.test/?x=secret')).toBe(false);
     expect(provenance.allows('https://echo.test/q')).toBe(false);
+  });
+});
+
+describe('isUrlSourceTool', () => {
+  it('counts only web_search and web_fetch among native tools, so a new tool starts untrusted', () => {
+    expect(Object.keys(b4mTools).filter(isUrlSourceTool).sort()).toEqual(['web_fetch', 'web_search']);
   });
 });

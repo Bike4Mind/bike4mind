@@ -83,6 +83,6 @@ export type {
 export * from './toolEchoSources';
 export { DecisionToolRequestSchema } from './tools/implementation/decide';
 export type { DecideToolFn, DecisionToolRequest } from './tools/base/types';
-export { UrlProvenance } from './tools/base/urlProvenance';
+export { UrlProvenance, URL_NOT_IN_CONVERSATION_MESSAGE } from './tools/base/urlProvenance';
 
 export * from './embeddingProviders';

@@ -33,6 +33,7 @@ import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
+  UrlProvenance,
   resolveToolAvailability,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
@@ -262,6 +263,8 @@ async function buildEmbedServerTools(args: {
   models: ModelInfo[];
   /** hydrated.model past resolveOpenAiBareModelAlias; catalog ids are the dated spelling. */
   modelId: string;
+  /** The turn's URL provenance; the caller seeds it from the turn's messages. */
+  urlProvenance: UrlProvenance;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
@@ -275,6 +278,7 @@ async function buildEmbedServerTools(args: {
     apiKeys: toolApiKeys,
     models,
     modelId,
+    urlProvenance,
     logger,
     getAbortSignal,
   } = args;
@@ -325,6 +329,7 @@ async function buildEmbedServerTools(args: {
   toolLlm.currentModel = modelId;
 
   const deps: ToolBuilderDeps = {
+    urlProvenance,
     userId: actorUserId,
     user: actor,
     logger,
@@ -652,7 +657,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // The embed key's organization owns the agent, so its policy governs the turn's tools and model
       // even when an identified end user pays personally (see governingOrgModelPolicy below).
       const orgToolPolicy = readOrgModelPolicy(org?.modelPolicy);
+      const urlProvenance = new UrlProvenance();
       const builtServerTools = await buildEmbedServerTools({
+        urlProvenance,
         apiKeys: embedApiKeys,
         models: embedModels,
         modelId: embedModelId,
@@ -698,6 +705,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         ...priorTurns,
         latestUserTurn as IMessage,
       ];
+      urlProvenance.recordMessages(messages);
       let replyText = '';
 
       try {

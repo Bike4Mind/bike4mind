@@ -66,6 +66,8 @@ vi.mock('@bike4mind/services/llm', async () => {
     resolveQuestErrorCode: (error: unknown) =>
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
     buildSharedTools: mockBuildSharedTools,
+    UrlProvenance: (await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm'))
+      .UrlProvenance,
     // Availability filter that runs alongside buildSharedTools - tests here assert on
     // enabledTools/kbScope, not on which tools are gated, so every tool reads as available.
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
@@ -747,6 +749,16 @@ describe('POST /api/embed/chat - server-side tools', () => {
   function executeParams() {
     return mockExecuteCompletion.mock.calls[0][0];
   }
+
+  it("lets the tools fetch only URLs from the visitor's messages", async () => {
+    hydrateWith();
+    const res = await post({ messages: [{ role: 'user', content: 'Read https://docs.test/page' }] });
+    expect(res.status).toBe(200);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { urlProvenance: { allows(url: string): boolean } };
+    expect(deps.urlProvenance.allows('https://docs.test/page')).toBe(true);
+    expect(deps.urlProvenance.allows('https://docs.test/page?d=secret')).toBe(false);
+  });
 
   it('builds the tools as an internal-origin caller with no api key', async () => {
     hydrateWith();
