@@ -194,6 +194,13 @@ export const localHostConnections = (): HostConnectionsApi => ({
   connect: async () => undefined,
   disconnect: async () => undefined,
   remove: async () => undefined,
+  sshAliases: async () => [],
+  describeSshAlias: async alias => {
+    throw new Error(`No SSH alias ${alias} in this test`);
+  },
+  addSshHost: async alias => {
+    throw new Error(`No SSH alias ${alias} in this test`);
+  },
 });
 
 /** A second host served by the bridge from plain data, for tests of sessions on another machine. */
@@ -331,6 +338,13 @@ export function chatBackedHostBridge(options: { remote?: FakeRemoteHostOptions }
       if (remote?.controls.hostId === hostId) remote.controls.setConnected(false);
     },
     remove: async () => undefined,
+    sshAliases: async () => [],
+    describeSshAlias: async alias => {
+      throw new Error(`No SSH alias ${alias} in this test`);
+    },
+    addSshHost: async alias => {
+      throw new Error(`No SSH alias ${alias} in this test`);
+    },
     async request(hostId, method, params): Promise<HostBridgeResponse> {
       if (remote && hostId === remote.controls.hostId) return remote.request(method, asRecord(params));
       const chat = chatStubs();
