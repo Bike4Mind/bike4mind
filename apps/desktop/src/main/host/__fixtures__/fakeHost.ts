@@ -135,6 +135,8 @@ export class FakeHost {
   connectDelayMs = 0;
   /** When set, subscribe answers before it replays (a transport that reorders the two). */
   answerBeforeReplay = false;
+  /** Methods that are never answered, so a cut can land while they are in flight. */
+  readonly unanswered = new Set<string>();
   /** Answers methods the fake does not serve itself. */
   handle: (method: string, params: unknown) => unknown = () => ({});
   private readonly logs = new Map<string, number>();
@@ -182,6 +184,7 @@ export class FakeHost {
 
   async answer(connection: FakeConnection, method: string, params: unknown): Promise<unknown> {
     await Promise.resolve();
+    if (this.unanswered.has(method)) return new Promise(() => undefined);
     switch (method) {
       case 'host/initialize': {
         const { protocol } = hostMethods['host/initialize'].params.parse(params);

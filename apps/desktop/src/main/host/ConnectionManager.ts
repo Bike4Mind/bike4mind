@@ -29,6 +29,8 @@ export type HostClientEndpoint = {
   deliver(delivery: HostNotificationDelivery): void;
   /** Called once, when the window is destroyed. */
   onClosed(listener: () => void): void;
+  /** True once the window is destroyed; onClosed never fires for a window already gone. */
+  isClosed(): boolean;
 };
 
 /** Wake and network signals; in Desktop, powerMonitor and `net` (see systemSignals.ts). */
@@ -154,8 +156,11 @@ export class ConnectionManager {
     this.require(hostId).link.connect();
   }
 
+  /** Disconnects a remote host; the local host serves local chat, so it is never taken offline. */
   disconnect(hostId: string): void {
-    this.require(hostId).link.disconnect('disconnected');
+    const { link } = this.require(hostId);
+    if (link.kind === 'local') throw new Error('The local host cannot be disconnected');
+    link.disconnect('disconnected');
   }
 
   /** Unregisters a remote host; the local host is part of Desktop and cannot be removed. */
@@ -193,6 +198,8 @@ export class ConnectionManager {
       return failure(HOST_ERROR_CODES.invalidParams, `Invalid params for ${method}`, parsed.error.issues);
     }
     await host.link.whenSettled();
+    // Checked after the wait: a window closed during it would get a connection nothing releases.
+    if (client.isClosed()) return failure(HOST_ERROR_CODES.internalError, 'The window is gone');
     const { state } = host.link;
     if (this.hosts.get(hostId) !== host || !servesMethod(state, method)) {
       return failure(HOST_ERROR_CODES.capabilityUnavailable, `Host ${hostId} is not connected (${state.status})`, {

@@ -59,9 +59,8 @@ export class WindowConnection {
   async request(method: string, params: unknown): Promise<unknown> {
     const transport = await this.ensureOpen();
     if (method === 'session/subscribe') return this.subscribe(transport, subscribeParams.parse(params));
-    const result = await transport.request(method, params);
-    if (method === 'session/unsubscribe') this.sessions.delete(unsubscribeParams.parse(params).sessionId);
-    return result;
+    if (method === 'session/unsubscribe') return this.unsubscribe(transport, unsubscribeParams.parse(params));
+    return transport.request(method, params);
   }
 
   /** Closes the connection under this window and keeps its subscriptions to resume. */
@@ -190,6 +189,22 @@ export class WindowConnection {
       track.active = true;
     }
     return result;
+  }
+
+  /**
+   * A cut mid-unsubscribe still forgets the session: the host drops a closed connection's
+   * subscriptions, so resuming it would subscribe a session the window asked to drop. A host
+   * error answer leaves the subscription as it was.
+   */
+  private async unsubscribe(transport: HostTransport, params: { sessionId: string }): Promise<unknown> {
+    try {
+      const result = await transport.request('session/unsubscribe', params);
+      this.sessions.delete(params.sessionId);
+      return result;
+    } catch (error) {
+      if (error instanceof HostConnectError) this.sessions.delete(params.sessionId);
+      throw error;
+    }
   }
 
   private receive(notification: HostNotification): void {

@@ -4,7 +4,6 @@ import type { AuthState } from '@shared/auth';
 import type { HostBridgeResponse } from '@shared/hostBridge';
 import type { HostEntry } from '@shared/hostConnection';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { HOST_ERROR_CODES } from '@shared/hostProtocol';
 import { accountOf } from '../../host/auth/hostAccount';
 import {
   HostServer,
@@ -41,6 +40,7 @@ function endpointFor(contents: WebContents): HostClientEndpoint {
       if (!contents.isDestroyed()) contents.send(IPC_CHANNELS.hostNotification, delivery);
     },
     onClosed: listener => contents.once('destroyed', listener),
+    isClosed: () => contents.isDestroyed(),
   };
 }
 
@@ -90,13 +90,8 @@ export function registerHostConnections(local: LocalHost, options: HostConnectio
 
   ipcMain.handle(
     IPC_CHANNELS.hostRequest,
-    async (event, hostId: unknown, method: unknown, params: unknown): Promise<HostBridgeResponse> => {
-      // A destroyed window never fires 'destroyed' again, so a connection opened for it would leak.
-      if (event.sender.isDestroyed()) {
-        return { ok: false, error: { code: HOST_ERROR_CODES.internalError, message: 'The window is gone' } };
-      }
-      return manager.request(endpointFor(event.sender), hostId, method, params);
-    }
+    (event, hostId: unknown, method: unknown, params: unknown): Promise<HostBridgeResponse> =>
+      manager.request(endpointFor(event.sender), hostId, method, params)
   );
   ipcMain.handle(IPC_CHANNELS.hostList, () => manager.list());
   ipcMain.handle(IPC_CHANNELS.hostConnect, (_event, hostId: unknown) => manager.connect(requireHostId(hostId)));

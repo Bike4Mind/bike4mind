@@ -245,6 +245,7 @@ void app.whenReady().then(async () => {
       dataDirectory: app.getPath('userData'),
       homeDirectory: app.getPath('home'),
       version: currentVersion(),
+      log: message => host.logger.warn(message),
     }),
     auth,
     onAuthStateChanged,

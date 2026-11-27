@@ -35,12 +35,14 @@ const settle = () => vi.advanceTimersByTimeAsync(0);
 function fakeWindow(id: number) {
   const delivered: HostNotificationDelivery[] = [];
   let closed: (() => void) | undefined;
+  let destroyed = false;
   const endpoint: HostClientEndpoint = {
     id,
     deliver: delivery => delivered.push(delivery),
     onClosed: listener => {
       closed = listener;
     },
+    isClosed: () => destroyed,
   };
   const seqs = (sessionId: string) =>
     delivered.flatMap(({ notification }) => {
@@ -52,7 +54,11 @@ function fakeWindow(id: number) {
     delivered
       .filter(({ notification }) => notification.method === 'session/resyncRequired')
       .map(d => d.notification.params);
-  return { endpoint, delivered, seqs, resyncs, destroy: () => closed?.() };
+  const destroy = () => {
+    destroyed = true;
+    closed?.();
+  };
+  return { endpoint, delivered, seqs, resyncs, destroy };
 }
 
 type SetUpOptions = {
@@ -393,6 +399,7 @@ describe('ConnectionManager: connection states', () => {
     expect(states.at(-1)).toEqual([LOCAL_HOST_ID]);
     expect(host.open).toHaveLength(0);
     expect(() => manager.remove(LOCAL_HOST_ID)).toThrow('cannot be removed');
+    expect(() => manager.disconnect(LOCAL_HOST_ID)).toThrow('cannot be disconnected');
     expect(() => manager.connect('devbox')).toThrow('not registered');
     expect(() => manager.register(LOCAL_HOST_ID, new FakeHost().connector, { label: 'x', kind: 'local' })).toThrow(
       'already registered'
@@ -488,6 +495,17 @@ describe('ConnectionManager: requests', () => {
     const response = manager.request(fakeWindow(1).endpoint, 'devbox', 'session/list', undefined);
     await settle();
     await expect(response).resolves.toEqual({ ok: true, result: {} });
+  });
+
+  it('opens no connection for a window destroyed while its request waited for the handshake', async () => {
+    const { manager, host } = setUp();
+    const window = fakeWindow(1);
+    const response = manager.request(window.endpoint, 'devbox', 'session/list', undefined);
+    window.destroy();
+    await settle();
+
+    await expect(response).resolves.toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.internalError } });
+    expect(host.connections).toHaveLength(1);
   });
 
   it('opens one handshaken connection per window, and returns results and host errors as data', async () => {
@@ -681,6 +699,22 @@ describe('ConnectionManager: resuming across a cut', () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(window.resyncs()).toEqual([{ sessionId: 's1' }]);
+    expect(manager.subscriptions(1, 'devbox').size).toBe(0);
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2]);
+  });
+
+  it('forgets a session whose unsubscribe is cut mid-flight, so the resume does not subscribe it again', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    host.unanswered.add('session/unsubscribe');
+    const unsubscribe = manager.request(window.endpoint, 'devbox', 'session/unsubscribe', { sessionId: 's1' });
+    await settle();
+    host.open[1].cut();
+    await expect(unsubscribe).resolves.toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(host.open).toHaveLength(2);
+    expect(host.open[1].requests.map(request => request.method)).not.toContain('session/subscribe');
     expect(manager.subscriptions(1, 'devbox').size).toBe(0);
     host.emit('s1');
     expect(window.seqs('s1')).toEqual([1, 2]);
