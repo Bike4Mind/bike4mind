@@ -1,9 +1,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createHostFrameDecoder,
@@ -14,77 +12,16 @@ import {
   type HostNotification,
   type HostResponse,
 } from '@shared/hostProtocol';
-import { ensurePrivateDirectory } from '../auth/privateDirectory';
 import { DAEMON_OUTPUT_FILE_NAME } from './daemonOutput';
-import { createPermissionProtectedCipher } from '../auth/permissionProtectedCipher';
-import { TokenVault } from '../../main/auth/tokenVault';
-import { createVaultFile } from '../../main/auth/vaultFile';
+import { buildHostBundle, E2E_USER_ID as USER_ID, seedSignedInVault, startFakeApi } from './__fixtures__/builtHost';
 
 /**
- * End to end against the BUILT program: vite.host.config.ts builds the bundle into a folder under
- * /tmp, where no node_modules sits above it, so `electron` cannot resolve; `connect` and the
- * daemon then run as plain Node child processes. The seam is the Bike4Mind HTTP API: a local
- * server answers sign-in identity, settings, the model list and the completions stream, so the
- * real chat service, runtime, protocol server, daemon and bridge all run unchanged.
+ * End to end against the BUILT program: the bundle is built into a folder under /tmp, where no
+ * node_modules sits above it, so `electron` cannot resolve; `connect` and the daemon then run as
+ * plain Node child processes against a fake Bike4Mind API (see __fixtures__/builtHost.ts).
  */
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
-const DESKTOP = resolve(__dirname, '../../..');
-const USER_ID = 'user-e2e';
-
-function fakeAccessToken(userId: string): string {
-  const payload = Buffer.from(JSON.stringify({ id: userId }), 'utf8').toString('base64url');
-  return `header.${payload}.signature`;
-}
-
-/** The Bike4Mind API, as far as one chat turn needs it. The first completion is held until released. */
-function startFakeApi() {
-  let releaseTurn: () => void = () => undefined;
-  const turnReleased = new Promise<void>(resolve => {
-    releaseTurn = resolve;
-  });
-  let completions = 0;
-  const unexpected: string[] = [];
-  const sse = (body: unknown) => `data: ${typeof body === 'string' ? body : JSON.stringify(body)}\n\n`;
-
-  const json = (response: ServerResponse, body: unknown) => {
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify(body));
-  };
-  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    const path = (request.url ?? '').split('?')[0];
-    request.resume();
-    if (path === '/api/identify') return json(response, { user: { id: USER_ID, email: 'rider@example.com' } });
-    if (path === '/api/settings/fetch') return json(response, {});
-    if (path === '/api/settings/serverConfig') return json(response, {});
-    if (path === '/api/skills') return json(response, { data: [] });
-    if (path === '/api/models' || path === '/api/v1/models' || path === '/api/v1/video-models') {
-      return json(response, { data: [], models: [] });
-    }
-    if (path === '/api/ai/v1/completions' && request.method === 'POST') {
-      const first = ++completions === 1;
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      response.write(sse({ type: 'content', text: 'Hello ' }));
-      const finish = () =>
-        response.end(sse({ type: 'content', text: 'there.', stopReason: 'end_turn' }) + sse('[DONE]'));
-      if (first) void turnReleased.then(finish);
-      else finish();
-      return;
-    }
-    unexpected.push(`${request.method} ${path}`);
-    response.writeHead(404).end();
-  });
-  return {
-    server,
-    unexpected,
-    releaseTurn: () => releaseTurn(),
-    completions: () => completions,
-    listen: () =>
-      new Promise<string>(resolve =>
-        server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))
-      ),
-  };
-}
 
 type Connection = {
   child: ChildProcessWithoutNullStreams;
@@ -196,45 +133,9 @@ describePosix('the built b4m-host program', () => {
   beforeAll(async () => {
     apiUrl = await api.listen();
     root = await mkdtemp('/tmp/b4mh-e2e-');
-    bin = join(root, 'bin');
     dataDirectory = join(root, 'host');
-
-    // A fork bakes its own server the same way; here it keeps every call on the fake API.
-    const baked = process.env.B4M_DEFAULT_API_URL;
-    process.env.B4M_DEFAULT_API_URL = apiUrl;
-    try {
-      const { build } = await import('vite');
-      await build({
-        configFile: join(DESKTOP, 'vite.host.config.ts'),
-        root: DESKTOP,
-        mode: 'production',
-        logLevel: 'error',
-        build: { outDir: bin, emptyOutDir: true },
-      });
-    } finally {
-      if (baked === undefined) delete process.env.B4M_DEFAULT_API_URL;
-      else process.env.B4M_DEFAULT_API_URL = baked;
-    }
-    bin = join(bin, 'b4m-host.cjs');
-
-    // Signed in already, as a user who ran sign-in once before: tokens far from expiry.
-    await ensurePrivateDirectory(dataDirectory);
-    const vault = new TokenVault(
-      createPermissionProtectedCipher(),
-      createVaultFile(join(dataDirectory, 'auth-vault.json')),
-      {
-        debug: () => undefined,
-        warn: () => undefined,
-        error: () => undefined,
-      }
-    );
-    await vault.setEnvironment({ preset: 'custom', customUrl: apiUrl });
-    await vault.setTokens(apiUrl, {
-      accessToken: fakeAccessToken(USER_ID),
-      refreshToken: 'refresh-e2e',
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      userId: USER_ID,
-    });
+    bin = await buildHostBundle(join(root, 'bin'), apiUrl);
+    await seedSignedInVault(dataDirectory, apiUrl);
   }, 180_000);
 
   afterAll(async () => {
