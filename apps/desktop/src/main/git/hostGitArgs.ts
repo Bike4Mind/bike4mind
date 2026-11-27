@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { hostProgram } from '../chat/tools/userPath';
 import { toLinuxArgument, wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../wsl/wslPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
@@ -71,7 +73,8 @@ export function crossingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   );
 }
 
-export type ConfigEntry = { scope: string; key: string; value: string };
+/** `submodule` marks an entry read from a checked-out submodule's config rather than the repository's own. */
+export type ConfigEntry = { scope: string; key: string; value: string; submodule?: boolean };
 export type ScopedConfigReader = (cwd: string) => Promise<ConfigEntry[]>;
 
 const NETWORK_KEYS =
@@ -118,12 +121,79 @@ async function scopedConfig(
 const readScopedConfig: ScopedConfigReader = async directory =>
   (await scopedConfig(directory, NETWORK_KEYS, false)) ?? [];
 
-export type ProgramConfigReader = (cwd: string) => Promise<ConfigEntry[] | null>;
-// The call it guards fails without it, so it may take as long as that call would.
-const readProgramConfig: ProgramConfigReader = directory => scopedConfig(directory, PROGRAM_KEYS, true, 20_000);
-
 // Apple Git reports its bundled config (which sets the osxkeychain helper) as `unknown`.
 const TRUSTED_SCOPES = new Set(['system', 'global', 'unknown']);
+
+export type ProgramConfigReader = (cwd: string) => Promise<ConfigEntry[] | null>;
+// The call it guards fails without it, so it may take as long as that call would.
+const PROGRAM_READ_TIMEOUT_MS = 20_000;
+const MAX_SUBMODULE_DEPTH = 8;
+const GITLINK = /^160000 [0-9a-f]+ \d\t(.+)$/s;
+
+/**
+ * Checked-out submodules of the repository holding `directory`, nested ones included, as paths this host reaches;
+ * [] outside a work tree and null when git could not list them. git runs its own child in each one that `status`
+ * and `diff` descend into, with that submodule's config.
+ */
+async function checkedOutSubmodules(directory: string, depth = 0): Promise<string[] | null> {
+  if (depth > MAX_SUBMODULE_DEPTH) return null;
+  const env = await gitCommandEnv(directory);
+  // `:/` lists the whole repository from a subdirectory, printing paths relative to `directory`.
+  const command = await gitCommand(directory, hostGitArgs(['ls-files', '-z', '-s', ':/'], directory));
+  if (!command) return [];
+  const { file, args, cwd } = command;
+  const listing = await new Promise<string | null>(resolve =>
+    execFile(
+      file,
+      args,
+      { cwd, env, timeout: PROGRAM_READ_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (!error) return resolve(stdout);
+        resolve(!error.killed && /not a git repository|must be run in a work tree/i.test(stderr) ? '' : null);
+      }
+    )
+  );
+  if (listing === null) return null;
+  const paths = new Set<string>();
+  for (const record of listing.split('\0')) {
+    const path = GITLINK.exec(record)?.[1];
+    if (path !== undefined) paths.add(join(directory, path));
+  }
+  const populated = await Promise.all(
+    [...paths].map(path =>
+      stat(join(path, '.git')).then(
+        () => path,
+        () => null
+      )
+    )
+  );
+  const found: string[] = [];
+  for (const path of populated) {
+    if (path === null) continue;
+    const nested = await checkedOutSubmodules(path, depth + 1);
+    if (nested === null) return null;
+    found.push(path, ...nested);
+  }
+  return found;
+}
+
+const readProgramConfig: ProgramConfigReader = async directory => {
+  const [own, submodules] = await Promise.all([
+    scopedConfig(directory, PROGRAM_KEYS, true, PROGRAM_READ_TIMEOUT_MS),
+    checkedOutSubmodules(directory),
+  ]);
+  if (own === null || submodules === null) return null;
+  const configs = await Promise.all(
+    submodules.map(path => scopedConfig(path, PROGRAM_KEYS, true, PROGRAM_READ_TIMEOUT_MS))
+  );
+  const entries = [...own];
+  for (const config of configs) {
+    if (config === null) return null;
+    // Its system and global entries are the ones already read for the repository itself.
+    for (const entry of config) if (!TRUSTED_SCOPES.has(entry.scope)) entries.push({ ...entry, submodule: true });
+  }
+  return entries;
+};
 
 /**
  * Overrides for a git call that touches the network: the base set, plus credential, ssh and
@@ -191,9 +261,10 @@ const programReads = new Map<string, Promise<ConfigEntry[] | null>>();
 
 /**
  * hostGitArgs for a call that may read or write work-tree files: every filter, diff and merge driver setting the
- * repository's own config makes is pinned to the user's system/global value, or emptied, which git treats as no
- * program. Throws when git cannot list the settings or one cannot be pinned, and refuses a call that writes
- * work-tree files while a filter program only the repository sets is emptied.
+ * repository's own config, or a checked-out submodule's, makes is pinned to the user's system/global value, or
+ * emptied, which git treats as no program. git hands `-c` settings down to the git it runs in a submodule. Throws
+ * when git cannot list the settings or one cannot be pinned, and refuses a call that writes work-tree files while a
+ * filter program only the repository itself sets is emptied.
  */
 export async function hostWorkTreeGitArgs(
   args: readonly string[],
@@ -215,10 +286,13 @@ export async function hostWorkTreeGitArgs(
   if (entries === null) throw new UnpinnableGitConfigError();
   const writesFiles = args[0] === 'worktree' ? args[1] === 'add' : WRITES_FILES.has(args[0] ?? '');
   const pins: string[] = [];
-  for (const key of new Set(entries.filter(entry => !TRUSTED_SCOPES.has(entry.scope)).map(entry => entry.key))) {
+  const untrusted = entries.filter(entry => !TRUSTED_SCOPES.has(entry.scope));
+  for (const key of new Set(untrusted.map(entry => entry.key))) {
     if (key.includes('=') || key.includes('\n')) throw new UnpinnableGitConfigError();
     const trusted = entries.filter(entry => entry.key === key && TRUSTED_SCOPES.has(entry.scope)).at(-1)?.value;
-    if (trusted === undefined && writesFiles && FILTER_PROGRAM.test(key)) throw new RepositoryFilterError();
+    // A submodule's filter does not refuse the call: git writes that work tree only when it recurses into it.
+    const ownFilter = FILTER_PROGRAM.test(key) && untrusted.some(entry => entry.key === key && !entry.submodule);
+    if (trusted === undefined && writesFiles && ownFilter) throw new RepositoryFilterError();
     pins.push('-c', `${key}=${trusted ?? (key.endsWith('.required') ? 'false' : '')}`);
   }
   return [...configArgsFor(cwd, platform), ...pins, ...args];

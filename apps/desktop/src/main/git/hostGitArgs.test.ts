@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -71,6 +71,62 @@ describe('hostGitArgs', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'runs no filter or diff program a checked-out submodule config sets, nested ones included',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'host-git-'));
+      try {
+        const marker = join(dir, 'marker');
+        const script = join(dir, 'filter.sh');
+        writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\ncat\n`);
+        chmodSync(script, 0o755);
+        const git = (cwd: string, args: string[]) =>
+          execFileSync(
+            'git',
+            ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'protocol.file.allow=always', ...args],
+            { cwd, stdio: 'ignore' }
+          );
+        const repo = (name: string) => {
+          const path = join(dir, name);
+          mkdirSync(path);
+          git(path, ['init', '--quiet']);
+          writeFileSync(join(path, 'file.txt'), 'one\n');
+          git(path, ['add', 'file.txt']);
+          git(path, ['commit', '--quiet', '-m', 'first']);
+          return path;
+        };
+        const inner = repo('inner');
+        const middle = repo('middle');
+        git(middle, ['submodule', 'add', '--quiet', inner, 'inner']);
+        git(middle, ['commit', '--quiet', '-m', 'inner']);
+        const top = repo('top');
+        git(top, ['submodule', 'add', '--quiet', middle, 'mods/middle']);
+        git(top, ['submodule', 'update', '--init', '--recursive', '--quiet']);
+        mkdirSync(join(top, 'src'));
+        const checkouts = [join(top, 'mods', 'middle'), join(top, 'mods', 'middle', 'inner')];
+        for (const checkout of checkouts) {
+          git(checkout, ['config', 'filter.evil.clean', script]);
+          git(checkout, ['config', 'diff.evil.textconv', script]);
+          writeFileSync(join(checkout, '.gitattributes'), '* filter=evil diff=evil\n');
+          writeFileSync(join(checkout, 'file.txt'), 'two\n');
+        }
+        const run = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+
+        for (const cwd of [top, join(top, 'src')]) {
+          run(cwd, await hostWorkTreeGitArgs(['status', '--porcelain'], cwd));
+          run(cwd, await hostWorkTreeGitArgs(['diff', '--numstat', 'HEAD', '--'], cwd));
+          run(cwd, await hostWorkTreeGitArgs(['diff', '--submodule=diff', 'HEAD', '--'], cwd));
+        }
+        expect(existsSync(marker)).toBe(false);
+        // The same status without the submodule pins does run the program.
+        run(top, hostGitArgs(['status', '--porcelain'], top));
+        expect(existsSync(marker)).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
   describe('hostWorkTreeGitArgs', () => {
     const read = (entries: Array<[string, string, string]>) => async () =>
       entries.map(([scope, key, value]) => ({ scope, key, value }));
@@ -125,6 +181,13 @@ describe('hostGitArgs', () => {
           ])
         )
       ).resolves.toContain('filter.lfs.smudge=git-lfs smudge -- %f');
+    });
+
+    it('pins a filter only a submodule sets without refusing a call that writes files', async () => {
+      const args = await hostWorkTreeGitArgs(['switch', 'main'], '/repo', async () => [
+        { scope: 'local', key: 'filter.crypt.smudge', value: 'git-crypt smudge', submodule: true },
+      ]);
+      expect(args).toContain('filter.crypt.smudge=');
     });
 
     it('refuses when the settings cannot be read or a name cannot be pinned', async () => {
