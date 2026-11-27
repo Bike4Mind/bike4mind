@@ -25,6 +25,7 @@ export interface TutorialQuest {
   reply: string;
   replies: string[];
   status: 'done';
+  pinned?: boolean;
   fabFileIds?: string[];
   toolResults?: { tool_use_id: string; content: string; is_error?: boolean }[];
   uiSideEffects: { type: string; payload: unknown }[];
@@ -192,8 +193,9 @@ async function seedCanvas(
 
 /**
  * A restart or replay supersedes the module's previous session. One holding only recorded turns goes, whether the
- * walk was running, finished or left, so the sidebar keeps one tutorial notebook per module. One the user wrote in,
- * renamed, uploaded to or moved stays (deleteSession and ownsSession refuse those).
+ * walk was running, finished or left, so the sidebar keeps one tutorial notebook per module. One the user wrote in or
+ * pinned a turn of stays (checked here), as does one renamed, uploaded to, shared, put in a project or given
+ * knowledge (deleteSession refuses those) or moved into a workspace (ownsSession).
  * Best effort: a failed check or delete keeps the session and never fails the restart.
  */
 async function discardUntouchedSession(
@@ -208,7 +210,7 @@ async function discardUntouchedSession(
     if (!(await deps.ownsSession(prior.sessionId, userId))) return;
     const quests = await deps.quests.findAllBySessionId(prior.sessionId);
     // An unmarked quest is the user's own message, or one still waiting for its reply.
-    if (quests.some(q => markedTurn(q, moduleId) === undefined)) return;
+    if (quests.some(q => q.pinned || markedTurn(q, moduleId) === undefined)) return;
     await deps.deleteSession(prior.sessionId, userId);
   } catch (error) {
     deps.warn(`tutorial: kept superseded session ${prior.sessionId}: ${String(error)}`);

@@ -211,6 +211,17 @@ describe('startModule', () => {
     expect(deleted).toEqual([]);
   });
 
+  it('a replay keeps a finished session with a recorded turn the user pinned', async () => {
+    const { deps, quests, progress, deleted } = makeDeps();
+    const first = await startModule(deps, 'u1', 'demo');
+    if (!first.ok) throw new Error('start failed');
+    await advanceModule(deps, 'u1', { moduleId: 'demo', sessionId: first.sessionId, turn: 0 });
+    quests[0].pinned = true;
+    progress.get('u1')!.demo.status = 'finished';
+    await startModule(deps, 'u1', 'demo');
+    expect(deleted).toEqual([]);
+  });
+
   it('restart keeps a previous session the user no longer owns', async () => {
     const { deps, sessions, deleted } = makeDeps();
     await startModule(deps, 'u1', 'demo');

@@ -105,6 +105,35 @@ describe('GET /api/files/tags/counts', () => {
     expect(body.namespaceCounts).toEqual([{ namespace: 'tutorials', fileCount: 2 }]);
   });
 
+  it("keeps a user's own tags that share the tutorial namespace, and their folder", async () => {
+    mockRefs.extraTags = [
+      { tag: 'tutorial:first-steps', count: 1 },
+      { tag: 'tutorial:react', count: 3 },
+      { tag: 'tutorial', count: 2 },
+      { tag: 'tutorial-csv:not-a-digest', count: 1 },
+    ];
+    mockRefs.extraNamespaces = [
+      { namespace: 'tutorial', fileCount: 4 },
+      { namespace: 'tutorial-csv', fileCount: 1 },
+    ];
+    const { req, res } = invokeGet({ id: 'user-1', groups: [], tags: [] });
+
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    const userTags = [
+      { tag: 'tutorial:react', count: 3 },
+      { tag: 'tutorial', count: 2 },
+      { tag: 'tutorial-csv:not-a-digest', count: 1 },
+    ];
+    expect(body.tagCounts).toEqual([...UNNARROWED_RESULT, ...userTags]);
+    expect(body.workspaceTagCounts).toEqual([...NARROWED_RESULT, ...userTags]);
+    expect(body.namespaceCounts).toEqual([
+      { namespace: 'tutorial', fileCount: 4 },
+      { namespace: 'tutorial-csv', fileCount: 1 },
+    ]);
+  });
+
   it('calls countFilesByTagForUser exactly twice - once unnarrowed, once narrowed', async () => {
     expect(mockRefs.getHandler).toBeTypeOf('function');
     const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });

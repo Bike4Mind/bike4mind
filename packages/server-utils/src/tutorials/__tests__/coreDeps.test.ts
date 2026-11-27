@@ -5,7 +5,10 @@ import { sessionRepository } from '@bike4mind/database';
 import { getOrCreateSession } from '../../managers/sessionCrud';
 import type { TutorialRequest } from '../routes/types';
 
-const found = vi.hoisted(() => ({ session: undefined as Record<string, unknown> | undefined }));
+const found = vi.hoisted(() => ({
+  session: undefined as Record<string, unknown> | undefined,
+  projects: [] as unknown[],
+}));
 const mocks = vi.hoisted(() => ({
   deleteSession: vi.fn(),
   findFiles: vi.fn(),
@@ -17,6 +20,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   sessionRepository: { findByIdAndUserId: async () => found.session, update: vi.fn() },
   fabFileRepository: { find: mocks.findFiles },
+  projectRepository: { findAllBySessionId: async () => found.projects },
   withTransaction: mocks.transaction,
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { deleteSession: mocks.deleteSession } }));
@@ -137,5 +141,47 @@ describe('createSession', () => {
 
     expect(vi.mocked(getOrCreateSession).mock.calls[0][0]).toMatchObject({ sessionName: 'Tutorial: First steps' });
     expect(hasAutoNamePlaceholderName(session as { name: string; autoNamePlaceholder?: string })).toBe(false);
+  });
+});
+
+describe('deleteSession', () => {
+  const deleteSession = coreTutorialDepsFor({ logger: { warn: vi.fn() } } as unknown as TutorialRequest).deleteSession;
+  const untouched = { id: 's1', name: 'Tutorial: First steps', users: [], groups: [], knowledgeIds: [] };
+
+  beforeEach(() => {
+    mocks.deleteSession.mockReset().mockResolvedValue(null);
+    mocks.transaction.mockReset().mockImplementation(async (change: () => Promise<unknown>) => change());
+    mocks.rescope.mockReset().mockResolvedValue(undefined);
+  });
+
+  const deletes = async (session: Record<string, unknown>, files: unknown[] = [], projects: unknown[] = []) => {
+    found.session = session;
+    found.projects = projects;
+    mocks.findFiles.mockReset().mockResolvedValue(files);
+    const result = await deleteSession('s1', 'u1');
+    expect(mocks.deleteSession).toHaveBeenCalledTimes(result ? 1 : 0);
+    return result;
+  };
+
+  it('deletes an untouched tutorial notebook', async () => {
+    expect(await deletes(untouched)).toBe(true);
+  });
+
+  it.each([
+    ['renamed', { ...untouched, name: 'My heater email' }],
+    ['shared with a user', { ...untouched, users: [{ userId: 'u2', permissions: ['read'] }] }],
+    ['shared with a group', { ...untouched, groups: [{ groupId: 'g1', permissions: ['read'] }] }],
+    ['shared by link', { ...untouched, isGlobalRead: true }],
+    ['given knowledge', { ...untouched, knowledgeIds: ['f1'] }],
+  ])('keeps a notebook the user %s', async (_label, session) => {
+    expect(await deletes(session)).toBe(false);
+  });
+
+  it('keeps a notebook the user uploaded to', async () => {
+    expect(await deletes(untouched, [{ id: 'f1' }])).toBe(false);
+  });
+
+  it('keeps a notebook the user put in a project', async () => {
+    expect(await deletes(untouched, [], [{ id: 'p1' }])).toBe(false);
   });
 });

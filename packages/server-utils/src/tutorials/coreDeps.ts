@@ -22,6 +22,13 @@ export { CORE_TUTORIAL_SHEET_TAG };
 
 const sheets = tutorialSheets({ tag: CORE_TUTORIAL_SHEET_TAG });
 
+type ShareFields = { isGlobalRead?: boolean; isGlobalWrite?: boolean; users?: unknown[]; groups?: unknown[] };
+const isShared = (session: ShareFields) =>
+  !!session.isGlobalRead ||
+  !!session.isGlobalWrite ||
+  (session.users?.length ?? 0) > 0 ||
+  (session.groups?.length ?? 0) > 0;
+
 export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
   return {
     ensureSheet: (_userId, module, options) => {
@@ -46,11 +53,14 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       return !!session && !session.surface;
     },
-    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it.
+    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it, not shared
+    // and in no project.
     deleteSession: async (sessionId, userId) => {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       if (!session || !isTutorialSessionName(session.name)) return false;
+      if (isShared(session) || (session.knowledgeIds?.length ?? 0) > 0) return false;
       if ((await fabFileRepository.find({ sessionId })).length > 0) return false;
+      if ((await projectRepository.findAllBySessionId(sessionId)).length > 0) return false;
       const affectedUserIds = await withTransaction(async () => {
         const affected = new Set<string>();
         await sessionService.deleteSession(
