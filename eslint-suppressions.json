@@ -558,11 +558,6 @@
       "count": 3
     }
   },
-  "apps/client/app/components/Charts/RechartsChart.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/Charts/RechartsRenderer.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
