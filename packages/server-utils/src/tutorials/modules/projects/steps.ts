@@ -11,7 +11,7 @@ export const PROJECTS_STEPS: TutorialStep[] = [
     anchor: 'sidenav-nav-projects',
     placement: 'right',
     title: 'Open Projects',
-    body: 'A project keeps notebooks and files together, so every chat in it starts from the same files. Open Projects in the side menu, then press Next.',
+    body: 'A project keeps notebooks and files together, so its notebooks can use its files. Open Projects in the side menu, under More if it is not listed. Then press Next.',
   },
   {
     id: 'projects-create',
