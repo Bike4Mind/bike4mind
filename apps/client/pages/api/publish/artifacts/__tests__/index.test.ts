@@ -400,13 +400,21 @@ describe('GET /api/publish/artifacts - cost', () => {
 });
 
 describe('GET /api/publish/artifacts - non-owner row trimming', () => {
-  const OWN = { publicId: 'mine', ownerId: USER, scopeId: 'org-1', previousVersionMeta: { by: 'x' }, gateKind: 'none' };
+  const OWN = {
+    publicId: 'mine',
+    ownerId: USER,
+    scopeId: 'org-1',
+    previousVersionMeta: { by: 'x' },
+    gateKind: 'none',
+    source: { kind: 'reply', sessionId: 'session-1', messageId: 'message-1' },
+  };
   const THEIRS = {
     publicId: 'theirs',
     ownerId: 'user-2',
     scopeId: 'org-9',
     previousVersionMeta: { by: 'y' },
     gateKind: 'none',
+    source: { kind: 'bundle', artifactId: 'artifact_other_1_0' },
     title: 'Their artifact',
     versionsCount: 4,
     discoverable: true,
@@ -418,10 +426,10 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
   const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
     res._getJSONData().artifacts;
 
-  it('strips the owner, scope and version-provenance identifiers from another user row', async () => {
+  it('strips the owner, scope, version-provenance and source identifiers from another user row', async () => {
     withRows([THEIRS]);
     const [row] = artifacts(await run({}));
-    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind']) {
+    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind', 'source']) {
       expect(field in row).toBe(false);
     }
     expect(row.title).toBe('Their artifact');
@@ -445,6 +453,8 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     const [mine, theirs] = artifacts(await run({}));
     expect(mine.ownerId).toBe(USER);
     expect('ownerId' in theirs).toBe(false);
+    expect(mine.source).toEqual(OWN.source);
+    expect('source' in theirs).toBe(false);
   });
 
   it('does not trim for an admin, whose surface is the reason the projection is wide', async () => {
