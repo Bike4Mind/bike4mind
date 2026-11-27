@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -204,10 +204,24 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it('asks about the same call made a third time in a row', async () => {
+    it('runs a read-only command or a sleep-then-read poll repeated without asking', async () => {
+      await startTurn('auto');
+      const commands = ['cat notes.txt', 'sleep 0 && cat notes.txt', 'sleep 0; cat notes.txt'];
+      for (const command of commands) {
+        for (const id of ['a', 'b', 'c']) {
+          streams[0].write(toolTurn(`${id}-${command.length}`, 'bash_execute', { command, cwd: root }));
+        }
+      }
+      streams[0].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => calls('done').length === 9, { timeout: 8000, interval: 10 });
+      expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it('asks about the same effectful call made a third time in a row', async () => {
       await startTurn('auto');
       for (const id of ['c1', 'c2', 'c3']) {
-        streams[0].write(toolTurn(id, 'bash_execute', { command: 'echo again', cwd: root }));
+        streams[0].write(toolTurn(id, 'bash_execute', { command: 'touch again.txt', cwd: root }));
       }
       streams[0].write(frame('[DONE]'));
 
@@ -260,11 +274,25 @@ describe('ChatService approval modes', () => {
 
     it('refuses a write outside the granted folders without offering a click', async () => {
       await startTurn('auto');
-      streams[0].write(toolTurn('c1', 'file_write', { path: '/tmp/outside.txt', content: 'x' }));
+      streams[0].write(toolTurn('c1', 'file_write', { path: '/etc/b4m-outside.txt', content: 'x' }));
       streams[0].write(frame('[DONE]'));
 
       await awaitStatus('denied');
       expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+  });
+
+  describe('temp folders', () => {
+    it('writes a file in the temp folder the shell may use, without asking', async () => {
+      await startTurn('auto');
+      const target = join(tmpdir(), `b4m-approval-temp-${process.pid}.txt`);
+      streams[0].write(toolTurn('c1', 'file_write', { path: target, content: 'x' }));
+      streams[0].write(frame('[DONE]'));
+
+      await awaitStatus('done');
+      expect(await readFile(target, 'utf8')).toBe('x');
+      expect(calls('awaiting-approval')).toHaveLength(0);
+      await rm(target, { force: true });
     });
   });
 

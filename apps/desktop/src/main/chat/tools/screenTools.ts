@@ -80,7 +80,7 @@ export const screenCapture: ToolDefinition = {
   schema: {
     name: SCREEN_CAPTURE_TOOL_NAME,
     description:
-      "Look at a window of another app on this computer, or a whole screen. Without a target it lists the open windows and screens with their ids. With one it captures that window as an image you see (when the model accepts images) and the user sees in the conversation. Use it to check a desktop app's UI - an Electron or native build you started with bash_background, for example - after its window has opened. Each capture asks the user first. For a web page, use the browser tools instead.",
+      "Look at a window of another app on this computer, or a whole screen. Without a target it lists the open windows and screens with their ids. With one it captures that window as an image you see (when the model accepts images) and the user sees in the conversation. Use it to check a desktop app's UI - an Electron or native build you started with bash_background, for example - after its window has opened. A whole-screen capture asks the user first. For a web page, use the browser tools instead.",
     parameters: {
       type: 'object',
       properties: {
@@ -116,7 +116,8 @@ export const screenCapture: ToolDefinition = {
     return {
       detail: `Capture ${describeSource(source)}\n\n${READ_AS_YOU}`,
       key: `${SCREEN_CAPTURE_TOOL_NAME}\x00${source.id}`,
-      askInAuto: true,
+      // One app's window follows the approval mode; a whole screen can show other apps, so it asks.
+      ...(source.id.startsWith('screen:') ? { askInAuto: true as const } : {}),
     };
   },
   async run(input, context) {

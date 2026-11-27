@@ -149,7 +149,7 @@ describe('resolveSimulatorDevice', () => {
 });
 
 describe('device approval', () => {
-  it('keys every device action on the same per-device key, asking in auto mode too', async () => {
+  it('keys every device action on the same per-device key, leaving auto mode to run it', async () => {
     const { context } = setup();
     const prompts = await Promise.all([
       simulatorScreenshot.approval?.({}, context),
@@ -157,14 +157,15 @@ describe('device approval', () => {
       simulatorLaunch.approval?.({ bundle_id: 'com.example.foo' }, context),
     ]);
     for (const prompt of prompts) {
-      expect(prompt).toMatchObject({ key: 'simulator\x00AAAA-1111', askInAuto: true });
+      expect(prompt).toMatchObject({ key: 'simulator\x00AAAA-1111' });
+      expect(prompt?.askInAuto).toBeUndefined();
     }
   });
 
   it('uses a different key for another device', async () => {
     const { context } = setup();
     const prompt = await simulatorScreenshot.approval?.({ device: 'iPad Pro' }, context);
-    expect(prompt).toMatchObject({ key: 'simulator\x00CCCC-3333', askInAuto: true });
+    expect(prompt).toMatchObject({ key: 'simulator\x00CCCC-3333' });
     expect(prompt?.detail).toContain('iPad Pro');
   });
 

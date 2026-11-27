@@ -8824,13 +8824,15 @@ export class ChatService {
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
     const patterns = prompt.always?.commands.map(command => command.pattern);
-    // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
-    // the model is more likely stuck than making progress, and this is the point to find out.
-    const stuck = looping && mode === 'auto';
+    // The same effectful call a third time in a row is not auto-approved by 'auto': the model is
+    // more likely stuck than making progress, and this is the point to find out. It replaces only
+    // the mode's own approval; an allow rule or "Allow in this chat" the user gave still runs it,
+    // and a call that only observes (prompt.repeatSafe) never counts as a loop.
+    const stuck = looping && mode === 'auto' && !prompt.repeatSafe;
     // A matching allow rule runs the call in every mode: the user wrote it knowing what the
-    // command does. A loop still stops, and the rule set itself keeps
-    // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
-    if (verdict.decision === 'allow' && !stuck) {
+    // command does. The rule set itself keeps the floors (irreversible, opaque commands,
+    // outside folders) - see PermissionRuleSet.
+    if (verdict.decision === 'allow') {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
@@ -8845,7 +8847,7 @@ export class ChatService {
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
+      if (prompt.irreversible || prompt.allowOnce || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
         allowanceKey,
@@ -8883,8 +8885,10 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || askedByRule);
+    // A looping call is decided on rules and allowances alone: the mode's own cover is what the guard withdraws.
+    const partsMode: ChatApprovalMode = stuck ? 'ask' : mode;
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, partsMode) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -9012,7 +9016,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || intrinsicAllowOnce || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || intrinsicAllowOnce || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -9022,7 +9026,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, partsMode) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };

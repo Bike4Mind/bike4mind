@@ -114,7 +114,6 @@ function deviceApproval(action: (input: Record<string, unknown>) => string) {
     return {
       detail: `${action(input)} on the iOS Simulator ${describeDevice(device)}`,
       key: `${DEVICE_KEY_PREFIX}${device.udid}`,
-      askInAuto: true,
       alwaysCovers: `every simulator action on ${describeDevice(device)}`,
     };
   };
