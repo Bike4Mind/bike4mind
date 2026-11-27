@@ -249,13 +249,21 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async claimExpiryReminder(id: string): Promise<boolean> {
+  async claimExpiryReminder(id: string, claimedAt: Date): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, expiryReminderSentAt: null },
-      { $set: { expiryReminderSentAt: new Date() } },
+      { $set: { expiryReminderSentAt: claimedAt } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  }
+
+  async releaseExpiryReminder(id: string, claimedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: id, expiryReminderSentAt: claimedAt },
+      { $unset: { expiryReminderSentAt: 1 } },
+      { runValidators: true }
+    );
   }
 
   // Capped like findDisabledByKeyPrefix: this runs only after auth has already failed.

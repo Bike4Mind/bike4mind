@@ -797,7 +797,9 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** ACTIVE MCP keys whose `expiresAt` is after `now` and no later than `until` and that have no reminder claimed. */
   findExpiringExplicitScopeOnly: (now: Date, until: Date) => Promise<IUserApiKeyDocument[]>;
   /** Marks the expiry reminder claimed. True only for the one call that claimed it, so overlapping runs send once. */
-  claimExpiryReminder: (id: string) => Promise<boolean>;
+  claimExpiryReminder: (id: string, claimedAt: Date) => Promise<boolean>;
+  /** Undoes a claim after a failed send, only if it is still the one stamped `claimedAt`, so the next run retries. */
+  releaseExpiryReminder: (id: string, claimedAt: Date) => Promise<void>;
   /** ACTIVE MCP keys under a prefix whose `expiresAt` has passed, so an expired key can be told how to renew. */
   findExpiredExplicitScopeOnlyByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument[]>;
   deactivateAllByUserId: (userId: string) => Promise<void>;

@@ -394,24 +394,6 @@ const apiKeyBaselineCalculation = runsScheduledJobs
     })
   : undefined;
 
-// MCP key expiry reminder - daily at 14:00 UTC; emails owners of MCP keys expiring within 7 days, once per key.
-const apiKeyExpiryReminder = runsScheduledJobs
-  ? new sst.aws.Cron('apiKeyExpiryReminder', {
-      schedule: 'cron(0 14 * * ? *)',
-      function: {
-        vpc: lambdaVpc,
-        handler: 'apps/workers/src/cron/apiKeyExpiryReminder.handler',
-        runtime: 'nodejs24.x',
-        timeout: '5 minutes',
-        link: [...allSecrets],
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-          APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
-        },
-      },
-    })
-  : undefined;
-
 // Read-only usage pattern signals for free-tier review; a no-op until usagePatternSignalsEnabled is on.
 const usagePatternSignals = runsScheduledJobs
   ? new sst.aws.Cron('usagePatternSignals', {
@@ -1126,6 +1108,27 @@ const dataLakeBatchReconcileCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+      },
+    })
+  : undefined;
+
+// MCP key expiry reminder - daily at 14:00 UTC; emails owners of MCP keys expiring within 7 days, once per key.
+const apiKeyExpiryReminder = runsScheduledJobs
+  ? new sst.aws.Cron('apiKeyExpiryReminder', {
+      schedule: 'cron(0 14 * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/apiKeyExpiryReminder.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        // eventBus: the reminder is queued as an email.send event.
+        link: [...allSecrets, eventBus],
+        environment: {
+          ...mailBodyEnvironment(appFilesBucket),
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+        },
+        permissions: [mailBodyPutPermission(appFilesBucket)],
       },
     })
   : undefined;

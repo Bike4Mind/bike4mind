@@ -148,6 +148,7 @@ re-deciding per endpoint:
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
 | Valid credential, but an admin suspended the owner's account | `403` | `account_suspended` (the body carries `suspension`: `reason_category`, and `terms_url` / `appeal_url` when the deployment has a website; never the signals behind the decision; not retryable) |
+| A real secret of an expired MCP key | `401` | `api_key_expired` (the body carries `renewal.renew_url` when the deployment has an app URL; remediation is minting a replacement key) |
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |

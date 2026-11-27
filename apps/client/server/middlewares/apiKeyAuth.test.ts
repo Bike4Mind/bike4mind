@@ -778,9 +778,20 @@ describe('apiKeyAuth with an expired MCP key', () => {
       expect(error).toBeInstanceOf(UnauthorizedError);
       expect(error?.message).toBe('API key expired');
       expect((error as UnauthorizedError).additionalInfo).toEqual({
-        code: 'api_key_expired',
-        renew_url: 'https://app.example.com/profile?tab=api-keys',
+        errorCode: 'api_key_expired',
+        renewal: { renew_url: 'https://app.example.com/profile?tab=api-keys' },
       });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('omits the renewal link when the deployment has no app URL', async () => {
+    isExpiredExplicitScopeOnlyKeyMock.mockResolvedValue(true);
+    vi.stubEnv('APP_URL', '');
+    try {
+      const { error } = await run([ApiKeyScope.ME_READ], makeReq());
+      expect((error as UnauthorizedError).additionalInfo).toEqual({ errorCode: 'api_key_expired' });
     } finally {
       vi.unstubAllEnvs();
     }

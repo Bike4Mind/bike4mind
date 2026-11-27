@@ -26,13 +26,14 @@ export function renderApiKeyExpiringEmail(
 }
 
 /**
- * Email the owner of an API key that is about to expire. Best-effort and never throws, so one bad
- * address cannot stop a sweep.
+ * Email the owner of an API key that is about to expire. Never throws, so one bad address cannot stop a
+ * sweep. Resolves false when the send failed and is worth retrying; true when it was queued, or when the
+ * owner has no active email (nothing a retry could fix).
  */
 export async function notifyApiKeyExpiring(
   context: { holderUserId: string; keyName: string; expiresAt: Date; renewUrl: string | null },
   deps: ApiKeyExpiringNotifyDeps
-): Promise<void> {
+): Promise<boolean> {
   const warn = (msg: string, meta: unknown) =>
     deps.logger?.warn ? deps.logger.warn(msg, meta) : Logger.warn(msg, meta);
   try {
@@ -41,7 +42,7 @@ export async function notifyApiKeyExpiring(
       warn('[userApiKey] key holder has no active email; skipping expiry reminder', {
         holderUserId: context.holderUserId,
       });
-      return;
+      return true;
     }
     const result = await deps.mailer.sendEmail(
       emailRows[0].email,
@@ -50,7 +51,9 @@ export async function notifyApiKeyExpiring(
     if (!result) {
       warn('[userApiKey] expiry reminder email failed to send', { holderUserId: context.holderUserId });
     }
+    return !!result;
   } catch (err) {
     warn('[userApiKey] expiry reminder failed', { holderUserId: context.holderUserId, error: String(err) });
+    return false;
   }
 }

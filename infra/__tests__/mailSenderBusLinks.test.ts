@@ -59,6 +59,7 @@ const MAIL_SENDING_COMPUTE: { file: string; marker: string; sends: string }[] = 
   { file: 'infra/queues.ts', marker: worker('queueHandlers/agentProactiveMessage.dispatch'), sends: 'alerts' },
   { file: 'infra/queues.ts', marker: worker('queueHandlers/generationJob.dispatch'), sends: 'alerts' },
   { file: 'infra/cron.ts', marker: worker('cron/dataLakeBatchReconcile.handler'), sends: 'alerts' },
+  { file: 'infra/cron.ts', marker: worker('cron/apiKeyExpiryReminder.handler'), sends: 'key expiry reminders' },
   { file: 'infra/buckets.ts', marker: worker('s3/notebookImportComplete.dispatch'), sends: 'alerts' },
   { file: 'infra/functions.ts', marker: worker('queueHandlers/slackQuestProcessor.handler'), sends: 'alerts' },
   { file: 'infra/agentExecutor.ts', marker: worker('queueHandlers/agentExecutor.handler'), sends: 'alerts' },

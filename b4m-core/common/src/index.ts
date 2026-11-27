@@ -9,6 +9,7 @@ export * from './signupRiskPolicy';
 export * from './apiErrorCodes';
 export * from './accountSuspensionCategories';
 export * from './accountSuspension';
+export * from './apiKeyExpired';
 export * from './groupTypes';
 export * from './importHistoryFailure';
 export * from './insufficientCredits';

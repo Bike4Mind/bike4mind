@@ -18,24 +18,39 @@ const logger = new Logger({ metadata: { service: 'apiKeyExpiryReminder' } });
 export async function runApiKeyExpiryReminder(now: Date = new Date()) {
   const until = new Date(now.getTime() + API_KEY_EXPIRY_REMINDER_WINDOW_MS);
   const keys = await userApiKeyRepository.findExpiringExplicitScopeOnly(now, until);
-  const renewUrl = apiKeyRenewalUrl();
+  const renewUrl = apiKeyRenewalUrl() ?? null;
   let reminded = 0;
   let failed = 0;
   for (const key of keys) {
+    const claimedAt = new Date();
+    let claimed = false;
     try {
-      if (!(await userApiKeyRepository.claimExpiryReminder(key.id))) continue;
-      await userApiKeyService.notifyApiKeyExpiring(
+      if (!(await userApiKeyRepository.claimExpiryReminder(key.id, claimedAt))) continue;
+      claimed = true;
+      const queued = await userApiKeyService.notifyApiKeyExpiring(
         { holderUserId: key.userId, keyName: key.name, expiresAt: key.expiresAt!, renewUrl },
         { db: { users: userRepository }, mailer: queuedMailer, logger }
       );
+      if (!queued) throw new Error('reminder email was not queued');
       reminded++;
     } catch (error) {
       failed++;
       logger.warn('[apiKeyExpiryReminder] key skipped', { keyId: key.id, error: String(error) });
+      // Free the claim so tomorrow's run retries while the key is still inside the window.
+      if (claimed) {
+        await userApiKeyRepository.releaseExpiryReminder(key.id, claimedAt).catch(releaseError => {
+          logger.error('[apiKeyExpiryReminder] could not release claim', {
+            keyId: key.id,
+            error: String(releaseError),
+          });
+        });
+      }
     }
   }
-  logger.info('[apiKeyExpiryReminder] done', { found: keys.length, reminded, failed });
-  return { found: keys.length, reminded, failed };
+  const summary = { found: keys.length, reminded, failed };
+  if (failed > 0) logger.error('[apiKeyExpiryReminder] some reminders were not sent', summary);
+  else logger.info('[apiKeyExpiryReminder] done', summary);
+  return summary;
 }
 
 export const handler = async () => {

@@ -6,7 +6,8 @@ import { adminApiKeyAccessSchema, adminApiKeyRequestCountsSchema } from './admin
 /**
  * Fields of an API key never sent to a client: the legacy bcrypt hash, the SHA-256 digest of the
  * raw key, the callback signing secret, and the admin-set moderation exception (its reason and
- * acting admin are not the key owner's to read). UserApiKeyModel's toJSON transform also drops
+ * acting admin are not the key owner's to read), and the expiry reminder's cron marker (bookkeeping, not a
+ * property of the key). UserApiKeyModel's toJSON transform also drops
  * them; this keeps them out if a read path skips serialization.
  */
 export const USER_API_KEY_WITHHELD_FIELDS = [
@@ -14,6 +15,7 @@ export const USER_API_KEY_WITHHELD_FIELDS = [
   'keyDigest',
   'callbackSigningSecret',
   'moderationException',
+  'expiryReminderSentAt',
 ] as const;
 
 // Held to IUserApiKeyDocument: a new field fails the build here until it is classified.
@@ -45,7 +47,6 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   orgOwned: true,
   explicitScopeOnly: true,
   exposureCeiling: true,
-  expiryReminderSentAt: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,
