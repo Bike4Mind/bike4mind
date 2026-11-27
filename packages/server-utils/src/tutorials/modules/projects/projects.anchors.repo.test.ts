@@ -37,9 +37,10 @@ describe('the projects tutorial selectors', () => {
     expect(clientHas(`["']${escape(id)}["']`)).toBe(true);
   });
 
-  // Built from a template in SidenavNav.tsx, so it never appears as a literal.
+  // Built from a template in SidenavNav.tsx, so it never appears as a literal. Bracket classes, not backslash
+  // escapes: GNU grep reads a backslash-backtick as an anchor, so that pattern never matches on Linux CI.
   it('finds the side menu Projects row the open step points at', () => {
-    expect(clientHas(String.raw`data-testid=\{\`sidenav-nav-\$\{item\.key\}\`\}`)).toBe(true);
+    expect(clientHas('data-testid=[{][`]sidenav-nav-[$][{]item[.]key[}][`][}]')).toBe(true);
     expect(clientHas(`key: ['"]projects['"]`)).toBe(true);
   });
 });
