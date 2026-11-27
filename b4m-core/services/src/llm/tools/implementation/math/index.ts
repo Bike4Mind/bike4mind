@@ -3,24 +3,47 @@ import { Logger } from '@bike4mind/observability';
 import { ToolDefinition } from '../../base/types';
 import type { MathJsInstance } from 'mathjs';
 
-// Built on first use, not at import: create(all) instantiates the whole mathjs
-// function set (~0.5 s), and this module is loaded by every CLI launch through
-// the tool registry whether or not the math tool ever runs.
-let mathInstance: Promise<MathJsInstance> | null = null;
+type MathJsModule = typeof import('mathjs');
 
-function loadMath(): Promise<MathJsInstance> {
-  mathInstance ??= import('mathjs')
-    .then(({ create, all }) =>
-      create(all, {
-        number: 'BigNumber',
-        precision: 14,
-      })
-    )
-    .catch((error: unknown) => {
-      mathInstance = null; // let the next call retry rather than fail for the life of the process
-      throw error;
-    });
-  return mathInstance;
+// Loaded on first use, not at import: mathjs is large, and this module is loaded
+// by every CLI launch through the tool registry whether or not the math tool ever runs.
+let mathModule: Promise<MathJsModule> | null = null;
+
+function loadMathModule(): Promise<MathJsModule> {
+  mathModule ??= import('mathjs').catch((error: unknown) => {
+    mathModule = null; // let the next call retry rather than fail for the life of the process
+    throw error;
+  });
+  return mathModule;
+}
+
+// Functions that change the instance itself (its function table, units) rather than computing a value.
+const DISABLED_FUNCTIONS = ['import', 'createUnit'] as const;
+
+function disabledFunction(name: string): () => never {
+  return () => {
+    throw new Error(`Function ${name} is disabled`);
+  };
+}
+
+/**
+ * A fresh mathjs instance for one evaluation, so nothing an expression does to the
+ * instance (config, units, overrides) can reach any other evaluation. create(all)
+ * costs ~10 ms once the module is loaded.
+ *
+ * `config` is left callable: overriding it via import() resets the instance to plain
+ * numbers, and a per-call instance already confines its effect to this one evaluation.
+ */
+async function createIsolatedMath(): Promise<MathJsInstance> {
+  const { create, all } = await loadMathModule();
+  const math = create(all, {
+    number: 'BigNumber',
+    precision: 14,
+  });
+  math.import(Object.fromEntries(DISABLED_FUNCTIONS.map(name => [name, disabledFunction(name)])), {
+    override: true,
+  });
+  return math;
 }
 
 interface MathParams {
@@ -73,7 +96,7 @@ function evaluateInput<T>(evaluate: () => T): T {
 async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
-  const math = await loadMath();
+  const math = await createIsolatedMath();
   try {
     let expression = params.expression.trim();
 

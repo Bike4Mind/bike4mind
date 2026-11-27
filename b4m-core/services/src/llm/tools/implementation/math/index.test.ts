@@ -106,6 +106,28 @@ describe('math_evaluate', () => {
     });
   });
 
+  describe('instance isolation', () => {
+    it('does not carry config changes from one evaluation into the next', async () => {
+      await expect(evaluate({ expression: 'config({number: "number"}); 1' })).resolves.toBe('1');
+      await expect(evaluate({ expression: '0.1 + 0.2' })).resolves.toBe('0.3');
+    });
+
+    it('does not carry function definitions from one evaluation into the next', async () => {
+      await expect(evaluate({ expression: 'double(x) = 2x; double(2)' })).resolves.toBe('4');
+      await expect(evaluate({ expression: 'double(2)' })).rejects.toBeInstanceOf(ExpectedToolError);
+    });
+
+    it('rejects createUnit and leaves the unit registry unchanged', async () => {
+      await expect(evaluate({ expression: 'createUnit("widget")' })).rejects.toThrow(/createUnit is disabled/);
+      await expect(evaluate({ expression: '2 widget' })).rejects.toBeInstanceOf(ExpectedToolError);
+    });
+
+    it('rejects import and leaves built-in constants unchanged', async () => {
+      await expect(evaluate({ expression: 'import({pi: 3}, {override: true})' })).rejects.toThrow(/import is disabled/);
+      await expect(evaluate({ expression: 'pi' })).resolves.toBe('3.1415926535898');
+    });
+  });
+
   describe('error handling', () => {
     // Failures throw so the adapters record the tool call as failed; the message still reaches the model.
     const failure = async (expression: string): Promise<string> => {
