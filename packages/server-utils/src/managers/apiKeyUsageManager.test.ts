@@ -112,7 +112,7 @@ describe('ApiKeyUsageManager.logUsage', () => {
   });
 
   it('stamps mcpClient on both writers and omits it when absent', async () => {
-    const params = { ...baseParams, source: 'mcp' as const, ownerType: CreditHolderType.User };
+    const params = { ...baseParams, source: 'mcp' as const, ownerType: CreditHolderType.User } as const;
     await ApiKeyUsageManager.logUsage({ ...params, mcpClient: 'claude-code' });
     await ApiKeyUsageManager.beginCompletionUsage({ ...params, mcpClient: 'claude-code' });
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ mcpClient: 'claude-code' }));
