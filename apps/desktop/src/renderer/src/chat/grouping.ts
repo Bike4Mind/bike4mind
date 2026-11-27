@@ -1,5 +1,7 @@
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { claudeWorktreeOf } from '@shared/claudeImport';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { summaryHostId } from '../host/sessionDirectory';
 import {
   EMPTY_SIDEBAR_SECTIONS,
   sectionOf,
@@ -8,8 +10,14 @@ import {
 } from '@shared/sidebarSections';
 
 export interface ProjectGroup {
-  /** The project directory, which is the grouping identity - two projects can share a name. */
+  /**
+   * The host the project's folder is on. With the directory it is the grouping identity: two
+   * hosts with the same path are two projects, and two projects can share a name.
+   */
+  hostId: string;
   directory: string;
+  /** Unique across hosts; see projectGroupKey. */
+  key: string;
   name: string;
   sessions: ChatSessionSummary[];
 }
@@ -26,7 +34,7 @@ export interface SidebarSections {
    * in the other mode is left out, so it does not show as empty here.
    */
   custom: CustomGroup[];
-  /** Code sessions, one group per project directory. */
+  /** Code sessions, one group per (host, project directory). */
   projects: ProjectGroup[];
   /** Chat sessions, which have no project and sit outside the groups. */
   loose: ChatSessionSummary[];
@@ -101,7 +109,7 @@ export function groupSessions(
     })
     .map(section => ({ section, sessions: [] as ChatSessionSummary[] }));
   const bySection = new Map(custom.map(group => [group.section.id, group]));
-  const byDirectory = new Map<string, ProjectGroup>();
+  const byProject = new Map<string, ProjectGroup>();
   const loose: ChatSessionSummary[] = [];
   const imported: ChatSessionSummary[] = [];
 
@@ -122,12 +130,14 @@ export function groupSessions(
       continue;
     }
     const { directory, name } = projectGroupOf(project);
-    const group = byDirectory.get(directory);
+    const hostId = summaryHostId(session);
+    const key = projectGroupKey(hostId, directory);
+    const group = byProject.get(key);
     if (group) group.sessions.push(session);
-    else byDirectory.set(directory, { directory, name, sessions: [session] });
+    else byProject.set(key, { hostId, directory, key, name, sessions: [session] });
   }
 
-  return { pinned, custom, projects: [...byDirectory.values()], loose, archived, imported, children };
+  return { pinned, custom, projects: [...byProject.values()], loose, archived, imported, children };
 }
 
 /**
@@ -263,9 +273,25 @@ export function projectGroupDirectory(project: ChatProject): string {
   return projectGroupOf(project).directory;
 }
 
-/** The most recent session's project for a sidebar group, including grouped Claude worktrees. */
-export function projectForGroup(sessions: readonly ChatSessionSummary[], directory: string): ChatProject | undefined {
-  return sessions.find(session => session.project && projectGroupOf(session.project).directory === directory)?.project;
+/**
+ * A project group's identity. A local project keeps its bare directory, the key it had before
+ * remote hosts, so state stored under it (folded groups) stays valid; a remote one is prefixed
+ * with its host.
+ */
+export function projectGroupKey(hostId: string, directory: string): string {
+  return hostId === LOCAL_HOST_ID ? directory : `${hostId}\n${directory}`;
+}
+
+/** The most recent session's project for a sidebar group on `hostId`, including grouped Claude worktrees. */
+export function projectForGroup(
+  sessions: readonly ChatSessionSummary[],
+  hostId: string,
+  directory: string
+): ChatProject | undefined {
+  return sessions.find(
+    session =>
+      session.project && summaryHostId(session) === hostId && projectGroupOf(session.project).directory === directory
+  )?.project;
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */

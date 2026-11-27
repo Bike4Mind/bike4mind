@@ -7,18 +7,20 @@ import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
 import { hostChat } from '../host/hostChat';
 import { hostClient } from '../host/HostClient';
-import { hostForSession } from '../host/sessionHost';
+import { useServingHostIds } from '../host/hostRegistry';
 import { useHostResync } from '../host/useSessionEvents';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
 /**
- * Every decision workers wait on the user for, per host: read on mount and after each resync of
- * that host, and replaced by each push of the whole list in between. taskDecision/list needs a
+ * Every decision workers wait on the user for, per connected host: read on mount, when a host
+ * connects and after each resync, and replaced by each push of the whole list in between. A host
+ * that disconnects takes its decisions with it, since they cannot be answered meanwhile. taskDecision/list needs a
  * 1.3 host, which the bundled one is; gate on the negotiated minor before a 1.2 host can be a peer.
  */
 export function useTaskDecisions(): PendingTaskDecision[] {
+  const servingHosts = useServingHostIds();
   const [byHost, setByHost] = useState<ReadonlyMap<string, PendingTaskDecision[]>>(() => new Map());
   // Bumped by a resync, which may have skipped a push: the list is read again.
   const [reads, setReads] = useState(0);
@@ -26,26 +28,36 @@ export function useTaskDecisions(): PendingTaskDecision[] {
 
   useEffect(() => {
     const pushed = new Set<string>();
+    const serving = new Set(servingHosts);
     let unmounted = false;
     const set = (hostId: string, list: PendingTaskDecision[]) =>
       setByHost(current => new Map(current).set(hostId, list));
+    setByHost(current => {
+      const gone = [...current.keys()].filter(hostId => !serving.has(hostId));
+      if (gone.length === 0) return current;
+      const next = new Map(current);
+      for (const hostId of gone) next.delete(hostId);
+      return next;
+    });
     const off = hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
+      if (!serving.has(hostId)) return;
       pushed.add(hostId);
       set(hostId, decisions);
     });
-    const hostId = hostForSession();
-    hostClient
-      .request(hostId, 'taskDecision/list')
-      .then(({ decisions }) => {
-        // A push that landed first is newer than this read.
-        if (!pushed.has(hostId) && !unmounted) set(hostId, decisions);
-      })
-      .catch(() => undefined);
+    for (const hostId of servingHosts) {
+      hostClient
+        .request(hostId, 'taskDecision/list')
+        .then(({ decisions }) => {
+          // A push that landed first is newer than this read.
+          if (!pushed.has(hostId) && !unmounted) set(hostId, decisions);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       unmounted = true;
       off();
     };
-  }, [reads]);
+  }, [reads, servingHosts]);
 
   return useMemo(() => [...byHost.values()].flat(), [byHost]);
 }

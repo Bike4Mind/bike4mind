@@ -13,7 +13,8 @@ import {
   type HostBridgeResponse,
   type HostNotificationDelivery,
 } from '@shared/hostBridge';
-import { HOST_ERROR_CODES, hostNotification } from '@shared/hostProtocol';
+import type { HostConnectionsApi, HostEntry, HostInfo } from '@shared/hostConnection';
+import { HOST_ERROR_CODES, HOST_PROTOCOL_VERSION, hostNotification } from '@shared/hostProtocol';
 import { pageSessions, sessionPageRequestSchema } from '@shared/sessionPage';
 
 type ChatStubs = Partial<{
@@ -167,6 +168,69 @@ const routeFor = (
 const asUnsubscribe = (value: unknown): (() => void) =>
   typeof value === 'function' ? () => void value() : () => undefined;
 
+/** A connected host's `host/info`, advertising `capabilities`. */
+export const fakeHostInfo = (hostId: string, capabilities: readonly string[] = []): HostInfo => ({
+  hostId,
+  hostName: hostId,
+  hostVersion: 'test',
+  protocol: HOST_PROTOCOL_VERSION,
+  capabilities: [...capabilities],
+  platform: 'linux',
+  homeDirectory: '/home/test',
+  account: null,
+});
+
+const LOCAL_ENTRY: HostEntry = {
+  hostId: LOCAL_HOST_ID,
+  label: 'This Mac',
+  kind: 'local',
+  state: { status: 'connected', info: fakeHostInfo(LOCAL_HOST_ID), latencyMs: 0 },
+};
+
+/** Host management for a test whose bridge serves the local host only: it is listed, connected, and never changes. */
+export const localHostConnections = (): HostConnectionsApi => ({
+  list: async () => [LOCAL_ENTRY],
+  onStateChanged: () => () => undefined,
+  connect: async () => undefined,
+  disconnect: async () => undefined,
+  remove: async () => undefined,
+});
+
+/** A second host served by the bridge from plain data, for tests of sessions on another machine. */
+export type FakeRemoteHostOptions = {
+  hostId: string;
+  label?: string;
+  capabilities?: readonly string[];
+  /** What its `session/page` lists. */
+  sessions?: readonly ChatSessionSummary[];
+  statuses?: readonly ChatSessionStatusEvent[];
+  /** Starts connected unless false. */
+  connected?: boolean;
+  /** Methods it fails with an internal error while connected. */
+  failing?: readonly string[];
+  /** Answers any other method; undefined fails it as one the host does not serve. */
+  answer?: (method: string, params: Record<string, unknown>) => unknown;
+};
+
+/** Drives the faked remote host from a test. */
+export type FakeRemoteHost = {
+  readonly hostId: string;
+  /** Every request sent to it, in order. */
+  readonly requests: { method: string; params: Record<string, unknown> }[];
+  sessions: ChatSessionSummary[];
+  setConnected(connected: boolean): void;
+  /** A notification from this host, delivered as its bridge would. */
+  notify(method: string, params: unknown): void;
+  /** A live event on one of its sessions, numbered per session and sent only while subscribed. */
+  emitStreamEvent(event: ChatStreamEvent): void;
+};
+
+export type ChatBackedHostBridge = HostBridgeApi &
+  HostConnectionsApi & {
+    /** The faked second host, when the bridge was made with one. */
+    remote: FakeRemoteHost | null;
+  };
+
 /**
  * A local host bridge for renderer tests written against `window.b4m.chat` stubs: it answers the
  * host methods the renderer uses from the same-named stubs, read at call time so a test may replace
@@ -174,7 +238,7 @@ const asUnsubscribe = (value: unknown): (() => void) =>
  * missing fails as one the host does not serve; a stub that throws fails with its message.
  * Stream events are numbered per session and reach only subscribed sessions, as a host sends them.
  */
-export function chatBackedHostBridge(): HostBridgeApi {
+export function chatBackedHostBridge(options: { remote?: FakeRemoteHostOptions } = {}): ChatBackedHostBridge {
   // One upstream subscription shared by every listener, as the real bridge's single IPC channel is.
   const listeners = new Set<(delivery: HostNotificationDelivery) => void>();
   const deliver = (delivery: HostNotificationDelivery) => listeners.forEach(listener => listener(delivery));
@@ -247,8 +311,26 @@ export function chatBackedHostBridge(): HostBridgeApi {
       offStatus();
     };
   };
+  const hostListeners = new Set<(hosts: HostEntry[]) => void>();
+  const announce = () => hostListeners.forEach(listener => listener(entries()));
+  const remote = options.remote ? createFakeRemote(options.remote, deliver, announce) : null;
+  const entries = (): HostEntry[] => (remote ? [LOCAL_ENTRY, remote.entry()] : [LOCAL_ENTRY]);
   return {
+    remote: remote?.controls ?? null,
+    list: async () => entries(),
+    onStateChanged(listener) {
+      hostListeners.add(listener);
+      return () => hostListeners.delete(listener);
+    },
+    async connect(hostId) {
+      if (remote?.controls.hostId === hostId) remote.controls.setConnected(true);
+    },
+    async disconnect(hostId) {
+      if (remote?.controls.hostId === hostId) remote.controls.setConnected(false);
+    },
+    remove: async () => undefined,
     async request(hostId, method, params): Promise<HostBridgeResponse> {
+      if (remote && hostId === remote.controls.hostId) return remote.request(method, asRecord(params));
       const chat = chatStubs();
       if (hostId === LOCAL_HOST_ID && method === 'session/list') {
         return { ok: true, result: { sessions: (await chat.listSessions?.()) ?? [] } };
@@ -301,4 +383,80 @@ export function chatBackedHostBridge(): HostBridgeApi {
       };
     },
   };
+}
+
+const notServed = (method: string): HostBridgeResponse => ({
+  ok: false,
+  error: { code: HOST_ERROR_CODES.methodNotFound, message: `Not faked: ${method}` },
+});
+
+function createFakeRemote(
+  options: FakeRemoteHostOptions,
+  deliver: (delivery: HostNotificationDelivery) => void,
+  announce: () => void
+) {
+  const { hostId } = options;
+  let connected = options.connected !== false;
+  const seqs = new Map<string, number>();
+  const subscribed = new Set<string>();
+  const controls: FakeRemoteHost = {
+    hostId,
+    requests: [],
+    sessions: [...(options.sessions ?? [])],
+    setConnected(next) {
+      if (next === connected) return;
+      connected = next;
+      if (!next) subscribed.clear();
+      announce();
+    },
+    notify(method, params) {
+      deliver({ hostId, notification: hostNotification(method, params) });
+    },
+    emitStreamEvent(event) {
+      const seq = (seqs.get(event.sessionId) ?? 0) + 1;
+      seqs.set(event.sessionId, seq);
+      if (subscribed.has(event.sessionId)) {
+        controls.notify('session/event', { sessionId: event.sessionId, seq, epoch: TEST_EPOCH, event });
+      }
+    },
+  };
+  const cursorOf = (sessionId: string) => ({ epoch: TEST_EPOCH, seq: seqs.get(sessionId) ?? 0 });
+  const entry = (): HostEntry => ({
+    hostId,
+    label: options.label ?? hostId,
+    kind: 'remote',
+    state: connected
+      ? { status: 'connected', info: fakeHostInfo(hostId, options.capabilities), latencyMs: 1 }
+      : { status: 'offline', reason: 'unreachable', lastSeenAt: null },
+  });
+  const request = async (method: string, params: Record<string, unknown>): Promise<HostBridgeResponse> => {
+    controls.requests.push({ method, params });
+    if (!connected) {
+      return { ok: false, error: { code: HOST_ERROR_CODES.capabilityUnavailable, message: `${hostId} is offline` } };
+    }
+    if (options.failing?.includes(method)) {
+      return { ok: false, error: { code: HOST_ERROR_CODES.internalError, message: `${method} failed` } };
+    }
+    const sessionId = typeof params.sessionId === 'string' ? params.sessionId : null;
+    switch (method) {
+      case 'session/page': {
+        const all = [...controls.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        return { ok: true, result: pageSessions(all, sessionPageRequestSchema.parse(params)) };
+      }
+      case 'session/statuses':
+        return { ok: true, result: { statuses: [...(options.statuses ?? [])] } };
+      case 'taskDecision/list':
+        return { ok: true, result: { decisions: [] } };
+      case 'session/subscribe':
+        if (!sessionId) return notServed(method);
+        subscribed.add(sessionId);
+        return { ok: true, result: { cursor: cursorOf(sessionId) } };
+      case 'session/unsubscribe':
+        if (sessionId) subscribed.delete(sessionId);
+        return { ok: true, result: {} };
+    }
+    const answered = options.answer?.(method, params);
+    return answered === undefined ? notServed(method) : { ok: true, result: answered };
+  };
+  return { controls, entry, request };
 }

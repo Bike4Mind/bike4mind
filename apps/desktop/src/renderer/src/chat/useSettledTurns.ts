@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatSessionStatusEvent } from '@shared/chat';
 import { hostClient } from '../host/HostClient';
-import { hostForSession } from '../host/sessionHost';
+import { useServingHostIds } from '../host/hostRegistry';
 import { useHostResync } from '../host/useSessionEvents';
 
 /**
@@ -10,6 +10,7 @@ import { useHostResync } from '../host/useSessionEvents';
  * status, so a missed or coalesced push still counts once the next one arrives.
  */
 export function useSettledTurns(): number {
+  const servingHosts = useServingHostIds();
   const [settled, setSettled] = useState(0);
   // Bumped by a resync. A turn may have settled unheard, and an idle session is not in
   // session/statuses, so a resync counts as one; the counters are then read again.
@@ -26,19 +27,20 @@ export function useSettledTurns(): number {
     const off = hostClient.onNotification('session/statusChanged', ({ event }, hostId) => {
       if (seen.observe(hostId, event)) setSettled(count => count + 1);
     });
-    const hostId = hostForSession();
-    void hostClient
-      .request(hostId, 'session/statuses')
-      .then(({ statuses }) => {
-        if (!live) return;
-        for (const event of statuses) seen.observe(hostId, event);
-      })
-      .catch(() => undefined);
+    for (const hostId of servingHosts) {
+      void hostClient
+        .request(hostId, 'session/statuses')
+        .then(({ statuses }) => {
+          if (!live) return;
+          for (const event of statuses) seen.observe(hostId, event);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       live = false;
       off();
     };
-  }, [reads]);
+  }, [reads, servingHosts]);
 
   return settled;
 }
