@@ -6,10 +6,13 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_OWNER_TYPES,
+  CALLABLE_FUNCTION_PLATFORM_AUDIENCES,
+  CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS,
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CALLABLE_FUNCTION_SOURCE_MODES,
+  CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS,
   CALLABLE_FUNCTION_STATES,
-  CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionCapError,
   CallableFunctionGrantVisibilitySchema,
   CallableFunctionProtectedFieldError,
@@ -21,6 +24,8 @@ import {
   type CallableFunctionExample,
   type CallableFunctionNewPin,
   type CallableFunctionOwner,
+  type CallableFunctionPlatformAudience,
+  type CallableFunctionPlatformMark,
   type CallableFunctionPromote,
   type CallableFunctionRepin,
   type ICallableFunctionDataPin,
@@ -29,6 +34,7 @@ import {
   type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
   type ICallableFunctionSharedSource,
+  type ICallableFunctionSource,
   type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
@@ -100,6 +106,29 @@ const CallableFunctionPinSchema = new Schema(
         message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files, each under its own name`,
       },
     },
+    sourcePins: {
+      type: [
+        new Schema(
+          {
+            name: { type: String, required: true, match: CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN },
+            sha256: { type: String, required: true, match: /^[0-9a-f]{64}$/ },
+            bytes: { type: Number, required: true, min: 0 },
+            fetchedAt: { type: Date, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
+const CallableFunctionSourceSchema = new Schema(
+  {
+    name: { type: String, required: true, match: CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN },
+    url: { type: String, required: true, maxlength: CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS, match: /^https:\/\// },
+    mode: { type: String, required: true, enum: CALLABLE_FUNCTION_SOURCE_MODES },
   },
   { _id: false }
 );
@@ -154,7 +183,28 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
         message: `At most ${CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples} worked examples`,
       },
     },
-    trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },
+    sources: {
+      type: [CallableFunctionSourceSchema],
+      default: undefined,
+      validate: {
+        validator: (sources?: { name: string }[]) =>
+          !sources ||
+          (sources.length <= CALLABLE_FUNCTION_DATA_LIMITS.maxSources &&
+            new Set(sources.map(source => source.name)).size === sources.length),
+        message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxSources} sources, each under its own name`,
+      },
+    },
+    trustLabel: { type: String, enum: CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS },
+    platform: {
+      type: new Schema(
+        {
+          setBy: { type: String, required: true },
+          setAt: { type: Date, required: true },
+          audience: { type: String, enum: CALLABLE_FUNCTION_PLATFORM_AUDIENCES },
+        },
+        { _id: false }
+      ),
+    },
     lastServerRun: { type: Schema.Types.Mixed },
     promoted: {
       type: new Schema(
@@ -162,6 +212,10 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
           seq: { type: Number, required: true, min: 1 },
           contract: { type: Schema.Types.Mixed, required: true },
           at: { type: Date, required: true },
+          pin: { type: CallableFunctionPinSchema },
+          description: { type: String, maxlength: FUNCTION_CONTRACT_LIMITS.maxDescriptionLength },
+          trustLabel: { type: String, enum: CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS },
+          sources: { type: [CallableFunctionSourceSchema], default: undefined },
         },
         { _id: false }
       ),
@@ -184,10 +238,11 @@ CallableFunctionSchema.pre('validate', function () {
 
 // Its owner prefix serves the owner's list. One artifact may hold several tools, each under its own name.
 CallableFunctionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'callablefn_owner_slug' });
-// The three arms of listSharedWith.
+// The four arms of listSharedWith.
 CallableFunctionSchema.index({ 'grants.userIds': 1 }, { name: 'callablefn_grant_users' });
 CallableFunctionSchema.index({ 'grants.organizationId': 1, state: 1 }, { name: 'callablefn_grant_org_state' });
 CallableFunctionSchema.index({ 'grants.projectId': 1 }, { name: 'callablefn_grant_project' });
+CallableFunctionSchema.index({ 'platform.audience': 1 }, { name: 'callablefn_platform_audience', sparse: true });
 
 export interface ICallableFunctionModel extends Model<ICallableFunctionDocument & IMongoDocument> {}
 export const CallableFunction: ICallableFunctionModel =
@@ -197,6 +252,7 @@ type FunctionDoc = ICallableFunctionDocument & IMongoDocument;
 
 const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
 const OFFERABLE_PROJECTION = { 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
+const SHARED_PROJECTION = { 'pin.source': 0, 'promoted.pin.source': 0, lastServerRun: 0, caseResults: 0 };
 
 const newPin = (pin: CallableFunctionNewPin): CallableFunctionNewPin => ({
   artifactId: pin.artifactId,
@@ -400,7 +456,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           description: update.description,
           state: 'draft',
         },
-        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, platform: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
     );
@@ -417,7 +473,10 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
       { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
-      { $set: { examples, ...(options.unverify ? { trustLabel: 'unverified' } : {}) } },
+      {
+        $set: { examples, ...(options.unverify ? { trustLabel: 'unverified' } : {}) },
+        ...(options.unverify ? { $unset: { platform: 1 } } : {}),
+      },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
@@ -456,12 +515,63 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
         $set: {
           'pin.seq': update.seq,
           'pin.runtime': update.runtime,
+          'pin.sourcePins': update.sourcePins,
           lastServerRun: update.lastServerRun,
           trustLabel: update.trustLabel,
-          promoted: { seq: update.seq, contract: update.contract, at },
+          promoted: {
+            seq: update.seq,
+            contract: update.contract,
+            at,
+            pin: { ...update.pin, seq: update.seq, runtime: update.runtime, sourcePins: update.sourcePins },
+            description: update.description,
+            trustLabel: update.trustLabel,
+            ...(update.sources ? { sources: update.sources } : {}),
+          },
           state: 'live',
         },
+        // The mark holds only while promotion keeps the function verified.
+        ...(update.trustLabel === 'unverified' ? { $unset: { platform: 1 } } : {}),
       },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPlatformMark(id: string, mark: CallableFunctionPlatformMark): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, state: 'live', trustLabel: 'verified' },
+      // Field by field, so marking again keeps the audience.
+      { $set: { 'platform.setBy': mark.setBy, 'platform.setAt': mark.setAt } },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPlatformAudience(
+    id: string,
+    audience: CallableFunctionPlatformAudience | null
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = audience
+      ? await this.model.findOneAndUpdate(
+          { _id: id, state: 'live', trustLabel: 'verified', platform: { $exists: true } },
+          { $set: { 'platform.audience': audience } },
+          { new: true, runValidators: true }
+        )
+      : await this.model.findOneAndUpdate(
+          { _id: id, 'platform.audience': { $exists: true } },
+          { $unset: { 'platform.audience': 1 } },
+          { new: true, runValidators: true }
+        );
+    return result?.toJSON() ?? null;
+  }
+
+  async clearPlatformMark(id: string): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, platform: { $exists: true } },
+      { $unset: { platform: 1 } },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
@@ -496,17 +606,24 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     const docs = await this.model
       .find(
         {
-          state: 'live',
+          // A draft with a kept promotion is still callable by recipients (`recipientCallableFunction`).
+          $and: [
+            { $or: [{ state: 'live' }, { 'promoted.pin': { $exists: true } }] },
+            {
+              $or: [
+                { 'grants.userIds': reach.userId },
+                { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
+                { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
+                // `isOfferedToEverySignedInPerson`: the record itself, never a kept promotion.
+                { 'platform.audience': 'signed_in', state: 'live', trustLabel: 'verified' },
+              ],
+            },
+          ],
           enabled: true,
           ownerKey: { $ne: reach.userId },
-          $or: [
-            { 'grants.userIds': reach.userId },
-            { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
-            { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
-          ],
         },
         // A recipient reviews the contract; the pinned code never leaves the server.
-        OFFERABLE_PROJECTION
+        SHARED_PROJECTION
       )
       .sort({ updatedAt: -1 })
       // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;
@@ -526,7 +643,33 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
       {
         $set: { 'pin.dataPins': dataPins, state: 'draft' },
-        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, platform: 1, lastServerRun: 1, caseResults: 1 },
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setSources(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    sources: ICallableFunctionSource[]
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
+      {
+        $set: { sources, state: 'draft' },
+        $unset: {
+          'pin.sourcePins': 1,
+          'pin.seq': 1,
+          'pin.runtime': 1,
+          trustLabel: 1,
+          platform: 1,
+          lastServerRun: 1,
+          caseResults: 1,
+        },
       },
       { new: true, runValidators: true }
     );

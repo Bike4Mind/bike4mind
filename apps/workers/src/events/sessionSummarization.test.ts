@@ -612,11 +612,23 @@ describe('sessionSummarization requester write-time re-check', () => {
     expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
+  it('bills once when a failed summary write is replayed', async () => {
+    h.sessionUpdateWithUpdateAccess.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run({ requesterId: SHAREE })).rejects.toThrow('write failed');
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+
+    await expect(run({ requesterId: SHAREE })).resolves.toBeUndefined();
+    expect(h.modelMessages).toHaveBeenCalledTimes(2);
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
     h.sessionUpdateWithUpdateAccess.mockResolvedValue(null);
 
     await run({ requesterId: SHAREE, callTagging: true });
 
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
     expect(h.sessionUpdate).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
     expect(h.updateFabFile).not.toHaveBeenCalled();

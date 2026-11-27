@@ -799,17 +799,28 @@ export class B4mApiClient {
    * an empty list when the key is not found or cannot be told apart from another, so a caller that cannot be
    * identified is never treated as scoped. Stored prefixes differ in length (older keys keep a shorter one),
    * and the list can include other keys, so the longest matching prefix wins and a tie at that length is refused.
-   * Also undefined when the key may not list keys (403: the list needs `api-keys:manage`), since that says
-   * nothing about the key's other scopes; the route the caller is about to use still enforces its own.
+   * A key that may not list keys (403: the list needs `api-keys:manage`) reads its scopes from the refusal's
+   * `X-Api-Key-Scopes` header instead, and gets undefined from a server that sends none.
    */
-  async getOwnKeyScopes(): Promise<string[] | undefined> {
+  getOwnKeyScopes(): Promise<string[] | undefined> {
+    // One lookup per client, shared by every tool group that asks at startup; a failure is not kept.
+    this.ownKeyScopes ??= this.readOwnKeyScopes().catch(error => {
+      this.ownKeyScopes = undefined;
+      throw error;
+    });
+    return this.ownKeyScopes;
+  }
+
+  private ownKeyScopes?: Promise<string[] | undefined>;
+
+  private async readOwnKeyScopes(): Promise<string[] | undefined> {
     const apiKey = this.apiKey;
     if (!apiKey) return undefined;
     let response: unknown;
     try {
       response = await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS });
     } catch (error) {
-      if (httpFailure(error)?.status === 403) return undefined;
+      if (httpFailure(error)?.status === 403) return scopesFromHeader(error);
       throw error;
     }
     const keys = keyScopeListSchema.parse(response);
@@ -1018,6 +1029,16 @@ export function mapBobApiError(error: unknown, baseURL: string, scope: string): 
  * AxiosError from the axios ones (with no status when the request never got a response). Undefined for
  * anything else.
  */
+/**
+ * The key's own scopes from the `X-Api-Key-Scopes` header the server sets on every response to a valid key
+ * (apps/client/server/middlewares/apiKeyAuth.ts), its scope 403 included. Undefined when an older server sent none.
+ */
+function scopesFromHeader(error: unknown): string[] | undefined {
+  const header: unknown = isAxiosError(error) ? error.response?.headers?.['x-api-key-scopes'] : undefined;
+  if (typeof header !== 'string') return undefined;
+  return header.split(',').filter(scope => scope.length > 0);
+}
+
 function httpFailure(error: unknown): { status?: number; data?: unknown } | undefined {
   if (error instanceof B4mApiError) return { status: error.status, data: error.body };
   if (isAxiosError(error)) return { status: error.response?.status, data: error.response?.data };

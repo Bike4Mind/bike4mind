@@ -14,7 +14,7 @@ import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-uti
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { approvalDetails, notifyAfterCommit } from './approval';
 import { assertDelegateCanCreditUser } from './delegateTargets';
+import { isApprovedSelfGrant } from './selfGrant';
 
 // Admin grants carry a `periodEndsAt` 12 months out for accounting / UI
 // labelling. It is informational - there is NO cron that flips status to
@@ -61,7 +62,8 @@ export async function validateGrantOrg({ ownerEmail, seats }: Pick<GrantOrgParam
 export async function grantOrg(req: Request, params: GrantOrgParams, approval?: AdminApproval) {
   const { name, seats, initialCredits, reason } = params;
   const owner = await validateGrantOrg(params);
-  await assertDelegateCanCreditUser(req.user!, owner.id, 'grant an organization to');
+  if (!isApprovedSelfGrant(approval, [owner.id]))
+    await assertDelegateCanCreditUser(req.user!, owner.id, 'grant an organization to');
 
   const now = dayjs();
   const periodStartsAt = now.toDate();
@@ -140,6 +142,8 @@ export async function grantOrg(req: Request, params: GrantOrgParams, approval?: 
       details: {
         ...approvalDetails(approval),
         ownerId: owner.id,
+        selfGrant:
+          isSelfOrImpersonator(req.user!, owner.id) || (approval?.requestedBy.selfIds.includes(owner.id) ?? false),
         seats,
         initialCredits,
         credits: initialCredits,

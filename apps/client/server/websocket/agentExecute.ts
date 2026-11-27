@@ -766,7 +766,8 @@ async function handleReconnect(
   // But both ride the same WS frame, so the budget is shared - see
   // `decideInlineBudgets`. Like `steps`, oversize children fall back to REST
   // hydration via `/api/agent-executions/[id]`.
-  const childSnapshots = await buildChildExecutionSnapshots(execution.id);
+  // Reconnect is gated on execution.userId === userId above, so the caller started the run and sees its own output.
+  const childSnapshots = await buildChildExecutionSnapshots(execution.id, { isOwner: true });
   const childrenJsonSize = childSnapshots.length > 0 ? Buffer.byteLength(JSON.stringify(childSnapshots), 'utf8') : 0;
   const { includeStepsInline, includeChildrenInline } = decideInlineBudgets(stepsJsonSize, childrenJsonSize);
 

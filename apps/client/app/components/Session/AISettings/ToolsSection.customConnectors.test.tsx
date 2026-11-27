@@ -121,6 +121,21 @@ describe('ToolsSection - Functions row', () => {
     expect(toggle(container)!.getAttribute('aria-checked')).toBe('true');
   });
 
+  it('says what the platform label means when an offered tool carries it', () => {
+    mocks.functions.on = true;
+    mocks.functions.list = [
+      { slug: 'beam_deflection', status: 'live', trustLabel: 'platform' },
+      { slug: 'pipe_flow', status: 'live', trustLabel: 'unverified' },
+    ];
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    expect(
+      within(row(container)!).getByText(
+        'beam_deflection (platform), pipe_flow (unverified). Platform: curated and checked by Bike4Mind.'
+      )
+    ).toBeTruthy();
+  });
+
   it('names the first 20 live tools and counts the rest, with the cap in its detail', () => {
     mocks.functions.on = true;
     mocks.functions.list = Array.from({ length: 23 }, (_, i) => ({

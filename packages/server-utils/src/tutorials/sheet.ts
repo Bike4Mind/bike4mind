@@ -212,7 +212,7 @@ async function createSheet(
 // Core's delete also unlinks the file from the user's sessions and removes its stored object. Project and
 // system-file references are left for core's own scrub.
 async function deleteSheet(req: TutorialRequest, fileId: string): Promise<void> {
-  await withTransaction(() =>
+  await withTransaction(session =>
     fabFilesService.deleteFabFile(
       req.user!.id,
       { id: fileId },
@@ -224,6 +224,7 @@ async function deleteSheet(req: TutorialRequest, fileId: string): Promise<void> 
           fabFileChunks: fabFileChunkRepository,
         },
         storage: getFilesStorage(),
+        session,
         logger: req.logger,
       }
     )

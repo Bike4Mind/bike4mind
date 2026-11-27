@@ -74,6 +74,7 @@ vi.mock('@client/app/components/ProfileModal/SettingsTabContent/WebhookSubscript
   h.stub('stub-webhooks')
 );
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/McpSection', () => h.stub('stub-mcp'));
+vi.mock('./customMcp/SharedFunctionsSection', () => h.stub('stub-shared-functions'));
 vi.mock('./customMcp/CustomMcpConnectorPanel', () => ({
   default: ({ presetId }: { presetId?: string }) =>
     React.createElement('div', { 'data-testid': `stub-custom-mcp-${presetId ?? 'custom'}` }),
@@ -111,6 +112,14 @@ beforeEach(() => {
 });
 
 describe('IntegrationsGallery', () => {
+  it('shows functions shared with the person on the Integrations tab, with no MCP setting on', async () => {
+    flags = new Set();
+    renderGallery();
+    expect(screen.getByTestId('stub-shared-functions')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    expect(screen.queryByTestId('stub-shared-functions')).toBeNull();
+  });
+
   it('pins Connected first, groups by category, and puts the roadmap last', () => {
     renderGallery();
 

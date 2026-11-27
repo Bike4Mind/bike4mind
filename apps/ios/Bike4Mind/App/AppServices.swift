@@ -56,6 +56,8 @@ final class AppServices {
   let busyBlocks: any BusyBlocksAPI
   let busyBlockReader: any BusyBlockReader
   let busyBlockSyncer: BusyBlockSyncer
+  /// Which run updates stay quiet after a busy block.
+  let interruptionFeedback: any InterruptionFeedbackAPI
   /// Re-syncs busy blocks from a system background refresh while the app is not opened.
   let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
@@ -158,19 +160,35 @@ final class AppServices {
       #endif
       return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
-    let busyBlocksAPI = ForwardingBusyBlocksAPI {
+    #if DEBUG
+      let fixtureBusySessionID = UUID()
+    #endif
+    let busySession: @MainActor @Sendable () -> BusyBlockSession = {
       #if DEBUG
-        if FixtureServices.isEnabled { return FixtureServices.busyBlocks }
+        if FixtureServices.isEnabled {
+          return BusyBlockSession(id: fixtureBusySessionID, api: FixtureServices.busyBlocks, isCurrent: { true })
+        }
       #endif
-      return BusyBlocksClient(baseURL: auth.environment.baseURL, tokens: auth)
+      return BusyBlocksClient.session(for: auth)
     }
+    let busyBlocksAPI = ForwardingBusyBlocksAPI { busySession().api }
     busyBlocks = busyBlocksAPI
     busyBlockReader = EventKitBusyBlockReader()
-    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader, sessionFactory: busySession)
     busyBlockSyncer = syncer
+    interruptionFeedback = ForwardingInterruptionFeedbackAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.interruptionFeedback }
+      #endif
+      return InterruptionFeedbackClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     busyBlockRefresh = BusyBlockBackgroundRefresh(
-      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
-    ) { await syncer.syncJoiningInFlight() }
+      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler(),
+      prepareSync: {
+        let admission = syncer.captureAdmission()
+        return { await syncer.syncJoiningInFlight(admission: admission) }
+      }
+    )
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -278,6 +296,15 @@ final class AppServices {
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
+  }
+
+  /// Session end, whether the user signed out or the server ended it: Studio tiles and queued captures belong
+  /// to the account that made them, so the next one must not see or send them.
+  func discardAccountContent() async {
+    studioTrackerState?.tracker.reset()
+    studioTrackerState = nil
+    UserDefaultsGenerationStore(environment: auth.environment).save([])
+    await capture.signOut()
   }
 
   var sessionListCache: any SessionListCache { current.cache }
@@ -529,6 +556,18 @@ struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
 
   func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
     try await provider().save(enabled: enabled, blocks: blocks)
+  }
+}
+
+struct ForwardingInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+  let provider: @MainActor @Sendable () -> any InterruptionFeedbackAPI
+
+  func feedback() async throws -> InterruptionFeedback {
+    try await provider().feedback()
+  }
+
+  func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+    try await provider().save(patch)
   }
 }
 

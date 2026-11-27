@@ -4,6 +4,7 @@ import {
   parseFunctionContract,
   projectFunctionSchema,
   reviewHash,
+  validateFunctionValue,
   type CallableFunctionCallOutcome,
   type CallableFunctionStamp,
   type FunctionContract,
@@ -16,6 +17,8 @@ const h = vi.hoisted(() => ({
   customMcpOn: false,
   offered: [] as Record<string, unknown>[],
   bySlug: null as Record<string, unknown> | null,
+  shared: [] as { fn: Record<string, unknown>; access: string }[],
+  reviews: [] as Record<string, unknown>[],
   reads: [] as string[],
 }));
 
@@ -31,6 +34,10 @@ vi.mock('./registry', () => ({
     return h.offered;
   }),
 }));
+vi.mock('./sharing', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  reachableSharedFunctions: vi.fn(async () => h.shared),
+}));
 vi.mock('../mcpConnections/customMcpAccess', () => ({
   resolveCustomMcpContext: vi.fn(async () => ({ enabled: h.customMcpOn, policies: [] })),
   evaluateConnectionPolicy: vi.fn(() => ({ allowed: true })),
@@ -38,7 +45,15 @@ vi.mock('../mcpConnections/customMcpAccess', () => ({
 vi.mock('../mcpConnections/invokeRemoteMcp', () => ({ invokeRemoteMcp: vi.fn() }));
 vi.mock('@bike4mind/database', async orig => ({
   ...(await orig<Record<string, unknown>>()),
-  callableFunctionRepository: { findBySlugForOwner: vi.fn(async () => h.bySlug) },
+  callableFunctionRepository: {
+    findBySlugForOwner: vi.fn(async (slug: string) => (h.bySlug?.slug === slug ? h.bySlug : null)),
+  },
+  callableFunctionReviewRepository: {
+    findForUser: vi.fn(async (_userId: string, ids: string[]) =>
+      h.reviews.filter(r => ids.includes(r.functionId as string))
+    ),
+  },
+  artifactRepository: { findOne: vi.fn(async () => ({ version: 3, deletedAt: null })) },
   callableFunctionCallRepository: { record: vi.fn(async () => ({ id: 'row' })) },
   mcpConnectionRepository: {
     listForUser: vi.fn(async () => [
@@ -115,7 +130,77 @@ beforeEach(() => {
   h.customMcpOn = false;
   h.offered = [fn()];
   h.bySlug = fn();
+  h.shared = [];
+  h.reviews = [];
   h.reads = [];
+});
+
+describe('a function shared with the caller', () => {
+  const SHARED_ID = '6650f0a1b2c3d4e5f6a7b8d0';
+  const shared = () => ({ fn: fn({ id: SHARED_ID, userId: 'owner-2', ownerKey: 'owner-2' }), access: 'person' });
+
+  it('is offered and called only after the recipient reviews it, under a name that does not clash with their own', async () => {
+    h.shared = [shared()];
+    const pending = await createFunctionToolHost('chat').listConnections(USER);
+    expect(pending[0]!.tools.map(tool => tool.name)).toEqual([CONTRACT.name]);
+
+    h.reviews = [
+      { functionId: SHARED_ID, reviewHash: await reviewHash(CONTRACT), enabled: true, approval: 'always_ask' },
+    ];
+    const [offer] = await createFunctionToolHost('chat').listConnections(USER);
+    const sharedName = `${CONTRACT.name}_${SHARED_ID.slice(-6)}`;
+    expect(offer!.tools.map(tool => [tool.name, tool.approval])).toEqual([
+      [CONTRACT.name, 'default'],
+      [sharedName, 'always_ask'],
+    ]);
+    expect(await createFunctionToolHost('agent').listConnections(USER, { headless: true })).toMatchObject([
+      { tools: [{ name: CONTRACT.name }] },
+    ]);
+
+    const dispatch = vi.fn(async () => dispatched());
+    const host = createFunctionToolHost('chat', { dispatch });
+    const held = await host.callTool({
+      connectionId: FUNCTION_CONNECTION_ID,
+      userId: USER,
+      toolName: sharedName,
+      args: {},
+      approved: false,
+    });
+    expect(held.result.isError).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    await host.callTool({
+      connectionId: FUNCTION_CONNECTION_ID,
+      userId: USER,
+      toolName: sharedName,
+      args: { load: 1, span: 2 },
+      approved: true,
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      caller: { id: USER },
+      functionId: SHARED_ID,
+      args: { load: 1, span: 2 },
+      surface: 'chat',
+      approved: true,
+    });
+  });
+
+  it('is dropped from the offer once the share is revoked', async () => {
+    h.shared = [shared()];
+    h.reviews = [{ functionId: SHARED_ID, reviewHash: await reviewHash(CONTRACT), enabled: true, approval: 'default' }];
+    h.offered = [];
+    h.bySlug = null;
+    expect((await createFunctionToolHost('chat').listConnections(USER))[0]!.tools).toHaveLength(1);
+    h.shared = [];
+    expect(await createFunctionToolHost('chat').listConnections(USER)).toEqual([]);
+    const response = await createFunctionToolHost('chat', { dispatch: vi.fn() }).callTool({
+      connectionId: FUNCTION_CONNECTION_ID,
+      userId: USER,
+      toolName: CONTRACT.name,
+      args: {},
+      approved: true,
+    });
+    expect(response.result.isError).toBe(true);
+  });
 });
 
 describe('listing', () => {
@@ -242,6 +327,27 @@ describe('calling', () => {
     const { result } = await call(createFunctionToolHost('chat', { dispatch }));
     expect(result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ outcome: 'input_invalid', problems }) }],
+      isError: true,
+    });
+  });
+
+  it('names the field, the limit, and the length of an over-long output text', async () => {
+    const problems = validateFunctionValue(
+      { type: 'object', additionalProperties: false, required: [], properties: { report: { type: 'string' } } },
+      { report: 'x'.repeat(4000) }
+    );
+    const dispatch = vi.fn(async () => dispatched({ outcome: 'output_invalid', outputs: undefined, problems }));
+    const { result } = await call(createFunctionToolHost('chat', { dispatch }));
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            outcome: 'output_invalid',
+            problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000)' }],
+          }),
+        },
+      ],
       isError: true,
     });
   });

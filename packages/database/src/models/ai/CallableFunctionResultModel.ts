@@ -1,6 +1,6 @@
 import {
-  CALLABLE_FUNCTION_CALL_OUTCOMES,
   CALLABLE_FUNCTION_RESULT_MAX_BYTES,
+  CALLABLE_FUNCTION_RESULT_OUTCOMES,
   CALLABLE_FUNCTION_RESULT_STATES,
   CALLABLE_FUNCTION_RESULT_TTL_SECONDS,
   type ICallableFunctionResult,
@@ -22,7 +22,7 @@ const CallableFunctionResultSchema = new Schema<ICallableFunctionResultDocument>
     organizationId: { type: String },
     state: { type: String, enum: CALLABLE_FUNCTION_RESULT_STATES, required: true },
     input: { type: Schema.Types.Mixed },
-    outcome: { type: String, enum: CALLABLE_FUNCTION_CALL_OUTCOMES },
+    outcome: { type: String, enum: CALLABLE_FUNCTION_RESULT_OUTCOMES },
     reason: { type: String, match: CODE },
     errorClass: { type: String, match: CLASS_NAME },
     problems: { type: Schema.Types.Mixed },
@@ -110,7 +110,7 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
 
   /**
    * Stores how the call ended and drops its inputs. Outputs over the 5 MB cap are not stored; the call reads
-   * `output_too_large` instead. Returns the outcome as stored.
+   * `output_too_large` instead. A cancelled call is left as it is. Returns the outcome as stored.
    */
   async finish(callId: string, end: CallableFunctionResultEnd): Promise<CallableFunctionResultEnd['outcome']> {
     const tooLarge = end.outputs !== undefined && jsonBytes(end.outputs) > CALLABLE_FUNCTION_RESULT_MAX_BYTES;
@@ -118,12 +118,29 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
       ? { outcome: 'output_too_large', reason: 'result_too_large', ...(end.stamp ? { stamp: end.stamp } : {}) }
       : end;
     const set = Object.fromEntries(Object.entries(stored).filter(([, value]) => value !== undefined));
-    await this.model.updateOne(
-      { callId },
+    const ended = await this.model.updateOne(
+      { callId, outcome: { $ne: 'cancelled' } },
       { $set: { ...set, state: 'finished' }, $unset: { input: 1 } },
       { runValidators: true }
     );
+    if (ended.matchedCount === 0 && (await this.model.exists({ callId, outcome: 'cancelled' })) !== null) {
+      return 'cancelled';
+    }
     return stored.outcome;
+  }
+
+  /**
+   * Ends the caller's own call as `cancelled` while it is `queued` or `running`, so it is never claimed and a run
+   * still going cannot store its result. Returns the cancelled call; null when it had already finished or is not
+   * the caller's.
+   */
+  async cancel(callId: string, callerUserId: string): Promise<ICallableFunctionResultDocument | null> {
+    const keptSince = new Date(Date.now() - CALLABLE_FUNCTION_RESULT_TTL_SECONDS * 1000);
+    return this.model.findOneAndUpdate(
+      { callId, callerUserId, state: { $in: ['queued', 'running'] }, createdAt: { $gt: keptSince } },
+      { $set: { state: 'finished', outcome: 'cancelled' }, $unset: { input: 1 } },
+      { new: true, runValidators: true, projection: { input: 0 } }
+    );
   }
 
   /**

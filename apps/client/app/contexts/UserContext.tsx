@@ -434,9 +434,8 @@ export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): 
  * everything else survives. A schema `default` is written at save time, so defaulted fields
  * normally arrive; one with no default, like `platformEmailAddress`, does not.
  *
- * The server additionally strips stripeCustomerId and resetPasswordToken from `users` pushes (see
- * resolveFieldLimits), which merging preserves as well. `password` is deliberately not in that
- * list: it is `select: false` in UserModel, so it never reaches the store in the first place.
+ * The server additionally strips the secret fields (USER_SECRET_FIELDS and the secret sub-paths of
+ * the integration objects) from `users` pushes (see resolveFieldLimits), which merging preserves as well.
  *
  * `existing` may be null (no user yet), in which case the pushed document is adopted as-is.
  * Exported for unit testing.

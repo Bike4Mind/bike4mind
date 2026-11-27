@@ -29,7 +29,23 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: (session: unknown) => unknown) => fn({}) }));
+// Mirrors withTransaction: work queued with runAfterCommit runs only once the callback resolves.
+vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: (session: unknown) => unknown) => {
+    const queue = new Map<string, () => Promise<unknown>>();
+    const result = await fn({ queue });
+    for (const work of queue.values()) await work();
+    return result;
+  },
+  runAfterCommit: (
+    session: { queue: Map<string, () => Promise<unknown>> },
+    key: string,
+    work: () => Promise<unknown>
+  ) => {
+    session.queue.set(key, work);
+    return true;
+  },
+}));
 vi.mock('@bike4mind/database/content', () => ({
   AppFile: class {
     id = 'new-file-id';
@@ -135,6 +151,43 @@ describe('upload-logo admin audit', () => {
       summary: 'removed the custom light logo',
       changes: [{ field: 'logoSettings.customLogoUrl', before: 'old.png', after: '' }],
     });
+  });
+
+  it('DELETE keeps the old object when the audit write rejects', async () => {
+    h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
+    h.audit.mockRejectedValue(new Error('audit down'));
+
+    await run('DELETE', { isDarkMode: false });
+
+    expect(h.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('POST deletes the replaced logo object once the transaction commits', async () => {
+    h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
+
+    const { error } = await run('POST', { fileName: 'logo.png', mimeType: 'image/png', fileSize: 321 });
+
+    expect(error).toBeUndefined();
+    expect(h.deleteObject).toHaveBeenCalledWith('admin/logos/old.png');
+  });
+
+  it('POST keeps the old object when the audit write rejects', async () => {
+    h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
+    h.audit.mockRejectedValue(new Error('audit down'));
+
+    await run('POST', { fileName: 'logo.png', mimeType: 'image/png', fileSize: 321 });
+
+    expect(h.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('DELETE still succeeds when the post-commit object delete fails', async () => {
+    h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
+    h.deleteObject.mockRejectedValue(new Error('s3 down'));
+
+    const { res, error } = await run('DELETE', { isDarkMode: false });
+
+    expect(error).toBeUndefined();
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('DELETE does not report success when the audit write rejects', async () => {

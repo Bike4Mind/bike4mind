@@ -1,11 +1,12 @@
 import childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadEnv } from 'electron-vite';
+import { loadEnv } from 'vite';
 import config from '../../../electron.vite.config';
 
 // Isolate developer-specific .env files while exercising the real exported build config.
-vi.mock('electron-vite', async importOriginal => {
-  const actual = await importOriginal<typeof import('electron-vite')>();
+// buildShared.ts reads the files through vite's loadEnv, so that is the one to replace.
+vi.mock('vite', async importOriginal => {
+  const actual = await importOriginal<typeof import('vite')>();
   return { ...actual, loadEnv: vi.fn() };
 });
 

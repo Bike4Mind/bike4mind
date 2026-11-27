@@ -5,7 +5,7 @@ import {
   LogoSettings,
   settingsMap,
 } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { runAfterCommit, withTransaction } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
@@ -25,6 +25,31 @@ const AdminLogoUploadInput = FileGeneratePresignedUrlRequestInput.extend({
   isDarkMode: z.boolean().prefault(false),
   useBothLogos: z.boolean().prefault(false),
 });
+
+/** Deletes the retired logo object once the transaction commits; a failure is logged and never rolls anything back. */
+function deleteLogoAfterCommit(
+  session: Parameters<typeof runAfterCommit>[0],
+  storage: S3Storage,
+  logoType: 'light' | 'dark',
+  fileKey: string
+) {
+  // If the stored value is just a filename, prepend the admin/logos/ path
+  const key = fileKey.startsWith('admin/logos/') ? fileKey : `admin/logos/${fileKey}`;
+  const run = async () => {
+    try {
+      await storage.delete(key);
+    } catch (error) {
+      logger.error(`Post-commit delete of the ${logoType} logo failed; object left orphaned`, {
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (!runAfterCommit(session, `adminLogo|${logoType}`, run)) {
+    logger.warn('Logo delete could not be queued after commit; running it inline', { logoType });
+    void run();
+  }
+}
 
 async function getLogoSettings(session?: any): Promise<LogoSettings> {
   const logoSettingsDoc = await AdminSettings.findOne({ settingName: 'logoSettings' }).session(session);
@@ -97,17 +122,7 @@ const handler = adminApi({
 
         // Clean up existing logo file if it exists
         const existingFileKey = data.isDarkMode ? currentSettings.customDarkLogoUrl : currentSettings.customLogoUrl;
-        if (existingFileKey) {
-          try {
-            // If the stored value is just a filename, prepend the admin/logos/ path
-            const s3KeyToDelete = existingFileKey.startsWith('admin/logos/')
-              ? existingFileKey
-              : `admin/logos/${existingFileKey}`;
-            await storage.delete(s3KeyToDelete);
-          } catch (error) {
-            logger.warn('Failed to delete existing logo file', { logoType, error });
-          }
-        }
+        if (existingFileKey) deleteLogoAfterCommit(session, storage, logoType, existingFileKey);
 
         // Create new file key and AppFile record
         const fileKey = `custom-${logoType}-logo-${crypto.randomUUID()}.${ext}`;
@@ -183,11 +198,12 @@ const handler = adminApi({
         const fileKey = isDarkMode ? currentSettings.customDarkLogoUrl : currentSettings.customLogoUrl;
 
         if (fileKey) {
-          // Remove the logo from S3
-          const storage = new S3Storage(Resource.appFilesBucket.name);
-          // If the stored value is just a filename, prepend the admin/logos/ path
-          const s3KeyToDelete = fileKey.startsWith('admin/logos/') ? fileKey : `admin/logos/${fileKey}`;
-          await storage.delete(s3KeyToDelete);
+          deleteLogoAfterCommit(
+            session,
+            new S3Storage(Resource.appFilesBucket.name),
+            isDarkMode ? 'dark' : 'light',
+            fileKey
+          );
         }
 
         // Update logo settings to remove the URL

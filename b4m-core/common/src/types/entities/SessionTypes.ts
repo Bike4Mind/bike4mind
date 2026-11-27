@@ -784,6 +784,16 @@ export type ListSessionsByUserQuery = {
   limit: number;
 };
 
+/**
+ * listChangesByUserId: the same own-list filters, but every session changed at or after `since`,
+ * deleted ones included, ordered by (updatedAt, _id) ascending.
+ */
+export type ListSessionChangesByUserQuery = Omit<ListSessionsByUserQuery, 'beforeId'> & {
+  since: Date;
+  /** Exclusive keyset position: the previous page's last (updatedAt, _id). */
+  after?: { at: Date; id: string };
+};
+
 /** Set by the server on a session walking a core tutorial; no request schema carries it. */
 export interface SessionTutorialMarker {
   owner: 'core';
@@ -1072,11 +1082,11 @@ export interface ISession {
 /**
  * How long a notebook whose tagging completion produced no usable tags stays ineligible.
  *
- * The tagging handler bills `recordSessionOperationalUsage` BEFORE it parses, so a notebook the
- * model can never produce tags for costs one operations-model call per grooming run. Stamping
- * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
- * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
- * one notebook. A cooldown bounds the spend without that, the same trade
+ * A parse failure still spends (and bills) an operations-model call, so a notebook the model can
+ * never produce tags for costs one call per grooming run. Stamping `taggedAt` on that failure
+ * would bound the spend but close the gate forever on a notebook that was never tagged: no
+ * operator or automated path clears `taggedAt`, only a user re-importing that one notebook. A
+ * cooldown bounds the spend without that, the same trade
  * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
  * give-up state is unrecoverable when there is no operator re-run route.
  *
@@ -1255,6 +1265,8 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
    */
   listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
+
+  listChangesByUserId: (query: ListSessionChangesByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;

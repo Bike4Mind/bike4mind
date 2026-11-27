@@ -26,6 +26,7 @@
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let busyBlocks: any BusyBlocksAPI = FixtureBusyBlocksAPI()
+    static let interruptionFeedback: any InterruptionFeedbackAPI = FixtureInterruptionFeedbackAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -351,6 +352,18 @@
 
       func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
         stored = BusyBlocksState(enabled: enabled, blocks: enabled ? blocks : [])
+        return stored
+      }
+    }
+
+    private actor FixtureInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+      private var stored = InterruptionFeedback()
+
+      func feedback() async throws -> InterruptionFeedback { stored }
+
+      func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+        if let value = patch.agentCompleted { stored.agentCompleted = value }
+        if let value = patch.agentFailed { stored.agentFailed = value }
         return stored
       }
     }

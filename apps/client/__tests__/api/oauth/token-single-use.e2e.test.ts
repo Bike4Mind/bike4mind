@@ -114,6 +114,7 @@ const redeem = async (params: { code: string; client_id: string; redirect_uri: s
       code_verifier: VERIFIER,
     },
   });
+  Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };

@@ -26,9 +26,10 @@ const MAX_URL_CHARS = 8192;
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Only the known fields, a safe name each, no repeated name, and at most the pin limit. */
+/** Only the known fields, a safe name each, no repeated name, and at most the data files and sources together. */
 export function validRunData(raw: unknown): raw is CallableFunctionRunData[] {
-  if (!Array.isArray(raw) || raw.length > CALLABLE_FUNCTION_DATA_LIMITS.maxPins) return false;
+  const maxEntries = CALLABLE_FUNCTION_DATA_LIMITS.maxPins + CALLABLE_FUNCTION_DATA_LIMITS.maxSources;
+  if (!Array.isArray(raw) || raw.length > maxEntries) return false;
   const names = new Set<string>();
   for (const entry of raw) {
     if (!isObject(entry)) return false;

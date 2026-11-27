@@ -1,7 +1,7 @@
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { loadShadowTierSettings } from '@bike4mind/services/llm/shadowTier';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
-import { RequestHandler } from 'express';
+import type { Request, RequestHandler } from 'express';
 import {
   checkApiKeyRateLimit,
   rateLimitRefusalInfo,
@@ -32,6 +32,8 @@ export interface ApiKeyRateLimitOptions {
    * routes that must stay reachable with an exhausted key.
    */
   counter?: RateLimitCounter;
+  /** Requests it returns true for are not charged to the key's counters. The key is still authenticated and scoped. */
+  skip?: (req: Request) => boolean;
 }
 
 /** RFC 7231 safe methods: no state change, so cheap to serve and safe to exempt. */
@@ -58,7 +60,7 @@ export const apiKeyRateLimit =
   (options: ApiKeyRateLimitOptions = {}): RequestHandler =>
   async (req, res, next) => {
     // Only apply to API key authenticated requests
-    if (!req.apiKeyInfo) {
+    if (!req.apiKeyInfo || options.skip?.(req)) {
       return next();
     }
 

@@ -32,6 +32,8 @@ export interface RecordSessionOperationalUsageArgs {
   completionInfo?: CompletionInfo;
   /** Set just before the llm.complete call so latency reflects the model call, not setup. */
   startTime: number;
+  /** When the model call finished; defaults to now. Pass it when recording after later work. */
+  endTime?: number;
   logger: Logger;
 }
 
@@ -99,7 +101,7 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
           turns: completionInfo?.turnUsage,
           tierBasisTokens: inputTokens + cacheReadTokens + cacheWriteTokens,
         }),
-        latencyMs: Date.now() - args.startTime,
+        latencyMs: (args.endTime ?? Date.now()) - args.startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,
         operation: args.operation,

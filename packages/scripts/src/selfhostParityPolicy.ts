@@ -316,6 +316,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
+  hostedOnly(
+    'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
+    '1509db58716ac7ef24d43c1a3f1bee9334f5ea9f18403fc1815ce458a8a2d0b5',
+    'Isolates hosted callable function source fetches outside the VPC with no secrets; self-host runs the same pinned fetch in-process when no fetch function is named.'
+  ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
   gap(
     'function:infra/database.ts:DatabaseMigrator',

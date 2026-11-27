@@ -71,6 +71,13 @@ export interface ScopeImportState {
   webNotebooks: Record<string, WebNotebookCursor>;
   webLastSyncAt: string | null;
   webLastSyncMs: number | null;
+  /**
+   * The web change feed's high-water mark: the latest notebook `updatedAt` this account has read
+   * through. Null until a complete full list, or against a server without the feed.
+   */
+  webChangeMark: string | null;
+  /** When the last complete full list ran (ms), the reconciliation that also catches hard deletes. */
+  webFullListAt: number | null;
   /** Sidebar sync hints this account closed; they never come back. */
   dismissedHints: SyncHintId[];
 }
@@ -87,6 +94,8 @@ function emptyScopeState(): ScopeImportState {
     webNotebooks: {},
     webLastSyncAt: null,
     webLastSyncMs: null,
+    webChangeMark: null,
+    webFullListAt: null,
     dismissedHints: [],
   };
 }
@@ -162,6 +171,13 @@ export class ImportStateStore {
         const parsed = raw as Partial<ScopeImportState> | null;
         const state = parsed?.version === 1 ? { ...emptyScopeState(), ...parsed } : emptyScopeState();
         state.dismissedHints = Array.isArray(state.dismissedHints) ? state.dismissedHints.filter(isSyncHintId) : [];
+        // A mark the server would reject only costs one full list to replace.
+        if (typeof state.webChangeMark !== 'string' || Number.isNaN(Date.parse(state.webChangeMark))) {
+          state.webChangeMark = null;
+        }
+        if (typeof state.webFullListAt !== 'number' || !Number.isFinite(state.webFullListAt)) {
+          state.webFullListAt = null;
+        }
         this.loaded.set(scopeKey, state);
         return state;
       });

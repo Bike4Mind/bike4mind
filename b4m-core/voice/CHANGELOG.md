@@ -1,5 +1,41 @@
 # @bike4mind/voice
 
+## 0.11.15
+
+### Patch Changes
+
+- Updated dependencies [[`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4)]:
+  - @bike4mind/common@31.4.0
+  - @bike4mind/llm-adapters@2.10.3
+  - @bike4mind/utils@13.1.5
+
+## 0.11.14
+
+### Patch Changes
+
+- Updated dependencies [[`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d)]:
+  - @bike4mind/common@31.3.2
+  - @bike4mind/llm-adapters@2.10.2
+  - @bike4mind/utils@13.1.4
+
+## 0.11.13
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+  - @bike4mind/llm-adapters@2.10.1
+  - @bike4mind/utils@13.1.3
+
+## 0.11.12
+
+### Patch Changes
+
+- Updated dependencies [[`25d3b82`](https://github.com/Bike4Mind/bike4mind/commit/25d3b82431087b7e5b393bc049ce6c53804d7a48), [`cf0972e`](https://github.com/Bike4Mind/bike4mind/commit/cf0972ebfac550839150f9a0773fa27ed103c9bc), [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70), [`1338927`](https://github.com/Bike4Mind/bike4mind/commit/1338927868a5f77b806633effcc8a86da7841927), [`8792f27`](https://github.com/Bike4Mind/bike4mind/commit/8792f27429dc3a9913edcb78e9b9b65ce167c880), [`56e6187`](https://github.com/Bike4Mind/bike4mind/commit/56e61877fc1120b0f7300eb3735ff282be194844), [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273), [`a86ed73`](https://github.com/Bike4Mind/bike4mind/commit/a86ed73ee8fd025c32849b4fcf9b605633688a80), [`5b285a2`](https://github.com/Bike4Mind/bike4mind/commit/5b285a2304fd865fba39fd15130a69339424d99a), [`b25356b`](https://github.com/Bike4Mind/bike4mind/commit/b25356bef91f562d363749d1174246e0d51dd186), [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0), [`8e8cbf2`](https://github.com/Bike4Mind/bike4mind/commit/8e8cbf2285aef973abf3b72c055c48e80f55963b)]:
+  - @bike4mind/common@31.3.0
+  - @bike4mind/llm-adapters@2.10.0
+  - @bike4mind/utils@13.1.2
+
 ## 0.11.11
 
 ### Patch Changes

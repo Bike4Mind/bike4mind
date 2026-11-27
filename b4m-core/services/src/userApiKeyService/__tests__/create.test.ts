@@ -815,6 +815,29 @@ describe('userApiKeyService - createUserApiKey confined-scope mint guard', () =>
     expect(repo.createIfUnderCap).toHaveBeenCalled();
   });
 
+  it('mints functions:invoke with functions:author, the one pair of confined scopes that may share a key', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR] },
+      { trust: TRUSTED, db: { userApiKeys: repo } }
+    );
+    expect(result.id).toBe('key-1');
+  });
+
+  it.each([ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.WRITE_FILES, ApiKeyScope.SLACK_POST])(
+    'refuses functions:author minted with %s',
+    async second => {
+      await expect(
+        createUserApiKey(
+          'user1',
+          { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_AUTHOR, second] },
+          { trust: TRUSTED, db: { userApiKeys: repo } }
+        )
+      ).rejects.toThrow(/confined scope/i);
+      expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.SLACK_POST, ApiKeyScope.ME_READ])(
     'refuses functions:invoke minted with %s',
     async second => {
@@ -838,6 +861,41 @@ describe('userApiKeyService - createUserApiKey confined-scope mint guard', () =>
     );
     expect(result.id).toBe('key-1');
     expect(repo.createIfUnderCap).toHaveBeenCalled();
+  });
+
+  it('mints the functions scopes beside the chat scopes on an exchange key, and on no other key', async () => {
+    const scopes = [
+      ApiKeyScope.AI_GENERATE,
+      ApiKeyScope.ME_READ,
+      ApiKeyScope.FUNCTIONS_INVOKE,
+      ApiKeyScope.FUNCTIONS_AUTHOR,
+    ];
+    const exchange = {
+      name: 'AI (federated: App)',
+      scopes,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      metadata: { oauthClientId: 'client-a' },
+    };
+    await createExchangeUserApiKey('user1', exchange, { trust: TRUSTED, db: { userApiKeys: repo } });
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
+
+    await expect(
+      createUserApiKey('user1', { ...chatParams, scopes }, { trust: TRUSTED, db: { userApiKeys: repo } })
+    ).rejects.toThrow(/confined scope/i);
+    for (const other of [ApiKeyScope.EMBED_CHAT, ApiKeyScope.SLACK_POST]) {
+      await expect(
+        createExchangeUserApiKey(
+          'user1',
+          { ...exchange, scopes: [ApiKeyScope.FUNCTIONS_INVOKE, other] },
+          { trust: TRUSTED, db: { userApiKeys: repo } }
+        )
+      ).rejects.toThrow(/confined scope/i);
+    }
+    expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
   });
 
   it('reports the confined-scope reason before the embed agentId requirement', async () => {

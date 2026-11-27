@@ -3,16 +3,24 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   ConflictError,
   NotFoundError,
+  diffFunctionContracts,
   effectiveCallableFunctionStatus,
+  isOfferedToEverySignedInPerson,
+  recipientCallableFunction,
   reviewHash,
   toCallableFunctionPublic,
   toCallableFunctionShared,
   type CallableFunctionAccess,
   type CallableFunctionGrantVisibility,
+  type CallableFunctionReviewedInterface,
+  type FunctionContract,
+  type FunctionContractChange,
   type ICallableFunction,
   type ICallableFunctionGrants,
   type ICallableFunctionPublic,
+  type ICallableFunctionReview,
   type ICallableFunctionShared,
+  type ICallableFunctionSharedSource,
 } from '@bike4mind/common';
 import {
   artifactRepository,
@@ -57,18 +65,27 @@ async function isOrganizationMember(userId: string, organizationId: string): Pro
 }
 
 /**
- * How `caller` reaches `fn`, or null when they do not: the owner; while the function is live, a person named in
- * the grants; a member of the granted project; or a member of the granted organization while that organization has
- * callable functions on. A project or organization grant holds only while the owner is still a member of it.
+ * How `caller` reaches `fn`, or null when they do not: the owner; while the function is live or keeps a promotion,
+ * a person named in the grants; a member of the granted project; or a member of the granted organization while that
+ * organization has callable functions on. A project or organization grant holds only while the owner is still a
+ * member of it. Failing those, any signed-in person while an admin offers the live record to everyone.
  */
 export async function canCallFunction(
   caller: { id: string },
-  fn: Pick<ICallableFunction, 'ownerType' | 'ownerKey' | 'grants' | 'state'>
+  fn: Pick<ICallableFunction, 'ownerType' | 'ownerKey' | 'grants' | 'state'> &
+    Partial<Pick<ICallableFunction, 'promoted' | 'trustLabel' | 'platform'>>
 ): Promise<CallableFunctionAccess | null> {
   if (fn.ownerType === 'user' && fn.ownerKey === caller.id) return 'owner';
+  return (await grantedAccess(caller, fn)) ?? (isOfferedToEverySignedInPerson(fn) ? 'signed_in' : null);
+}
+
+async function grantedAccess(
+  caller: { id: string },
+  fn: Pick<ICallableFunction, 'ownerKey' | 'grants' | 'state'> & Partial<Pick<ICallableFunction, 'promoted'>>
+): Promise<Exclude<CallableFunctionAccess, 'owner' | 'signed_in'> | null> {
   const grants = fn.grants;
-  // A repin returns the function to draft and keeps its grants; they apply again at the next promotion.
-  if (!grants || fn.state !== 'live') return null;
+  // A repin returns the function to draft and keeps its grants: recipients keep the last promotion meanwhile.
+  if (!grants || (fn.state !== 'live' && !fn.promoted?.pin)) return null;
   if (grants.userIds.includes(caller.id)) return 'person';
   if (grants.visibility === 'project' && grants.projectId) {
     const { projectId } = grants;
@@ -149,7 +166,7 @@ export async function shareCallableFunction(
     });
   }
 
-  const userIds = [...new Set(input.userIds)].filter(userId => userId !== actor.id);
+  const userIds = [...new Set(input.userIds.map(userId => userId.trim()))].filter(userId => userId !== actor.id);
   const { maxUserIds } = CALLABLE_FUNCTION_GRANT_LIMITS;
   if (userIds.length > maxUserIds) {
     throw new BadRequestError(`A tool can be shared with at most ${maxUserIds} people.`, { code: 'too_many_people' });
@@ -160,17 +177,19 @@ export async function shareCallableFunction(
   }
 
   const grants: ICallableFunctionGrants = { visibility: input.visibility, userIds };
+  const projectId = input.projectId?.trim();
+  const organizationId = input.organizationId?.trim();
   if (input.visibility === 'project') {
-    if (!input.projectId || !(await isProjectMember(actor.id, input.projectId))) {
+    if (!projectId || !(await isProjectMember(actor.id, projectId))) {
       throw new NotFoundError('Project not found');
     }
-    grants.projectId = input.projectId;
+    grants.projectId = projectId;
   } else if (input.visibility === 'organization') {
     const orgIds = await organizationRepository.findMembershipOrgIds(actor.id);
-    if (!input.organizationId || !orgIds.includes(input.organizationId)) {
+    if (!organizationId || !orgIds.includes(organizationId)) {
       throw new NotFoundError('Organization not found');
     }
-    grants.organizationId = input.organizationId;
+    grants.organizationId = organizationId;
   } else if (userIds.length === 0) {
     throw new BadRequestError('Name at least one person, a project, or an organization.', { code: 'no_recipients' });
   }
@@ -183,21 +202,70 @@ export async function shareCallableFunction(
     });
   }
 
-  // A person the edit drops, or everyone outside the new grant when its scope changed, starts at pending if added back.
-  const before = current.grants;
-  const scopeChanged =
-    before?.visibility !== grants.visibility ||
-    before?.projectId !== grants.projectId ||
-    before?.organizationId !== grants.organizationId;
-  if (scopeChanged) {
-    await callableFunctionReviewRepository.deleteForFunctionExceptUsers(saved.id, [...userIds, actor.id]);
-  } else {
-    await callableFunctionReviewRepository.deleteForUsers(
-      saved.id,
-      (before?.userIds ?? []).filter(userId => !userIds.includes(userId))
-    );
-  }
+  await dropUncoveredCallableFunctionReviews(saved);
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
+}
+
+/**
+ * Deletes the review of every person `fn` no longer reaches, after its grants or its audience change: a reviewer
+ * still covered keeps theirs, and anyone else starts at pending if covered again.
+ */
+export async function dropUncoveredCallableFunctionReviews(
+  fn: Parameters<typeof canCallFunction>[1] & { id: string }
+): Promise<void> {
+  const reviews = await callableFunctionReviewRepository.find({ functionId: fn.id }, { userId: 1 });
+  const reviewers = [...new Set(reviews.map(review => review.userId))];
+  const covered = await Promise.all(reviewers.map(userId => canCallFunction({ id: userId }, fn)));
+  const kept = reviewers.filter((_userId, index) => covered[index] !== null);
+  await callableFunctionReviewRepository.deleteForFunctionExceptUsers(fn.id, kept);
+}
+
+/**
+ * Lower than the general address lookup, since this one reaches every account rather than the caller's
+ * organizations. Shared by the app and public recipient routes, so one bucket counts both.
+ */
+export const CALLABLE_FUNCTION_RECIPIENT_RATE_LIMIT = {
+  limit: 20,
+  windowMs: 60 * 1000,
+  bucket: 'callable-functions-recipient',
+} as const;
+
+/**
+ * The account holding exactly `email`, for the owner of function `id` to name in a share: any account, not only one
+ * in the owner's organizations. An address with no account answers null, as the general lookup does.
+ */
+export async function findCallableFunctionRecipient(
+  actor: CallableFunctionActor,
+  id: string,
+  email: string
+): Promise<CallableFunctionSharePerson | null> {
+  if (!(await callableFunctionRepository.findByIdForOwner(id, userOwner(actor)))) throw notFound();
+  const address = email.trim();
+  if (!address) return null;
+  const [user] = await userRepository.find({ email: address }, { name: 1, limit: 1 });
+  if (!user) return null;
+  return { id: String(user._id), name: (user as { name?: string }).name || address };
+}
+
+/** The interface a review covers, kept beside it so a later change can be listed. */
+export function reviewedInterface(contract: FunctionContract): CallableFunctionReviewedInterface {
+  const { name, description, inputs, outputs } = contract;
+  return { name, description, inputs, outputs };
+}
+
+/**
+ * The interface changes since `review`, by field: empty when it is current, undefined when there is no review or
+ * it predates keeping the reviewed interface.
+ */
+export function interfaceChangesSince(
+  review: Pick<ICallableFunctionReview, 'reviewHash' | 'reviewed'> | null,
+  contract: FunctionContract,
+  hash: string
+): FunctionContractChange[] | undefined {
+  if (!review?.reviewed) return undefined;
+  if (review.reviewHash === hash) return [];
+  const diff = diffFunctionContracts(review.reviewed, reviewedInterface(contract));
+  return diff ? [...diff.breaking, ...diff.compatible] : undefined;
 }
 
 /** Removes every grant and review: a former recipient's next call is refused, and a new share starts at pending. */
@@ -217,15 +285,7 @@ export async function listSharedCallableFunctions(actor: CallableFunctionActor):
     projectIdsForMember(actor.id),
     organizationRepository.findMembershipOrgIds(actor.id),
   ]);
-  const candidates = await callableFunctionRepository.listSharedWith({ userId: actor.id, projectIds, organizationIds });
-  const reachable: { fn: (typeof candidates)[number]; access: Exclude<CallableFunctionAccess, 'owner'> }[] = [];
-  for (const fn of candidates) {
-    const access = await canCallFunction(actor, fn);
-    if (!access || access === 'owner') continue;
-    const head = await readHead({ id: fn.userId }, fn.pin.artifactId);
-    if (effectiveCallableFunctionStatus(fn, head) !== 'live') continue;
-    reachable.push({ fn, access });
-  }
+  const reachable = await reachableSharedFunctions(actor, { projectIds, organizationIds });
   const ownerIds = [...new Set(reachable.map(({ fn }) => fn.userId))];
   const [names, reviews] = await Promise.all([
     displayNamesOf(ownerIds),
@@ -237,12 +297,43 @@ export async function listSharedCallableFunctions(actor: CallableFunctionActor):
   const ownerNames = new Map(ownerIds.map((id, index) => [id, names[index]!]));
   const reviewOf = new Map(reviews.map(review => [review.functionId, review]));
   return Promise.all(
-    reachable.map(async ({ fn, access }) =>
-      toCallableFunctionShared(fn, access, {
+    reachable.map(async ({ fn, access }) => {
+      const hash = await reviewHash(fn.contract);
+      const review = reviewOf.get(fn.id) ?? null;
+      return toCallableFunctionShared(fn, access, {
         ownerName: ownerNames.get(fn.userId)!,
-        reviewHash: await reviewHash(fn.contract),
-        review: reviewOf.get(fn.id) ?? null,
-      })
-    )
+        reviewHash: hash,
+        review,
+        changes: interfaceChangesSince(review, fn.contract, hash),
+      });
+    })
   );
+}
+
+export interface ReachableSharedFunction {
+  /** The version the recipient calls (`recipientCallableFunction`), without its code. */
+  fn: ICallableFunctionSharedSource;
+  access: Exclude<CallableFunctionAccess, 'owner'>;
+}
+
+/** Other people's functions `actor` can reach now, each as the version they would call, newest share first. */
+export async function reachableSharedFunctions(
+  actor: CallableFunctionActor,
+  reach?: { projectIds: string[]; organizationIds: string[] }
+): Promise<ReachableSharedFunction[]> {
+  const [projectIds, organizationIds] = reach
+    ? [reach.projectIds, reach.organizationIds]
+    : await Promise.all([projectIdsForMember(actor.id), organizationRepository.findMembershipOrgIds(actor.id)]);
+  const candidates = await callableFunctionRepository.listSharedWith({ userId: actor.id, projectIds, organizationIds });
+  const reachable: ReachableSharedFunction[] = [];
+  for (const candidate of candidates) {
+    const access = await canCallFunction(actor, candidate);
+    if (!access || access === 'owner') continue;
+    const fn = recipientCallableFunction(candidate);
+    if (!fn) continue;
+    const head = await readHead({ id: fn.userId }, fn.pin.artifactId);
+    if (effectiveCallableFunctionStatus(fn, head) !== 'live') continue;
+    reachable.push({ fn, access });
+  }
+  return reachable;
 }

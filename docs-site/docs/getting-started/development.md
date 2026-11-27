@@ -34,7 +34,7 @@ pnpm i -r
 pnpm turbo:core:build
 
 # 5. Verify your environment works before changing anything
-pnpm turbo:typecheck:fast   # TypeScript across all packages
+pnpm turbo:typecheck   # TypeScript across all packages
 pnpm turbo:test        # all test suites (MongoDB tests use mongodb-memory-server - no local DB needed)
 pnpm lint:check        # ESLint, error severity only (mirrors the CI gate)
 ```
@@ -79,7 +79,7 @@ Build order for core packages: `common → utils → agents → services → sla
 | Task | Command | Notes |
 |---|---|---|
 | Verify a branch | `pnpm verify` | Typecheck, tests and lint for what your branch changed only |
-| Typecheck (fast) | `pnpm turbo:typecheck:fast` | tsgo with tsc fallback, as CI gates; `pnpm turbo:typecheck` is pure tsc |
+| Typecheck | `pnpm turbo:typecheck` | TypeScript 7 as `tsgo`, as CI gates; `pnpm turbo:typecheck:tsc` is pure tsc 5.9 (nightly) |
 | Run all tests | `pnpm turbo:test` | Parallel across packages |
 | Test one package | `pnpm --filter <package> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 | Lint | `pnpm lint:check` | Mirrors CI |

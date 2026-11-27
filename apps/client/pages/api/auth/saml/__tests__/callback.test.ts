@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { createHash } from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { AuthStrategy } from '@bike4mind/common';
 
@@ -22,10 +23,13 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () 
 const mockSamlUser = vi.fn();
 const mockSamlErr = vi.fn<() => Error | null>(() => null);
 const mockSamlInfo = vi.fn<() => unknown>(() => ({}));
+const mockAuthenticate = vi.hoisted(() => vi.fn());
 vi.mock('passport', () => ({
   default: {
-    authenticate: (_name: string, cb: (err: Error | null, user: unknown, info: unknown) => Promise<unknown>) => () =>
-      cb(mockSamlErr(), mockSamlUser(), mockSamlInfo()),
+    authenticate: (_name: string, cb: (err: Error | null, user: unknown, info: unknown) => Promise<unknown>) => () => {
+      mockAuthenticate();
+      return cb(mockSamlErr(), mockSamlUser(), mockSamlInfo());
+    },
   },
 }));
 
@@ -73,12 +77,17 @@ const AUTHORIZE_REDIRECT = '/oauth/authorize?client_id=b4m_sat_0123abcd&response
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
+const BROWSER_NONCE = 'browser-nonce';
+const BROWSER_NONCE_HASH = createHash('sha256').update(BROWSER_NONCE).digest('hex');
+const BROWSER_COOKIE = `b4m_saml_nonce=${BROWSER_NONCE}`;
+
+/** Runs the callback as the browser that started the login: its nonce cookie and the matching `nh`. */
 async function runCallback(relayState: string, redirectPattern: RegExp = /\/auth\/success/, body?: unknown) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
     method: 'GET',
-    query: { RelayState: relayState },
+    query: { RelayState: `${relayState}&nh=${BROWSER_NONCE_HASH}` },
     body: body as Record<string, unknown> | undefined,
-    headers: { 'user-agent': 'UA/9' },
+    headers: { 'user-agent': 'UA/9', cookie: BROWSER_COOKIE },
   });
   Object.assign(req, { ip: '203.0.113.7', logger });
   await captured.handler!(req, res);
@@ -118,6 +127,20 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
       expect.objectContaining({ method: 'saml', emailVerified: true, creditsGranted: 0 })
     );
     expect(response._getRedirectUrl()).toContain('firstSignupSession=1');
+  });
+
+  it("passes the new account's stored signupClientId to its signup event, null when it has none", async () => {
+    mockSamlUser.mockReturnValue({ id: 'u-new', isBanned: false, isNewUser: true, signupClientId: 'b4m_sat_0123abcd' });
+    await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new', clientId: 'b4m_sat_0123abcd' })
+    );
+
+    mockSamlUser.mockReturnValue({ id: 'u-new2', isBanned: false, isNewUser: true, signupClientId: null });
+    await runCallback(new URLSearchParams({ idp: 'idp-1' }).toString());
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new2', clientId: null })
+    );
   });
 
   it("carries a new account's verified hop, when its cookies reach the callback, to the signup funnel", async () => {
@@ -283,12 +306,12 @@ describe('/api/auth/saml/callback - choosing the IdP', () => {
       `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"><saml:Issuer>${issuer}</saml:Issuer></samlp:Response>`
     ).toString('base64');
 
-  async function post(body: Record<string, unknown>, query: Record<string, string> = {}) {
+  async function post(body: Record<string, unknown>, query: Record<string, string> = {}, cookie = '') {
     const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
       method: 'POST',
       body,
       query,
-      headers: { 'user-agent': 'UA/9' },
+      headers: { 'user-agent': 'UA/9', cookie },
     });
     Object.assign(req, { ip: '203.0.113.7', logger });
     await captured.handler!(req, res);
@@ -304,7 +327,7 @@ describe('/api/auth/saml/callback - choosing the IdP', () => {
     mockSamlUser.mockReturnValue({ id: 'u1', isBanned: false, isNewUser: false });
   });
 
-  it('routes an IdP-initiated response to the one active IdP configured with its Issuer', async () => {
+  it('restarts an IdP-initiated response as a login from this browser at the IdP its Issuer names', async () => {
     const { identityProviderRepository } = await import('@bike4mind/database');
     vi.mocked(identityProviderRepository.findActiveSamlIdpIdsByIssuer).mockResolvedValueOnce(['idp-1']);
 
@@ -312,13 +335,18 @@ describe('/api/auth/saml/callback - choosing the IdP', () => {
 
     expect(identityProviderRepository.findActiveSamlIdpIdsByIssuer).toHaveBeenCalledWith(ISSUER);
     expect(identityProviderRepository.findByIdWithSecrets).toHaveBeenCalledWith('idp-1');
-    expect(res._getRedirectUrl()).toContain('/auth/success');
+    expect(res._getRedirectUrl()).toBe('/api/auth/saml?idp=idp-1');
+    expect(mockAuthenticate).not.toHaveBeenCalled();
   });
 
   it('uses the IdP named in RelayState without looking the Issuer up', async () => {
     const { identityProviderRepository } = await import('@bike4mind/database');
 
-    const res = await post({ RelayState: 'idp=idp-1', SAMLResponse: samlResponse(ISSUER) });
+    const res = await post(
+      { RelayState: `idp=idp-1&nh=${BROWSER_NONCE_HASH}`, SAMLResponse: samlResponse(ISSUER) },
+      {},
+      BROWSER_COOKIE
+    );
 
     expect(identityProviderRepository.findActiveSamlIdpIdsByIssuer).not.toHaveBeenCalled();
     expect(identityProviderRepository.findByIdWithSecrets).toHaveBeenCalledWith('idp-1');
@@ -345,5 +373,57 @@ describe('/api/auth/saml/callback - choosing the IdP', () => {
 
     expect(res._getRedirectUrl()).toBe('/login?error=missing_idp_context');
     expect(identityProviderRepository.findByIdWithSecrets).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/auth/saml/callback - browser binding', () => {
+  async function post(relayState: string, cookie: string) {
+    const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
+      method: 'POST',
+      body: { RelayState: relayState, SAMLResponse: 'opaque' },
+      headers: { 'user-agent': 'UA/9', cookie },
+    });
+    Object.assign(req, { ip: '203.0.113.7', logger });
+    await captured.handler!(req, res);
+    await vi.waitFor(() => expect(res._getRedirectUrl()).not.toBe(''));
+    return res;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
+    mockSamlErr.mockReturnValue(null);
+    mockSamlInfo.mockReturnValue({});
+    mockSamlUser.mockReturnValue({ id: 'u1', isBanned: false, isNewUser: false });
+  });
+
+  it.each([
+    ['no nonce cookie', ''],
+    ["another browser's nonce cookie", 'b4m_saml_nonce=other-browser'],
+  ])('signs nobody in when a bound response arrives with %s', async (_label, cookie) => {
+    const { issueBrowserSession } = await import('@server/auth/issueSession');
+
+    const res = await post(`idp=idp-1&nh=${BROWSER_NONCE_HASH}`, cookie);
+
+    expect(res._getRedirectUrl()).toBe('/login?error=saml_session_mismatch');
+    expect(mockAuthenticate).not.toHaveBeenCalled();
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('restarts a response with no binding instead of signing it in, keeping redirectTo', async () => {
+    const { issueBrowserSession } = await import('@server/auth/issueSession');
+
+    const res = await post('idp=idp-1&redirectTo=%2Fnotebooks', BROWSER_COOKIE);
+
+    expect(res._getRedirectUrl()).toBe('/api/auth/saml?idp=idp-1&redirectTo=%2Fnotebooks');
+    expect(mockAuthenticate).not.toHaveBeenCalled();
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('signs in the browser that started the login and expires its nonce cookie', async () => {
+    const res = await post(`idp=idp-1&nh=${BROWSER_NONCE_HASH}`, BROWSER_COOKIE);
+
+    expect(res._getRedirectUrl()).toContain('/auth/success');
+    expect(res.getHeader('Set-Cookie')).toEqual(expect.stringMatching(/^b4m_saml_nonce=; .*Max-Age=0/));
   });
 });

@@ -161,6 +161,9 @@ export function tableRoutes(
 /** Every function-data key starts with it; must match callableFunctionDataKey (packages/server-utils). */
 export const FUNCTION_DATA_KEY_PREFIX = 'data/';
 
+/** Live source fetches, expired after a day; must match CALLABLE_FUNCTION_LIVE_SOURCE_KEY_PREFIX (server-utils). */
+export const FUNCTION_LIVE_SOURCE_KEY_PREFIX = `${FUNCTION_DATA_KEY_PREFIX}.live/`;
+
 const BUCKET_DATA_OBJECTS = /^[a-z0-9][a-z0-9.-]*\/data\/\*$/;
 const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
 

@@ -28,7 +28,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   cleanup.cleanUpDeletedFileReferences.mockImplementation(fabFilesService.cleanUpDeletedFileReferences);
   return {
     fabFilesService: {
-      deleteStoredObjects: fabFilesService.deleteStoredObjects,
+      deleteStoredObjectsAfterCommit: fabFilesService.deleteStoredObjectsAfterCommit,
       deletedFileReferences: fabFilesService.deletedFileReferences,
       groupDeletedFileReferences: cleanup.groupDeletedFileReferences,
       cleanUpDeletedFileReferences: cleanup.cleanUpDeletedFileReferences,

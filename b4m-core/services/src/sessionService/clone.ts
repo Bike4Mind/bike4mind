@@ -6,7 +6,7 @@ import {
   IUserRepository,
   PromptMeta,
   rebindPromptMetaSession,
-  redactPromptMetaForViewer,
+  redactChatMessageForViewer,
   stripSurfaceOwnedFields,
   userSetSessionFields,
   toPersistedSummaryTrigger,
@@ -159,7 +159,8 @@ export const cloneSession = async (
 
   // Clone all messages from the session
   await Promise.all(
-    messagesToClone.map(async ({ id, promptMeta, correctsQuestId, ...messageData }) => {
+    messagesToClone.map(async ({ id, correctsQuestId, ...source }) => {
+      const { promptMeta, ...messageData } = redactChatMessageForViewer(source, isOwner);
       // `correctsQuestId` names a quest in the SOURCE session, so it is dropped rather than copied:
       // a copied chain link would dereference across the session boundary, and the access that
       // authorized this copy is not rechecked when the pointer is later read. Remap it through an
@@ -171,10 +172,10 @@ export const cloneSession = async (
         // create() requires session.{id,userId} and databaseSearcher scopes deep research's quest
         // search by session.userId. See rebindPromptMetaSession.
         //
-        // redactPromptMetaForViewer's generic re-derives functionCalls via Omit<>, which produces
+        // redactChatMessageForViewer's generic re-derives functionCalls via Omit<>, which produces
         // a structurally-identical but nominally distinct type from the zod-inferred PromptMeta
         // here - TS can't reconcile the two through the generic, so this cast bridges them.
-        promptMeta: rebindPromptMetaSession(redactPromptMetaForViewer(promptMeta, isOwner) as PromptMeta | undefined, {
+        promptMeta: rebindPromptMetaSession(promptMeta as PromptMeta | undefined, {
           sessionId: clonedSession.id,
           userId,
         }),

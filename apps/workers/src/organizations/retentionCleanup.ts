@@ -20,6 +20,7 @@ import {
   organizationRepository,
   projectRepository,
   questRepository,
+  runAfterCommit,
   sessionRepository,
   userRepository,
   withTransaction,
@@ -126,6 +127,24 @@ async function lockPolicy(organizationId: string, version: number) {
   if (result.modifiedCount !== 1) throw new RetentionPolicyChangedError('Retention policy changed; sweep stopped');
 }
 
+/** Deletes the generated object once the transaction commits; a failure is logged and left orphaned, never retried. */
+function queueMediaDelete(session: Parameters<typeof runAfterCommit>[0], key: string, logger: Logger) {
+  const run = async () => {
+    try {
+      await getGeneratedImageStorage().delete(key);
+    } catch (error) {
+      logger.error('[retention] post-commit media delete failed; object left orphaned', {
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (!runAfterCommit(session, `retentionMedia|${key}`, run)) {
+    logger.warn('[retention] media delete could not be queued after commit; running it inline', { key });
+    void run();
+  }
+}
+
 async function audit(organizationId: string, kind: RetentionKind, id: string, version: number) {
   await OrganizationAuditEventModel.create({
     organizationId,
@@ -179,7 +198,7 @@ export async function cleanupOrganizationRetention(
       if (isModerationEvidenceHold(candidate)) continue;
       let result: Awaited<ReturnType<typeof fabFilesService.deleteAuthorizedFabFile>> | null = null;
       try {
-        result = await withTransaction(async () => {
+        result = await withTransaction(async session => {
           await lockPolicy(organizationId, version);
           const file = await FabFile.findOne({ ...filter, _id: candidate._id });
           if (!file || isModerationEvidenceHold(file)) return null;
@@ -193,6 +212,7 @@ export async function cleanupOrganizationRetention(
               ...lakeMembershipAuditDb,
             },
             storage: getFilesStorage(),
+            session,
             // Inline media has its own policy and explicit object ledger; file deletion must not remove it early.
             generatedCopies: { storage: { delete: async () => undefined }, quests: questRepository },
             searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
@@ -365,7 +385,7 @@ export async function cleanupOrganizationRetention(
           return true;
         });
         if (!eligible || (await retainedMedia(object.key, object.sessionId))) continue;
-        await withTransaction(async () => {
+        await withTransaction(async session => {
           await lockPolicy(organizationId, version);
           const stillOwned = await OrganizationGeneratedObject.findOne({
             _id: object._id,
@@ -374,12 +394,13 @@ export async function cleanupOrganizationRetention(
             createdAt: { $lt: mediaCutoff },
           });
           if (!stillOwned || (await retainedMedia(object.key, object.sessionId))) return;
-          await getGeneratedImageStorage().delete(object.key);
           const result = await OrganizationGeneratedObject.updateOne(
             { _id: object._id, organizationId, deletedAt: null },
-            { $set: { deletedAt: now } }
+            { $set: { deletedAt: now } },
+            { session }
           );
           if (result.modifiedCount) {
+            queueMediaDelete(session, object.key, logger);
             await audit(organizationId, 'media', object.key, version);
             counts.media++;
           }
