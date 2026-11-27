@@ -6,7 +6,14 @@ import { sandboxedHome } from '../../../../vitest.tempRoot';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PathAccessDenied, physicalTarget, resolveWithinRoots, withRealPath } from './paths';
 import type { ToolContext } from './types';
+import { shellHome } from './shellScan';
 import { fileEdit, fileWrite, resolveWritablePath } from './writeTools';
+
+// The fixtures' "outside" folders sit under the temp folder, which the write tools now accept: no temp folders here unless a test says so.
+vi.mock('./shellScan', async importOriginal => ({
+  ...(await importOriginal<typeof import('./shellScan')>()),
+  shellHome: vi.fn(async () => ({ home: '/', known: true, temp: [] as string[] })),
+}));
 
 describe('write tools', () => {
   let root: string;
@@ -120,6 +127,24 @@ describe('write tools', () => {
       expect(prompt?.diff?.operation).toBe('overwrite');
       expect(prompt?.diff?.added).toBe(1);
       expect(prompt?.diff?.removed).toBe(1);
+    });
+
+    it('writes and edits a file in a temp folder the shell may use, outside every granted root', async () => {
+      vi.mocked(shellHome).mockResolvedValue({ home: '/', known: true, temp: [outside] });
+      try {
+        const target = join(outside, 'scratch.txt');
+        await fileWrite.approval?.({ path: target, content: 'one\n' }, context);
+        await fileWrite.run({ path: target, content: 'one\n' }, context);
+        await fileEdit.run({ path: target, oldText: 'one', newText: 'two' }, context);
+        await expect(readFile(target, 'utf8')).resolves.toBe('two\n');
+        // The protected lists still win inside a temp folder.
+        const guarded = { ...context, protectedPaths: [outside] };
+        await expect(fileWrite.approval?.({ path: target, content: 'x' }, guarded)).rejects.toBeInstanceOf(
+          PathAccessDenied
+        );
+      } finally {
+        vi.mocked(shellHome).mockResolvedValue({ home: '/', known: true, temp: [] });
+      }
     });
 
     // A write outside the grant is refused at the point the prompt is built, so the user is

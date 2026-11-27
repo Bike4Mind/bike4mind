@@ -758,6 +758,7 @@ export async function shellApproval(
       : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
+    ...(scan.readOnly ? { repeatSafe: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
     ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),

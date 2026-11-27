@@ -786,6 +786,11 @@ export interface ApprovalPrompt {
    * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
+  /**
+   * Repeating this exact call is not a sign the model is stuck: it only observes (a read-only shell
+   * command, or `sleep N && <read-only command>` polling), so the repeat-call guard leaves it alone.
+   */
+  repeatSafe?: true;
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
   /**
