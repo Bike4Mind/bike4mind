@@ -1,9 +1,11 @@
+import { DescribeKeyCommand, GenerateDataKeyWithoutPlaintextCommand, type KMSClient } from '@aws-sdk/client-kms';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createSstSecretStore,
   createWrappedStageDataKey,
   parseCliOptions,
   parseSecretListing,
+  runCli,
   type WrappedKeyDeps,
   type WrappedKeyOptions,
 } from './createWrappedStageDataKey';
@@ -126,25 +128,26 @@ describe('parseCliOptions', () => {
     [['--stage', 'dev'], { SEED_APP_NAME: 'env-app' }, 'env-app'],
     [['--stage', 'dev'], {}, 'bike4mind'],
   ])('builds the key alias and the sst store from one app name (%j, %j)', async (args, env, app) => {
-    const options = parseCliOptions(args, env);
     const exec = vi.fn((_cmd: string, argv: string[]) => (argv[2] === 'list' ? '# x/dev\n' : ''));
-    const describeKey = vi.fn(async () => ({ enabled: true, arn: 'arn:key' }));
-    await createWrappedStageDataKey(options, {
-      ...createSstSecretStore(options.appName, exec),
-      describeKey,
-      generateWrappedKey: async () => BLOB,
-      log: () => {},
-    });
-    expect(describeKey).toHaveBeenCalledWith(`alias/${app}-dev-secrets-at-rest`);
+    const send = vi.fn(async (command: DescribeKeyCommand | GenerateDataKeyWithoutPlaintextCommand) =>
+      command instanceof DescribeKeyCommand
+        ? { KeyMetadata: { Enabled: true, Arn: 'arn:key' } }
+        : { CiphertextBlob: BLOB }
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(await runCli(args, env, { exec, kms: { send } as unknown as Pick<KMSClient, 'send'> })).toBe('created');
+    expect(send.mock.calls[0][0].input.KeyId).toBe(`alias/${app}-dev-secrets-at-rest`);
     expect(exec).toHaveBeenCalledTimes(2);
     for (const call of exec.mock.calls as unknown as [string, string[], { env: NodeJS.ProcessEnv }][]) {
       expect(call[2].env.SEED_APP_NAME).toBe(app);
     }
+    log.mockRestore();
   });
 
   it('requires --stage and flags preview stages', () => {
     expect(() => parseCliOptions([], {})).toThrow('--stage is required');
     expect(parseCliOptions(['--stage', 'pr1'], {}).isPreview).toBe(true);
+    expect(parseCliOptions(['--stage', 'pr1', '--key', 'alias/x'], {}).key).toBe('alias/x');
     expect(parseCliOptions(['--stage', 'dev'], { IS_PREVIEW: 'true' }).isPreview).toBe(true);
     expect(parseCliOptions(['--stage', 'production', '--dry-run'], {})).toMatchObject({
       isPreview: false,

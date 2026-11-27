@@ -1,3 +1,4 @@
+import { DescribeKeyCommand, GenerateDataKeyWithoutPlaintextCommand, KMSClient } from '@aws-sdk/client-kms';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import {
@@ -136,4 +137,31 @@ export async function createWrappedStageDataKey(
   await deps.setSecret(stage, Buffer.from(blob).toString('base64'));
   deps.log(`Set ${WRAPPED_SECRET_NAME} for stage ${stage} (wrapped under ${described.arn})`);
   return 'created';
+}
+
+/**
+ * The CLI entry's whole composition: parse flags, then build the KMS calls and the sst store from the
+ * same options. Kept here, not in the entry file, so tests exercise the wiring the operator runs.
+ */
+export function runCli(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  { exec, kms = new KMSClient({}) }: { exec?: Exec; kms?: Pick<KMSClient, 'send'> } = {}
+): Promise<WrappedKeyResult> {
+  const options = parseCliOptions(args, env);
+  return createWrappedStageDataKey(options, {
+    ...createSstSecretStore(options.appName, exec),
+    describeKey: async key => {
+      const { KeyMetadata } = await kms.send(new DescribeKeyCommand({ KeyId: key }));
+      return { enabled: KeyMetadata?.Enabled === true, arn: KeyMetadata?.Arn ?? key };
+    },
+    generateWrappedKey: async (key, context) => {
+      const out = await kms.send(
+        new GenerateDataKeyWithoutPlaintextCommand({ KeyId: key, KeySpec: 'AES_256', EncryptionContext: context })
+      );
+      if (!out.CiphertextBlob) throw new Error('KMS returned no ciphertext blob');
+      return out.CiphertextBlob;
+    },
+    log: line => console.log(line),
+  });
 }
