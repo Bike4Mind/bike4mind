@@ -435,6 +435,20 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     expect(row.title).toBe('Their artifact');
   });
 
+  it('drops any field not on the display allowlist from another user row', async () => {
+    withRows([{ ...THEIRS, someFutureField: 'x' }]);
+    const [row] = artifacts(await run({}));
+    expect('someFutureField' in row).toBe(false);
+  });
+
+  it('keeps source on the caller own row for the owner-scoped lookups', async () => {
+    for (const query of [{ mine: 'true' }, { sourceArtifactId: 'artifact_x' }, { sourceMessageId: 'message-1' }]) {
+      withRows([OWN]);
+      const [row] = artifacts(await run(query));
+      expect(row.source).toEqual(OWN.source);
+    }
+  });
+
   it('keeps versionsCount and discoverable, which the owner management tab reads', async () => {
     withRows([THEIRS]);
     const [row] = artifacts(await run({}));
