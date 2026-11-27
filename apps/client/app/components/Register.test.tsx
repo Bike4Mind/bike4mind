@@ -603,6 +603,7 @@ describe('Register - public config unavailable', () => {
     expect(screen.queryByText('Invite code (optional)')).not.toBeInTheDocument();
     expect(screen.queryByTestId('register-invite-optional-hint')).not.toBeInTheDocument();
     expect(screen.getByTestId('register-join-waitlist-link')).toBeInTheDocument();
+    expect(screen.getByTestId('register-google-btn')).not.toBeVisible();
 
     const user = userEvent.setup();
     await fillFormWithoutInvite(user);
