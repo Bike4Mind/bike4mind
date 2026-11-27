@@ -18,6 +18,7 @@ function loadMathModule(): Promise<MathJsModule> {
 }
 
 // Functions that change the instance itself (its function table, units) rather than computing a value.
+// `config` stays callable: overriding it via import() drops BigNumber, and the per-call instance confines it.
 const DISABLED_FUNCTIONS = ['import', 'createUnit'] as const;
 
 function disabledFunction(name: string): () => never {
@@ -26,14 +27,7 @@ function disabledFunction(name: string): () => never {
   };
 }
 
-/**
- * A fresh mathjs instance for one evaluation, so nothing an expression does to the
- * instance (config, units, overrides) can reach any other evaluation. create(all)
- * costs ~10 ms once the module is loaded.
- *
- * `config` is left callable: overriding it via import() resets the instance to plain
- * numbers, and a per-call instance already confines its effect to this one evaluation.
- */
+/** A fresh instance per evaluation, so nothing an expression does to it reaches another (~10-25 ms each). */
 async function createIsolatedMath(): Promise<MathJsInstance> {
   const { create, all } = await loadMathModule();
   const math = create(all, {
@@ -245,6 +239,14 @@ async function evaluateMath(params: MathParams): Promise<string> {
     // (e.g. "currentRatio = (cashPrior + 100) / debt" without a prior "cashPrior = ..." statement).
     // mathjs throws "Undefined symbol <name>"; give a targeted, self-correctable message instead of
     // the generic "numbers and operators only" hint, which is misleading here.
+    const disabledFunctionName = errorMessage.match(/Function (\w+) is disabled/);
+    if (disabledFunctionName) {
+      const name = disabledFunctionName[1];
+      throw new FailureError(
+        `Failed to evaluate math expression "${params.expression}". Reason: "${name}" is not available in this tool. Rewrite the expression without it; for a custom unit, write it as a multiple of a built-in unit (e.g. "5 * 0.3 m").`
+      );
+    }
+
     const undefinedSymbol = errorMessage.match(/Undefined symbol (\w+)/);
     if (undefinedSymbol) {
       const symbol = undefinedSymbol[1];

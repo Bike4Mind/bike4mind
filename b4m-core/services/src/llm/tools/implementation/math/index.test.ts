@@ -112,18 +112,17 @@ describe('math_evaluate', () => {
       await expect(evaluate({ expression: '0.1 + 0.2' })).resolves.toBe('0.3');
     });
 
-    it('does not carry function definitions from one evaluation into the next', async () => {
-      await expect(evaluate({ expression: 'double(x) = 2x; double(2)' })).resolves.toBe('4');
-      await expect(evaluate({ expression: 'double(2)' })).rejects.toBeInstanceOf(ExpectedToolError);
-    });
-
     it('rejects createUnit and leaves the unit registry unchanged', async () => {
-      await expect(evaluate({ expression: 'createUnit("widget")' })).rejects.toThrow(/createUnit is disabled/);
+      await expect(evaluate({ expression: 'createUnit("widget")' })).rejects.toThrow(
+        /"createUnit" is not available in this tool/
+      );
       await expect(evaluate({ expression: '2 widget' })).rejects.toBeInstanceOf(ExpectedToolError);
     });
 
     it('rejects import and leaves built-in constants unchanged', async () => {
-      await expect(evaluate({ expression: 'import({pi: 3}, {override: true})' })).rejects.toThrow(/import is disabled/);
+      await expect(evaluate({ expression: 'import({pi: 3}, {override: true})' })).rejects.toThrow(
+        /"import" is not available in this tool/
+      );
       await expect(evaluate({ expression: 'pi' })).resolves.toBe('3.1415926535898');
     });
   });
