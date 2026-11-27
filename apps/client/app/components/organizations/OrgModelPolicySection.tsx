@@ -28,7 +28,6 @@ import {
   useResetOrgModelPolicy,
   useSaveOrgModelPolicy,
 } from '@client/app/hooks/data/useOrgModelPolicy';
-import { premiumToolDisplayLabels } from '@client/app/premium-generated/premiumToolDisplayLabels.generated';
 import { useOrgModelChoices } from '@client/app/hooks/data/useModelInfo';
 
 type PolicyForm = {
@@ -60,17 +59,17 @@ const PROVIDERS: readonly string[] = Object.values(ModelBackend);
 
 // A companion (e.g. retrieve_knowledge_content) is allowed with the tool it pairs with, so it is shown
 // beside that tool rather than as its own checkbox.
-const TOOL_ROWS: ReadonlyArray<{ tool: string; companions: string[] }> = (() => {
+const toolRows = (contributedTools: readonly string[]): ReadonlyArray<{ tool: string; companions: string[] }> => {
   const covered = new Set<string>();
   const rows: Array<{ tool: string; companions: string[] }> = [];
-  for (const tool of [...b4mLLMTools.options, ...Object.keys(premiumToolDisplayLabels)]) {
+  for (const tool of [...b4mLLMTools.options, ...contributedTools]) {
     if (covered.has(tool)) continue;
     const companions = [...expandOrgAllowedTools([tool])].filter(name => name !== tool);
     companions.forEach(name => covered.add(name));
     rows.push({ tool, companions });
   }
   return rows;
-})();
+};
 
 const toggle = (list: string[], value: string, on: boolean) =>
   on ? [...list.filter(item => item !== value), value] : list.filter(item => item !== value);
@@ -103,12 +102,14 @@ const RestrictSwitch: FC<{ id: string; label: string; checked: boolean; onChange
   />
 );
 
-const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolean }> = ({
-  orgId,
-  saved,
-  invalidStored,
-}) => {
+const PolicyEditor: FC<{
+  orgId: string;
+  saved: PolicyForm;
+  invalidStored: boolean;
+  contributedTools: readonly string[];
+}> = ({ orgId, saved, invalidStored, contributedTools }) => {
   const [form, setForm] = useState<PolicyForm>(saved);
+  const TOOL_ROWS = useMemo(() => toolRows(contributedTools), [contributedTools]);
   const save = useSaveOrgModelPolicy(orgId);
   const reset = useResetOrgModelPolicy(orgId);
   const { data: catalogModels } = useOrgModelChoices(orgId);
@@ -139,7 +140,12 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
   const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
   const knownTools: ReadonlySet<string> = new Set(TOOL_ROWS.map(row => row.tool));
   const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
-  const canSave = !busy && !emptyRestriction && parsedPolicy.success && (invalidStored || !sameForm(form, saved));
+  const canSave =
+    !busy &&
+    !emptyRestriction &&
+    parsedPolicy.success &&
+    staleTools.length === 0 &&
+    (invalidStored || !sameForm(form, saved));
   const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;
 
   return (
@@ -301,6 +307,7 @@ const OrgModelPolicySection: FC<{ organization: IOrganizationDocument }> = ({ or
       orgId={organization.id}
       saved={toForm(data.policy)}
       invalidStored={data.invalidStored}
+      contributedTools={data.contributedTools ?? []}
     />
   );
 };

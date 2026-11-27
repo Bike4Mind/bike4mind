@@ -11,7 +11,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    view: undefined as { policy: StoredOrgModelPolicy; invalidStored: boolean } | undefined,
+    view: undefined as
+      { policy: StoredOrgModelPolicy; invalidStored: boolean; contributedTools?: string[] } | undefined,
     save: vi.fn(),
     reset: vi.fn(),
     choicesOrgId: undefined as string | undefined,
@@ -137,6 +138,17 @@ describe('OrgModelPolicySection', () => {
       'GPT (outside selected providers)'
     );
     expect(screen.getByText(/A retired model ID also allows its configured successor/)).toBeTruthy();
+  });
+
+  it('lists contributed tools the server reports as their own rows', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['web_search', 'contributed_tool'] },
+      invalidStored: false,
+      contributedTools: ['contributed_tool'],
+    };
+    renderSection();
+    expect(screen.getByTestId('org-model-policy-tool-contributed_tool')).toBeTruthy();
+    expect(screen.queryByLabelText('contributed_tool (unrecognized; remove to save)')).toBeNull();
   });
 
   it('shows obsolete selections and requires their explicit removal before a strict save', () => {
