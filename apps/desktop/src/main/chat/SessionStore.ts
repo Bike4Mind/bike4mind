@@ -1573,14 +1573,24 @@ export class SessionStore implements SessionWritesStore {
       if (at >= 0) session.messages[at] = message;
       else session.messages.push(message);
       session.updatedAt = new Date().toISOString();
-      if (options.running === true && session.importOrigin) {
-        session.importOrigin = { ...session.importOrigin, running: true };
-      } else if (options.running === false && session.importOrigin?.running) {
-        const { running: _running, ...origin } = session.importOrigin;
-        session.importOrigin = origin;
-      }
+      if (options.running !== undefined) markLinkedRunning(session, options.running, session.updatedAt);
       await this.write(directory, session);
       return session;
+    });
+  }
+
+  /**
+   * Set the running mark of a synced web chat with no message to write: a send stopped before the
+   * server named its turn, which may still exist and run there. See putLinkedMessage.
+   */
+  async setLinkedRunning(id: string): Promise<void> {
+    await this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return;
+      const session = await this.read(directory, id);
+      if (!session?.importOrigin) return;
+      markLinkedRunning(session, true, new Date().toISOString());
+      await this.write(directory, session);
     });
   }
 
@@ -1838,5 +1848,16 @@ export class SessionStore implements SessionWritesStore {
     const temporary = `${path}.tmp`;
     await writeFile(temporary, JSON.stringify(record, null, 2), 'utf8');
     await rename(temporary, path);
+  }
+}
+
+/** Stamp or drop a synced web chat's running mark, a lease that isLinkedReplyRunning reads. */
+function markLinkedRunning(session: ChatSession, running: boolean, at: string): void {
+  if (!session.importOrigin) return;
+  if (running) {
+    session.importOrigin = { ...session.importOrigin, runningSince: at };
+  } else if (session.importOrigin.runningSince) {
+    const { runningSince: _runningSince, ...origin } = session.importOrigin;
+    session.importOrigin = origin;
   }
 }

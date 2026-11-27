@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { OPTIMISTIC_ID_PREFIX, type ChatSession } from './chat';
-import { isLinkedChatBusy, isLinkedWebSend, isLinkedWebSession } from './webLinkedChat';
+import {
+  isLinkedChatBusy,
+  isLinkedReplyRunning,
+  isLinkedWebSend,
+  isLinkedWebSession,
+  LINKED_RUNNING_LEASE_MS,
+} from './webLinkedChat';
 
 const webChat = (overrides: Partial<ChatSession> = {}): ChatSession => ({
   id: 'bw-scope-nb1',
@@ -46,6 +52,8 @@ describe('isLinkedWebSend', () => {
     ['chats with folders shared to local tools', { grantedDirectories: ['/tmp/x'] }],
     ['orchestrated chats', { orchestrate: true }],
     ['sessions that were never imported', { importOrigin: undefined }],
+    ['chats on a model served from this machine', { model: 'local:ollama:llama3' }],
+    ['chats with no model picked', { model: '' }],
   ])('keeps the local path for %s', (_name, overrides) => {
     expect(isLinkedWebSend(webChat(overrides), plain)).toBe(false);
   });
@@ -65,10 +73,25 @@ describe('isLinkedChatBusy', () => {
   it('is busy while this window replies or the web is still writing a reply', () => {
     expect(isLinkedChatBusy(webChat(), true)).toBe(true);
     const running = webChat({
-      importOrigin: { kind: 'b4m-web', sourceId: 'nb1', importedAt: '', sourceUpdatedAt: '', running: true },
+      importOrigin: {
+        kind: 'b4m-web',
+        sourceId: 'nb1',
+        importedAt: '',
+        sourceUpdatedAt: '',
+        runningSince: new Date().toISOString(),
+      },
     });
     expect(isLinkedChatBusy(running, false)).toBe(true);
     expect(isLinkedChatBusy(webChat(), false)).toBe(false);
+  });
+
+  it('lets a running mark lapse once nothing has renewed it for the lease', () => {
+    const since = Date.parse('2026-01-01T00:00:00.000Z');
+    const origin = { runningSince: new Date(since).toISOString() };
+    expect(isLinkedReplyRunning(origin, since + LINKED_RUNNING_LEASE_MS - 1)).toBe(true);
+    expect(isLinkedReplyRunning(origin, since + LINKED_RUNNING_LEASE_MS)).toBe(false);
+    expect(isLinkedReplyRunning({ runningSince: 'not a date' })).toBe(false);
+    expect(isLinkedReplyRunning(undefined)).toBe(false);
   });
 
   it('stays busy while the window still draws the prompt it just sent', () => {

@@ -679,6 +679,16 @@ describe('a composer that cannot send yet', () => {
     expect(button?.disabled).toBe(true);
     expect(button?.getAttribute('aria-label')).toBe('Replying');
   });
+
+  it('keeps the action label on a command button that stays enabled', () => {
+    mount({ notReady: 'Replying', onRunCommand: () => {} });
+
+    type('/loop 5m /review src/index.ts');
+
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="chat-send-btn"]');
+    expect(button?.disabled).toBe(false);
+    expect(button?.getAttribute('aria-label')).not.toBe('Replying');
+  });
 });
 
 describe('the attach shortcut', () => {

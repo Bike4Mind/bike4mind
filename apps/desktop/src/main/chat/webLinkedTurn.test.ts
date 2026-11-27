@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mapQuests } from '../claudeImport/webSessionMapper';
 import {
   LinkedReplySlots,
+  SessionTurnDroppedError,
   SessionTurnRequestError,
   parseSessionTurnFrame,
   sessionTurnsEndpoint,
@@ -99,6 +100,24 @@ describe('streamSessionTurn', () => {
 
     expect(post).toHaveBeenCalledWith('/api/v1/turns', body, expect.objectContaining({ responseType: 'stream' }));
     expect(events.map(event => event.type)).toEqual(['meta', 'turn', 'delta', 'replace', 'settled']);
+  });
+
+  it('treats a stream that ends without settled or [DONE] as a dropped connection', async () => {
+    const { axios } = streamingAxios([
+      frame({ type: 'turn', quest_id: 'q1', session_id: 'nb1' }),
+      frame({ type: 'delta', quest_id: 'q1', slot: 0, text: 'Hi' }),
+    ]);
+    await expect(streamSessionTurn(axios, '/api/v1/turns', body, () => undefined)).rejects.toBeInstanceOf(
+      SessionTurnDroppedError
+    );
+  });
+
+  it('accepts a settled turn whose stream ends before [DONE]', async () => {
+    const { axios } = streamingAxios([
+      frame({ type: 'turn', quest_id: 'q1', session_id: 'nb1' }),
+      frame({ type: 'settled', quest_id: 'q1', status: 'done', failed: false }),
+    ]);
+    await expect(streamSessionTurn(axios, '/api/v1/turns', body, () => undefined)).resolves.toEqual({ opened: true });
   });
 
   it('rejects with the server message on an error frame', async () => {

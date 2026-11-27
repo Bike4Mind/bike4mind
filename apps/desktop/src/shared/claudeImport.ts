@@ -29,8 +29,12 @@ export interface ChatImportOrigin {
   gitBranch?: string;
   /** A subagent transcript's parent Claude session. */
   parentSourceId?: string;
-  /** Bike4Mind web only: a reply in the notebook was still being written at the last sync. */
-  running?: boolean;
+  /**
+   * Bike4Mind web only: when a reply in the notebook was last known to be still being written,
+   * by a sync or by a desktop send that walked away from it. A lease, not a flag: see
+   * isLinkedReplyRunning in webLinkedChat.ts.
+   */
+  runningSince?: string;
 }
 
 /**
@@ -76,7 +80,7 @@ export function normalizeImportOrigin(value: unknown): ChatImportOrigin | null {
     ...text('cwd'),
     ...text('gitBranch'),
     ...text('parentSourceId'),
-    ...(raw.running === true ? { running: true } : {}),
+    ...text('runningSince'),
   };
 }
 

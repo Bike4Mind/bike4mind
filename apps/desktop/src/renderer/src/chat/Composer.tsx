@@ -364,6 +364,9 @@ export function Composer({
   // A command draft is never queued: it is an action on this conversation, not the next turn,
   // so the button has to offer to run it now rather than to hold it behind the live reply.
   const buttonAction = composerButtonAction({ streaming: streaming && !commandDraft, hasContent });
+  const sendDisabled = buttonAction !== 'stop' && !canSubmit && !commandDraft;
+  // The not-ready reason names why Send is disabled; an enabled command button keeps its own label.
+  const sendDisabledReason = sendDisabled ? (notReady ?? null) : null;
 
   /**
    * Send what is in the box - or run it, when what is in the box names a command.
@@ -893,7 +896,9 @@ export function Composer({
                what says which control this is. */
             <Tooltip
               title={
-                buttonAction === 'stop' ? 'Stop generating (Esc)' : (notReady ?? COMPOSER_BUTTON_LABELS[buttonAction])
+                buttonAction === 'stop'
+                  ? 'Stop generating (Esc)'
+                  : (sendDisabledReason ?? COMPOSER_BUTTON_LABELS[buttonAction])
               }
               size="sm"
               variant="soft"
@@ -907,8 +912,8 @@ export function Composer({
                   variant={buttonAction === 'stop' ? 'soft' : 'solid'}
                   color={buttonAction === 'stop' ? 'neutral' : 'primary'}
                   onClick={buttonAction === 'stop' ? onStop : submit}
-                  disabled={buttonAction !== 'stop' && !canSubmit && !commandDraft}
-                  aria-label={buttonAction !== 'stop' && notReady ? notReady : COMPOSER_BUTTON_LABELS[buttonAction]}
+                  disabled={sendDisabled}
+                  aria-label={sendDisabledReason ?? COMPOSER_BUTTON_LABELS[buttonAction]}
                   data-composer-action={buttonAction}
                   data-testid="chat-send-btn"
                 >

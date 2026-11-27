@@ -290,7 +290,7 @@ import {
   suggestionRequestMessages,
 } from './nextPrompt';
 import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
-import { isLinkedWebSend } from '@shared/webLinkedChat';
+import { isLinkedReplyRunning, isLinkedWebSend } from '@shared/webLinkedChat';
 import { webQuestMessageId } from '@shared/claudeImport';
 import { LinkedReplySlots, sessionTurnsEndpoint, stopSessionTurn, streamSessionTurn } from './webLinkedTurn';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
@@ -882,6 +882,10 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
+
+/** What a linked web turn tells the send waiting on it (ChatService.sendLinkedTurn). */
+type LinkedTurnReport =
+  { kind: 'started'; replyId: string } | { kind: 'refused'; error: string } | { kind: 'text'; text: string };
 
 export class ChatService {
   studioDisposed?: () => void;
@@ -3805,13 +3809,13 @@ export class ChatService {
    * synced (nothing here sets `forkedAt`) and the next sync replaces them with the server's copy
    * rather than adding to them. The renderer already shows the prompt optimistically meanwhile.
    *
-   * A refusal before the quest exists stores nothing, since the web session has no such turn; it
-   * shows as an error on the reply in the open window.
+   * A failure before the quest exists stores nothing, since the web session has no such turn: the
+   * send resolves `ok: false`, so the renderer drops the optimistic prompt and keeps the text.
    */
   private async sendLinkedTurn(session: ChatSession, prompt: string): Promise<SendMessageResult> {
     const sessionId = session.id;
     if (this.isBusy(sessionId)) return { ok: false, busy: true, error: 'This conversation is still replying.' };
-    if (session.importOrigin?.running) {
+    if (isLinkedReplyRunning(session.importOrigin)) {
       return { ok: false, busy: true, error: 'A reply in this chat is still being written on the web.' };
     }
     const api = this.deps.getApiClient();
@@ -3820,12 +3824,17 @@ export class ChatService {
     const controller = new AbortController();
     this.active.set(sessionId, controller);
     this.deps.activity?.replyStarted(sessionId);
-    let accept: (replyId: string) => void = () => undefined;
-    const accepted = new Promise<string>(resolve => (accept = resolve));
+    let answer: (result: SendMessageResult) => void = () => undefined;
+    const answered = new Promise<SendMessageResult>(resolve => (answer = resolve));
     let replyText = '';
-    void this.runLinkedTurn(session, prompt, api, controller, (replyId, text) => {
-      if (replyId !== null) accept(replyId);
-      if (text !== undefined) replyText = text;
+    let refused = false;
+    void this.runLinkedTurn(session, prompt, api, controller, report => {
+      if (report.kind === 'started') answer({ ok: true, messageId: report.replyId });
+      else if (report.kind === 'text') replyText = report.text;
+      else {
+        refused = true;
+        answer({ ok: false, error: report.error });
+      }
     })
       .catch(error => {
         this.deps.logger.warn(`CHAT: linked turn bookkeeping failed: ${String(error)}`);
@@ -3833,16 +3842,17 @@ export class ChatService {
       })
       .then(outcome => {
         // Never left pending, whatever happened: the renderer is waiting on this send.
-        accept(randomUUID());
+        answer({ ok: true, messageId: randomUUID() });
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
-        this.deps.activity?.replyEnded(sessionId, endsUnread(outcome, replyText));
+        // A refused send has no reply to read: the composer shows its error instead.
+        this.deps.activity?.replyEnded(sessionId, !refused && endsUnread(outcome, replyText));
         // The same end-of-turn hand-off as a local turn: a relay queued meanwhile is sent now (it
         // is automated, so it runs locally), and a stopped or failed turn hands it back instead.
         this.settleQueue(sessionId, outcome);
         this.loops.idle(sessionId);
       });
-    return { ok: true, messageId: await accepted };
+    return answered;
   }
 
   private async runLinkedTurn(
@@ -3850,7 +3860,7 @@ export class ChatService {
     prompt: string,
     api: AuthenticatedApiClient,
     controller: AbortController,
-    report: (replyId: string | null, text?: string) => void
+    report: (report: LinkedTurnReport) => void
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     const sourceId = session.importOrigin?.sourceId;
@@ -3859,12 +3869,13 @@ export class ChatService {
     let replyId: string | null = null;
     let questId: string | null = null;
     let failed = false;
+    let settled = false;
     // Events are applied one after another: the prompt's store write must land before the reply's.
     let applying = Promise.resolve();
     const begin = (id: string): string => {
       replyId = id;
       this.emit({ type: 'start', sessionId, messageId: id });
-      report(id);
+      report({ kind: 'started', replyId: id });
       return id;
     };
     const storeReply = (changes: Partial<ChatMessage>, running = false) => {
@@ -3888,7 +3899,7 @@ export class ChatService {
       if (!sourceId) throw new Error('This chat is not linked to a web session.');
       const { endpoint } = await this.resolveServerConfig(api);
       const { organization_id: organizationId } = await currentBillingPayer();
-      await streamSessionTurn(
+      const { opened } = await streamSessionTurn(
         api.getAxiosInstance(),
         sessionTurnsEndpoint(endpoint),
         {
@@ -3916,7 +3927,10 @@ export class ChatService {
               if (added) this.emit({ type: 'delta', sessionId, messageId: replyId, text: added });
               return;
             }
-            if (event.type === 'settled' && event.quest_id === questId) failed = event.failed;
+            if (event.type === 'settled' && event.quest_id === questId) {
+              settled = true;
+              failed = event.failed;
+            }
           });
         },
         controller.signal
@@ -3924,6 +3938,9 @@ export class ChatService {
       await applying;
       if (!replyId) {
         if (controller.signal.aborted) {
+          // Once the server answered, it may have created the quest and keeps running it with no
+          // id to stop it by: the chat stays busy until a sync shows it settled or the mark lapses.
+          if (opened) await this.deps.store.setLinkedRunning(sessionId);
           const messageId = begin(randomUUID());
           this.emit({ type: 'done', sessionId, messageId, content: '', stopReason: 'aborted' });
           return 'aborted';
@@ -3931,7 +3948,7 @@ export class ChatService {
         throw new Error('The server ended the turn before starting it.');
       }
       const messageId: string = replyId;
-      report(null, slots.text);
+      report({ kind: 'text', text: slots.text });
       if (failed) {
         // A refusal that settles as `done` explains itself in the reply slots.
         const message = slots.text || 'The server could not complete this reply.';
@@ -3953,10 +3970,14 @@ export class ChatService {
       await applying.catch(() => undefined);
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: linked web turn failed: ${message}`);
-      let messageId: string | null = replyId;
-      if (messageId) await storeReply({ error: message });
-      else messageId = begin(randomUUID());
-      this.emit({ type: 'error', sessionId, messageId, message });
+      if (!replyId) {
+        report({ kind: 'refused', error: message });
+        return 'failed';
+      }
+      // A quest that started and never settled keeps running on the server after the stream is
+      // lost, so the chat stays busy until a sync sees it settle.
+      await storeReply({ error: message }, !settled);
+      this.emit({ type: 'error', sessionId, messageId: replyId, message });
       return 'failed';
     }
   }

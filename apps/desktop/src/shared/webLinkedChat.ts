@@ -1,5 +1,5 @@
-import { OPTIMISTIC_ID_PREFIX, type ChatSession } from './chat';
-import { isImportedMessageId } from './claudeImport';
+import { isLocalModel, OPTIMISTIC_ID_PREFIX, type ChatSession } from './chat';
+import { isImportedMessageId, type ChatImportOrigin } from './claudeImport';
 
 /**
  * A Bike4Mind web chat the desktop still mirrors, where a typed message is added to the web
@@ -9,8 +9,24 @@ import { isImportedMessageId } from './claudeImport';
 
 type LinkedSessionFields = Pick<
   ChatSession,
-  'mode' | 'importOrigin' | 'messages' | 'grantedDirectories' | 'orchestrate'
+  'mode' | 'importOrigin' | 'messages' | 'grantedDirectories' | 'orchestrate' | 'model'
 >;
+
+/**
+ * How long a running mark holds without being renewed. Each sync that still sees the reply
+ * unsettled stamps it again (every few minutes while sync is on), so it lapses only when nothing
+ * can refresh it: sync turned off, the notebook gone, or a stop the server never confirmed.
+ */
+export const LINKED_RUNNING_LEASE_MS = 10 * 60_000;
+
+/** A reply in the notebook is still being written, as far as this copy knows. */
+export function isLinkedReplyRunning(
+  origin: Pick<ChatImportOrigin, 'runningSince'> | undefined,
+  now = Date.now()
+): boolean {
+  const since = origin?.runningSince ? Date.parse(origin.runningSince) : NaN;
+  return Number.isFinite(since) && now - since < LINKED_RUNNING_LEASE_MS;
+}
 
 /**
  * Still synced with its web notebook: a basic chat (no folders shared with its local tools, no
@@ -41,15 +57,16 @@ export interface LinkedSendRequest {
 
 /**
  * Whether this send goes to the web session. Anything a server turn cannot do (local files,
- * local tools, skills, rewinding history) keeps the local path, which continues the chat here
- * and stops it syncing.
+ * local tools, skills, rewinding history, a model on this machine or none at all) keeps the
+ * local path, which continues the chat here and stops it syncing.
  */
 export function isLinkedWebSend(session: LinkedSessionFields, request: LinkedSendRequest): boolean {
   if (!isLinkedWebSession(session)) return false;
+  if (!session.model || isLocalModel(session.model)) return false;
   return request.attachments === 0 && !request.replaces && !request.skill && !request.notes && !request.automated;
 }
 
 /** A linked chat takes no new message while a reply in its notebook is being written, here or on the web. */
-export function isLinkedChatBusy(session: LinkedSessionFields, replying: boolean): boolean {
-  return isLinkedWebSession(session) && (replying || session.importOrigin?.running === true);
+export function isLinkedChatBusy(session: LinkedSessionFields, replying: boolean, now = Date.now()): boolean {
+  return isLinkedWebSession(session) && (replying || isLinkedReplyRunning(session.importOrigin, now));
 }

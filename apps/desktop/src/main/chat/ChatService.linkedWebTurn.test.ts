@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatSession, ChatStreamEvent } from '@shared/chat';
+import { LINKED_RUNNING_LEASE_MS } from '@shared/webLinkedChat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { AttachmentStore } from './AttachmentStore';
@@ -181,7 +182,7 @@ describe('ChatService linked web turns', () => {
     expect((await store.get(SESSION_ID))?.importOrigin?.forkedAt).toBeUndefined();
   });
 
-  it('shows a pre-stream refusal on the reply and stores nothing', async () => {
+  it('resolves a pre-stream refusal as a failed send and stores nothing', async () => {
     post.mockRejectedValueOnce(
       Object.assign(new Error('Request failed with status code 400'), {
         isAxiosError: true,
@@ -190,9 +191,8 @@ describe('ChatService linked web turns', () => {
     );
     const result = await service.send(SESSION_ID, 'new question');
 
-    expect(result).toMatchObject({ ok: true });
-    expect(events.map(event => event.type)).toEqual(['start', 'error']);
-    expect(events[1]).toMatchObject({ message: 'Unknown model (status 400)' });
+    expect(result).toEqual({ ok: false, error: 'Unknown model (status 400)' });
+    expect(events).toEqual([]);
     const stored = await store.get(SESSION_ID);
     expect(stored?.messages).toHaveLength(2);
     expect(stored?.importOrigin?.forkedAt).toBeUndefined();
@@ -207,21 +207,55 @@ describe('ChatService linked web turns', () => {
   });
 
   it('refuses a send while a reply in the notebook is still running on the web', async () => {
-    await store.putImported(webChat({ running: true }));
+    await store.putImported(webChat({ runningSince: new Date().toISOString() }));
     const result = await service.send(SESSION_ID, 'new question');
 
     expect(result).toMatchObject({ ok: false, busy: true });
     expect(post).not.toHaveBeenCalled();
   });
 
+  it('sends again once a running mark nothing renewed has lapsed', async () => {
+    await store.putImported(webChat({ runningSince: new Date(Date.now() - LINKED_RUNNING_LEASE_MS).toISOString() }));
+
+    expect(await sendLinked()).toEqual({ ok: true, messageId: 'bw-q1-r' });
+  });
+
   it('clears the running mark once its own turn settles', async () => {
     await sendLinked();
-    const synced = webChat({ running: true });
+    const synced = webChat({ runningSince: new Date().toISOString() });
     await store.putImported(synced);
     streamFor(0).write(frame('[DONE]'));
     await waitForEvent('done');
 
-    expect((await store.get(SESSION_ID))?.importOrigin?.running).toBeUndefined();
+    expect((await store.get(SESSION_ID))?.importOrigin?.runningSince).toBeUndefined();
+  });
+
+  it('keeps the chat busy when the stream ends before the turn settles', async () => {
+    await sendLinked();
+    streamFor(0).write(frame({ type: 'delta', quest_id: 'q1', slot: 0, text: 'Hel' }));
+    streamFor(0).end();
+    await waitForEvent('error');
+
+    expect(events.find(event => event.type === 'error')).toMatchObject({
+      messageId: 'bw-q1-r',
+      message: expect.stringContaining('dropped before the reply finished'),
+    });
+    const stored = await store.get(SESSION_ID);
+    expect(stored?.messages.at(-1)).toMatchObject({ id: 'bw-q1-r', content: 'Hel' });
+    expect(stored?.importOrigin?.runningSince).toBeDefined();
+  });
+
+  it('marks the chat busy when Stop lands after the server answered but before it named the turn', async () => {
+    const sent = service.send(SESSION_ID, 'new question');
+    await waitForPost();
+    service.stop(SESSION_ID);
+    await waitForEvent('done');
+
+    expect(await sent).toMatchObject({ ok: true });
+    expect(events.find(event => event.type === 'done')).toMatchObject({ stopReason: 'aborted' });
+    const stored = await store.get(SESSION_ID);
+    expect(stored?.messages).toHaveLength(2);
+    expect(stored?.importOrigin?.runningSince).toBeDefined();
   });
 
   it('sends a message queued during the turn once the turn completes', async () => {
@@ -244,7 +278,7 @@ describe('ChatService linked web turns', () => {
     expect(stopPosts()).toEqual([['/api/sessions/nb1/chat/stop-reply', { questId: 'q1' }]]);
     const stored = await store.get(SESSION_ID);
     expect(stored?.messages.at(-1)).toMatchObject({ id: 'bw-q1-r', stopReason: 'aborted' });
-    expect(stored?.importOrigin?.running).toBeUndefined();
+    expect(stored?.importOrigin?.runningSince).toBeUndefined();
   });
 
   it('keeps the chat busy after Stop when the server does not confirm the stop', async () => {
@@ -253,7 +287,7 @@ describe('ChatService linked web turns', () => {
     service.stop(SESSION_ID);
     await waitForEvent('done');
 
-    expect((await store.get(SESSION_ID))?.importOrigin?.running).toBe(true);
+    expect((await store.get(SESSION_ID))?.importOrigin?.runningSince).toBeDefined();
     const next = await service.send(SESSION_ID, 'next question');
     expect(next).toMatchObject({ ok: false, busy: true });
     expect(turnPosts()).toHaveLength(1);

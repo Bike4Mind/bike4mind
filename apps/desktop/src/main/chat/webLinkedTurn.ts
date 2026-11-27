@@ -69,12 +69,23 @@ export async function stopSessionTurn(axios: AxiosInstance, sessionId: string, q
   }
 }
 
+/** The stream ended before the turn did: the server may still be running it. */
+export class SessionTurnDroppedError extends Error {
+  constructor(detail: string) {
+    super(`The connection to the server dropped before the reply finished (${detail}).`);
+    this.name = 'SessionTurnDroppedError';
+  }
+}
+
 /**
  * POST the turn and hand each event to `onEvent` until `[DONE]`. Resolves on a clean end or an
  * abort (the server keeps running a turn the client walks away from, as it does on the web;
  * stopSessionTurn is what ends it).
- * Rejects with SessionTurnRequestError on a pre-stream refusal, and with an Error for an `error`
- * frame or a dropped connection. Never retried: a resend would add a second turn.
+ * Rejects with SessionTurnRequestError on a pre-stream refusal, with an Error for an `error`
+ * frame, and with SessionTurnDroppedError when the connection drops or the stream ends without
+ * `settled` or `[DONE]`, both of which the route always sends. Never retried: a resend would add
+ * a second turn. `opened` is whether the server answered the POST, after which an aborted turn
+ * may exist on the server even if no event named it.
  */
 export async function streamSessionTurn(
   axios: AxiosInstance,
@@ -82,8 +93,8 @@ export async function streamSessionTurn(
   body: SessionTurnRequest,
   onEvent: (event: SessionTurnStreamEvent) => void,
   signal?: AbortSignal
-): Promise<void> {
-  if (signal?.aborted) return;
+): Promise<{ opened: boolean }> {
+  if (signal?.aborted) return { opened: false };
   let response: AxiosResponse;
   try {
     response = await axios.post(endpoint, body, {
@@ -93,27 +104,34 @@ export async function streamSessionTurn(
       headers: { 'X-Request-ID': randomUUID() },
     });
   } catch (err) {
-    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
+    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return { opened: false };
     throw await toSessionTurnRequestError(err);
   }
   releaseRequestTimeout(response);
+  let ended = false;
   try {
     await readSseResponse(response, {
       signal,
       idleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
       onData: data => {
-        if (data === '[DONE]') return 'done';
+        if (data === '[DONE]') {
+          ended = true;
+          return 'done';
+        }
         const event = parseSessionTurnFrame(data);
         if (!event) return;
         if (event.type === 'error') return new Error(event.message || 'The server reported an error mid-reply.');
+        if (event.type === 'settled') ended = true;
         onEvent(event);
       },
     });
   } catch (err) {
     if (!isConnectionDrop(err)) throw err;
-    if (signal?.aborted) return;
-    throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
+    if (signal?.aborted) return { opened: true };
+    throw new SessionTurnDroppedError(err.message);
   }
+  if (!ended && !signal?.aborted) throw new SessionTurnDroppedError('the stream ended early');
+  return { opened: true };
 }
 
 async function toSessionTurnRequestError(err: unknown): Promise<Error> {
