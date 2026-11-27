@@ -29,6 +29,7 @@ export const BRIEF_QUESTION_CLOSED_ERROR_CODE = 'question_closed';
 export const BRIEF_DECISION_CLOSED_ERROR_CODE = 'decision_closed';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
+export const FUNCTION_REVIEW_REQUIRED_ERROR_CODE = 'review_required';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -225,6 +226,8 @@ export const API_ERROR_CODES = [
   'slack_channel_archived',
   /** The channel restricts who may post or where (announcement-only or thread-only), and refused the bot. */
   'slack_channel_restricted',
+  /** A 403 on a function call: the function was shared with the caller, who has not allowed it (or withdrew it). */
+  FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

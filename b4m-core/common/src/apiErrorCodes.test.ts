@@ -22,6 +22,7 @@ import {
   RUN_NOT_FOUND_ERROR_CODE,
   RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   RUN_BUDGET_NOT_RAISED_ERROR_CODE,
+  FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -108,6 +109,7 @@ describe('API_ERROR_CODES', () => {
     // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     // The evaluation_* codes likewise; proven by apps/client/server/completionRuns/evaluation.test.ts
     // ('evaluation_identity_conflict' by packages/database/src/models/billing/CompletionRunModel.test.ts).
+    // FUNCTION_REVIEW_REQUIRED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/functions/__tests__/functions.routes.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -138,6 +140,7 @@ describe('API_ERROR_CODES', () => {
       'evaluation_request_exists',
       'evaluation_receipt_outstanding',
       'evaluation_budget_exhausted',
+      FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

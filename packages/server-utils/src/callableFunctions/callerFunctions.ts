@@ -1,13 +1,15 @@
 import {
+  callableFunctionReviewStatus,
   effectiveCallableFunctionStatus,
+  reviewHash,
   type CallableFunctionAccess,
+  type CallableFunctionSharedStatus,
   type ICallableFunctionSharedSource,
   type ICallableFunctionSummary,
   type McpToolApprovalMode,
 } from '@bike4mind/common';
 import { artifactRepository, callableFunctionRepository, callableFunctionReviewRepository } from '@bike4mind/database';
 import { listOfferedCallableFunctions, type CallableFunctionActor } from './registry';
-import { isCurrentReview } from './reviews';
 import { reachableSharedFunctions } from './sharing';
 
 /**
@@ -28,6 +30,8 @@ export interface CallerFunction<Fn extends ICallableFunctionSummary = ICallableF
   approval: McpToolApprovalMode;
   /** Always for the owner; for a recipient, while they hold a current, enabled review. */
   reviewed: boolean;
+  /** A recipient's review of the version they call, and that version's interface hash; absent for the owner. */
+  review?: { status: CallableFunctionSharedStatus; hash: string };
 }
 
 export type CallerFunctionLookup<Fn extends ICallableFunctionSummary = ICallableFunctionSharedSource> =
@@ -65,12 +69,15 @@ async function sharedEntries(actor: CallableFunctionActor, ownSlugs: Set<string>
     reachable.map(async ({ fn, access }) => {
       const review = reviewOf.get(fn.id) ?? null;
       const taken = ownSlugs.has(fn.slug) || (slugCount.get(fn.slug) ?? 0) > 1;
+      const hash = await reviewHash(fn.contract);
+      const status = callableFunctionReviewStatus(review, hash);
       return {
         fn,
         access,
         name: taken ? `${fn.slug}_${fn.id.slice(-NAME_SUFFIX_LENGTH)}` : fn.slug,
         approval: review?.approval ?? 'default',
-        reviewed: await isCurrentReview(review, fn.contract),
+        reviewed: status === 'reviewed',
+        review: { status, hash },
       };
     })
   );
@@ -78,16 +85,17 @@ async function sharedEntries(actor: CallableFunctionActor, ownSlugs: Set<string>
 
 /**
  * Every function the actor may call now: their own live ones, oldest first, then shared ones they have reviewed,
- * newest share first. `excludeAlwaysAsk` drops those that would ask before each call.
+ * newest share first. `excludeAlwaysAsk` drops those that would ask before each call; `includeUnreviewed` keeps
+ * shared ones still awaiting the actor's review, for a surface that lists them to be reviewed.
  */
 export async function listCallerFunctions(
   actor: CallableFunctionActor,
-  options: { excludeAlwaysAsk?: boolean; limit?: number } = {}
+  options: { excludeAlwaysAsk?: boolean; includeUnreviewed?: boolean; limit?: number } = {}
 ): Promise<CallerFunction[]> {
-  const { excludeAlwaysAsk, limit } = options;
+  const { excludeAlwaysAsk, includeUnreviewed, limit } = options;
   const own = await listOfferedCallableFunctions(actor, { excludeAlwaysAsk, ...(limit ? { limit } : {}) });
   const shared = await sharedEntries(actor, new Set(own.map(fn => fn.slug)));
-  const all = [...own.map(ownEntry), ...shared.filter(entry => entry.reviewed)].filter(
+  const all = [...own.map(ownEntry), ...shared.filter(entry => includeUnreviewed || entry.reviewed)].filter(
     entry => !(excludeAlwaysAsk && entry.approval === 'always_ask')
   );
   return limit ? all.slice(0, limit) : all;

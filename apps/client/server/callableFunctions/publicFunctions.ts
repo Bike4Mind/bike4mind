@@ -1,11 +1,16 @@
 import {
+  FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
   ForbiddenError,
   NotFoundError,
   REQUEST_TIMEOUT_ERROR_CODE,
   projectFunctionSchema,
   shownCallableFunctionTrustLabel,
+  type CallableFunctionAccess,
+  type CallableFunctionSharedStatus,
   type FunctionContractProblem,
   type ICallableFunctionResult,
+  type PublicFunctionGroup,
+  type PublicFunctionReviewStatus,
 } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -15,6 +20,7 @@ import {
   listCallerFunctions,
   type CallerFunction,
 } from '@bike4mind/server-utils/callableFunctions/callerFunctions';
+import { displayNamesOf } from '@bike4mind/server-utils/callableFunctions/sharing';
 import {
   CALLABLE_FUNCTION_SURFACE_CAPS,
   type DispatchFunctionCallResult,
@@ -90,22 +96,45 @@ export async function resolveCallableFunction(user: { id: string }, id: string):
   return lookup.found;
 }
 
-/** A function the caller can call now: their own live one, or one shared with them that they have reviewed. */
-export async function loadLiveFunction(user: { id: string }, id: string): Promise<CallerFunction> {
-  const entry = await resolveCallableFunction(user, id);
-  if (!entry.reviewed) throw notFound();
-  return entry;
-}
-
+/** The functions the caller can call now: their own live ones, then shared ones they have reviewed. */
 export async function listLiveFunctions(user: { id: string }): Promise<CallerFunction[]> {
   return listCallerFunctions(user);
 }
 
-export function toPublicFunction({ fn, name }: CallerFunction) {
+/** The caller's own live functions, then every live one shared with them, reviewed or not. */
+export async function listReachableFunctions(user: { id: string }): Promise<CallerFunction[]> {
+  return listCallerFunctions(user, { includeUnreviewed: true });
+}
+
+/** Exhaustive, so a new way to reach a function fails to compile here until it is given a group. */
+export function publicFunctionGroup(access: CallableFunctionAccess): PublicFunctionGroup {
+  switch (access) {
+    case 'owner':
+      return 'own';
+    case 'person':
+    case 'project':
+    case 'organization':
+      return 'shared';
+    default: {
+      const unmapped: never = access;
+      throw new Error(`No group for access ${String(unmapped)}`);
+    }
+  }
+}
+
+const REVIEW_STATUS: Record<CallableFunctionSharedStatus, PublicFunctionReviewStatus> = {
+  pending_review: 'needs_review',
+  reviewed: 'allowed',
+  disabled: 'withdrawn',
+};
+
+export function toPublicFunction({ fn, name, access, review }: CallerFunction) {
   return {
     id: fn.id,
     slug: name,
     description: fn.description,
+    group: publicFunctionGroup(access),
+    review_status: review ? REVIEW_STATUS[review.status] : null,
     trust_label: shownCallableFunctionTrustLabel(fn),
     pin_version: fn.pin.version,
     pin_seq: fn.pin.seq ?? null,
@@ -113,9 +142,19 @@ export function toPublicFunction({ fn, name }: CallerFunction) {
   };
 }
 
-export function toPublicFunctionDetail(entry: CallerFunction) {
+/** The read and the review answer: the interface a recipient reviews, and who shared it; never code or data. */
+export async function toPublicFunctionDetail(entry: CallerFunction) {
   const rest = projectFunctionSchema(entry.fn.contract, 'rest');
-  return { ...toPublicFunction(entry), input_schema: rest.inputs, output_schema: rest.outputs };
+  const shared = entry.access !== 'owner';
+  const [ownerName] = shared ? await displayNamesOf([entry.fn.userId]) : [];
+  return {
+    ...toPublicFunction(entry),
+    input_schema: rest.inputs,
+    output_schema: rest.outputs,
+    shared_by: ownerName ? { name: ownerName } : null,
+    shared_via: entry.access === 'owner' ? null : entry.access,
+    review_hash: entry.review?.hash ?? null,
+  };
 }
 
 /** One sentence naming the first field that does not fit, and how many more do not. */
@@ -191,7 +230,10 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         return { status: 503, body: { error: 'No function runtime is available.' } };
       }
       if (call.reason === 'review_required') {
-        return { status: 403, body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE } };
+        return {
+          status: 403,
+          body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: FUNCTION_REVIEW_REQUIRED_ERROR_CODE },
+        };
       }
       if (call.reason && FUNCTION_NOT_FOUND_REASONS.has(call.reason)) {
         return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };
