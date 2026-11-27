@@ -617,13 +617,13 @@ function SecretModal({
   );
 }
 
-/** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
 const UsageDash = () => (
   <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
     {'\u2014'}
   </Typography>
 );
 
+/** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
 function ClientIdCell({ clientId }: { clientId: string }) {
   const { copied, handleCopyToClipboard } = useCopyToClipboard();
   return (
