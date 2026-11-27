@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { stateFor } from '../e2e-outcome.mjs';
 
 const require = createRequire(import.meta.url);
-const { prepare, report, verify } = require('../../.github/scripts/preview-e2e.cjs');
+const { prepare, report, verify, ensureAwake } = require('../../.github/scripts/preview-e2e.cjs');
 const root = new URL('../../', import.meta.url);
 const sha = 'a'.repeat(40);
 const movedHead = { head: 'c'.repeat(40), description: `Preview deployed at ${'c'.repeat(7)}`, deployedSha: 'c'.repeat(40) };
@@ -174,4 +174,94 @@ test('no e2e workflow checkout ref can come from inputs or PR refs', () => {
     });
   }
   assert.ok(seen >= 4);
+});
+
+const SECRET = 'secret-value-123';
+const WAF = 'waf-token-456';
+const json = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+const asleep = json(200, { asleep: true, waking: false, services: [] });
+const waking = json(200, { asleep: false, waking: true, services: [] });
+const awake = json(200, { asleep: false, waking: false, services: [] });
+function wake(responses, overrides = {}) {
+  const calls = [];
+  const notices = [];
+  const queue = [...responses];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, method: init.method ?? 'GET', headers: init.headers });
+    const next = queue.shift();
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  const run = ensureAwake({ apiUrl: 'https://api.example.com/', secret: SECRET, wafToken: WAF, stage: 'pr7',
+    log: { notice: message => notices.push(message) }, fetchImpl, wait: async () => {}, attempts: 3, intervalMs: 10000,
+    ...overrides });
+  return { run, calls, notices, posts: () => calls.filter(call => call.method === 'POST').length };
+}
+const noLeak = (...texts) => texts.forEach(text => {
+  assert.doesNotMatch(text, new RegExp(`${SECRET}|${WAF}`));
+});
+
+test('ensureAwake passes an awake preview through with one GET and no POST', async () => {
+  const w = wake([awake]);
+  assert.equal(await w.run, 'awake');
+  assert.equal(w.calls.length, 1);
+  assert.equal(w.calls[0].url, 'https://api.example.com/api/test/preview-sleep');
+  assert.deepEqual(w.calls[0].headers, { 'x-e2e-cleanup-secret': SECRET, 'x-e2e-waf-bypass': WAF });
+});
+
+test('ensureAwake wakes an asleep preview once and polls until ready', async () => {
+  const w = wake([asleep, json(202, { waking: true }), waking, awake]);
+  assert.equal(await w.run, 'woken');
+  assert.equal(w.posts(), 1);
+  assert.deepEqual(w.notices, ['preview was asleep; waking']);
+});
+
+test('ensureAwake polls a waking preview without posting', async () => {
+  const w = wake([waking, waking, awake]);
+  assert.equal(await w.run, 'woken');
+  assert.equal(w.posts(), 0);
+});
+
+test('ensureAwake fails with the asleep message once the budget runs out', async () => {
+  const w = wake([asleep, json(202, {}), asleep, waking, waking]);
+  await assert.rejects(w.run, error => {
+    assert.match(error.message, /Preview stage pr7 is still asleep\/waking after 30s; .*no tests started/);
+    noLeak(error.message);
+    return true;
+  });
+  assert.equal(w.posts(), 1);
+});
+
+test('ensureAwake treats a 404 on GET or POST as an older preview and continues', async () => {
+  for (const responses of [[json(404, {})], [asleep, json(404, {})]]) {
+    const w = wake(responses);
+    assert.equal(await w.run, 'unsupported');
+    assert.deepEqual(w.notices, ['preview sleep route not available on this preview; continuing']);
+  }
+});
+
+test('ensureAwake throws a clear error on 401 and 403', async () => {
+  await assert.rejects(wake([json(401, {})]).run, /rejected the E2E secret \(HTTP 401\)/);
+  await assert.rejects(wake([asleep, json(403, {})]).run, /E2E endpoints are off/);
+});
+
+test('ensureAwake retries a transient 502, a network error and a malformed body', async () => {
+  const w = wake([json(502, { error: 'Preview status is unavailable' }), new Error('fetch failed'),
+    json(200, { asleep: 'yes' }), awake], { attempts: 5 });
+  assert.equal(await w.run, 'woken');
+  assert.equal(w.posts(), 0);
+});
+
+test('ensureAwake omits the WAF header without a token and skips without a secret', async () => {
+  const w = wake([awake], { wafToken: '' });
+  await w.run;
+  assert.deepEqual(w.calls[0].headers, { 'x-e2e-cleanup-secret': SECRET });
+  const skipped = wake([], { secret: '' });
+  assert.equal(await skipped.run, 'skipped');
+  assert.equal(skipped.calls.length, 0);
+});
+
+test('ensureAwake keeps the secret and token out of every message', async () => {
+  const w = wake([asleep, json(500, { error: SECRET })]);
+  await assert.rejects(w.run, error => (noLeak(error.message, ...w.notices), /HTTP 500/.test(error.message)));
 });

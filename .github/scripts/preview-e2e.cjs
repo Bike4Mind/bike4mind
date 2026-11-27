@@ -85,4 +85,75 @@ async function report({ github, context, core }) {
   });
 }
 
-module.exports = { prepare, report, verify, previewStatus };
+const SLEEP_ROUTE = '/api/test/preview-sleep';
+
+// Wakes a weekend-sleeping preview before the suite runs (route: apps/client/pages/api/test/preview-sleep.ts).
+// Messages never carry the secret, the WAF token or a response body.
+async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', fetchImpl = fetch,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 48, intervalMs = 10000 }) {
+  if (!secret) {
+    log.notice('No E2E secret for this preview; skipping the wake check.');
+    return 'skipped';
+  }
+  if (!apiUrl) throw new Error('API_URL is not set; cannot check whether the preview is asleep.');
+  const url = `${apiUrl.replace(/\/$/, '')}${SLEEP_ROUTE}`;
+  const headers = { 'x-e2e-cleanup-secret': secret, ...(wafToken ? { 'x-e2e-waf-bypass': wafToken } : {}) };
+  const unsupported = () => {
+    log.notice('preview sleep route not available on this preview; continuing');
+    return 'unsupported';
+  };
+  const refused = status => new Error(status === 401
+    ? 'Preview sleep route rejected the E2E secret (HTTP 401); check the derived per-stage secret.'
+    : 'Preview sleep route refused the request (HTTP 403); E2E endpoints are off on this stage.');
+  // 'unsupported' on 404; null on anything retryable (network error, 5xx, malformed body).
+  const readStatus = async () => {
+    let res;
+    try { res = await fetchImpl(url, { headers }); } catch { return null; }
+    if (res.status === 404) return 'unsupported';
+    if (res.status === 401 || res.status === 403) throw refused(res.status);
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    return typeof body?.asleep === 'boolean' && typeof body?.waking === 'boolean' ? body : null;
+  };
+  const ready = state => state && state !== 'unsupported' && !state.asleep && !state.waking;
+
+  let state = await readStatus();
+  if (state === 'unsupported') return unsupported();
+  if (ready(state)) return 'awake';
+  let posted = false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (state?.asleep && !posted) {
+      let res;
+      try { res = await fetchImpl(url, { method: 'POST', headers }); } catch {
+        throw new Error('Waking the preview failed: the wake request did not complete.');
+      }
+      if (res.status === 404) return unsupported();
+      if (res.status === 401 || res.status === 403) throw refused(res.status);
+      if (res.status !== 202) throw new Error(`Waking the preview failed (HTTP ${res.status}).`);
+      posted = true;
+      log.notice('preview was asleep; waking');
+    }
+    await wait(intervalMs);
+    state = await readStatus();
+    if (state === 'unsupported') return unsupported();
+    if (ready(state)) return 'woken';
+  }
+  throw new Error(`Preview stage ${stage} is still asleep/waking after ${Math.round((attempts * intervalMs) / 1000)}s; ` +
+    'services did not become ready, no tests started.');
+}
+
+module.exports = { prepare, report, verify, previewStatus, ensureAwake };
+
+if (require.main === module) {
+  const pr = process.env.PR_NUMBER;
+  ensureAwake({
+    apiUrl: process.env.API_URL || '',
+    secret: process.env.E2E_CLEANUP_SECRET || '',
+    wafToken: process.env.E2E_WAF_BYPASS_TOKEN || '',
+    stage: pr ? `pr${pr}` : undefined,
+    log: { notice: message => console.log(`::notice::${message}`) },
+  }).then(outcome => console.log(`Preview wake check: ${outcome}`), error => {
+    console.log(`::error::${error.message}`);
+    process.exitCode = 1;
+  });
+}
