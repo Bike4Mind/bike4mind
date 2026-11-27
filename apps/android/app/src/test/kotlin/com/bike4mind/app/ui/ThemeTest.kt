@@ -25,4 +25,13 @@ class ThemeTest {
     fun lightAndDarkBackgroundsDiffer() {
         assertNotEquals(brandColorScheme(dark = false).background, brandColorScheme(dark = true).background)
     }
+
+    @Test
+    fun containerRolesUseBrandSurfacesNotMaterialBaseline() {
+        val light = brandColorScheme(dark = false)
+        assertEquals(BrandTokens.Colors.promptBubble.light, light.surfaceContainerHighest)
+        assertEquals(BrandTokens.Colors.surface.light, light.surfaceContainerHigh)
+        val dark = brandColorScheme(dark = true)
+        assertEquals(BrandTokens.Colors.promptBubble.dark, dark.surfaceContainerHighest)
+    }
 }
