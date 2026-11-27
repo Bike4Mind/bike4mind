@@ -12,6 +12,7 @@
 
 import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
 import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
+import { NOTION_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/notion/constants';
 import type { IPendingAction } from '@bike4mind/common';
 
 export type McpPendingAction = {
@@ -34,6 +35,7 @@ export type McpPendingActionExtraction =
 const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['github', GITHUB_CONFIRMABLE_TOOLS],
   ['atlassian', ATLASSIAN_CONFIRMABLE_TOOLS],
+  ['notion', NOTION_CONFIRMABLE_TOOLS],
 ]);
 
 const MCP_NAMESPACE_SEPARATOR = '__';
