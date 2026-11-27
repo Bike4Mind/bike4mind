@@ -27,7 +27,11 @@ const testIdsOf = (selector: string) => [...selector.matchAll(/\[data-testid="([
 
 const usedTestIds = [
   ...new Set(
-    IMPORT_HISTORY_STEPS.flatMap(step => [...(step.anchor ? [step.anchor] : []), ...testIdsOf(step.avoid ?? '')])
+    IMPORT_HISTORY_STEPS.flatMap(step => [
+      ...(step.anchor ? [step.anchor] : []),
+      ...testIdsOf(step.anchorScope ?? ''),
+      ...testIdsOf(step.avoid ?? ''),
+    ])
   ),
 ];
 

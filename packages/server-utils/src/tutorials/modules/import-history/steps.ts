@@ -10,11 +10,11 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     type: 'prompt',
     turn: 0,
     prompt: IMPORT_HISTORY_PROMPT,
-    // The whole composer, not Send: a phone shows Send only once the box has text.
-    anchor: 'session-bottom-container',
+    anchor: 'send-message-btn',
+    anchorScope: '[data-testid="session-bottom-container"]',
     placement: 'above',
     title: 'Ask how it works',
-    body: 'Press Paste the message to put a question about importing in the message box, then press Send.',
+    body: 'A question about importing is waiting in the message box. Press Send to get the answer.',
   },
   {
     id: 'import-history-export',
@@ -61,8 +61,6 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
   {
     id: 'import-history-after',
     type: 'point',
-    // Bottom-left: the default bottom-right corner covers the end of the recorded answer.
-    placement: 'left',
     title: 'It runs in the background',
     body: 'Each past chat becomes its own notebook in your list. Your inbox tells you when the import is done. Large exports can take a while.',
   },
