@@ -129,6 +129,8 @@ export class ChatCompletionInvoke {
     fileInputsAllowed?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
     visitId?: string;
+    /** Premium tool map keys, governed by the org tool policy beyond the built-in enum. */
+    contributedToolNames?: ReadonlySet<string>;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
