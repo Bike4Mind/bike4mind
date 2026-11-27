@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import { callableFunctionRepository, mongoose, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 import { dropUncoveredCallableFunctionReviews } from '@bike4mind/server-utils/callableFunctions/sharing';
 
@@ -39,11 +40,14 @@ const view = (fn: Parameters<typeof shownCallableFunctionTrustLabel>[0] & { id: 
   audience: fn.platform?.audience ?? null,
 });
 
+const RATE_LIMIT = { limit: 30, windowMs: 60 * 1000, bucket: 'admin-callable-function-platform' } as const;
+
 const handler = adminApi({
   auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { POST: 'models:curate', PATCH: 'models:curate', DELETE: 'models:curate' },
 })
+  .use(rateLimit(RATE_LIMIT))
   .post(async (req: Request, res) => {
     const id = String(req.query.id);
     const parsed = ReasonSchema.safeParse(req.body ?? {});

@@ -11,8 +11,16 @@ const h = vi.hoisted(() => ({
   setPlatformAudience: vi.fn(),
   dropUncovered: vi.fn(),
   record: vi.fn(),
+  rateLimit: vi.fn(),
   inTransaction: [] as boolean[],
   txActive: false,
+}));
+
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => {
+    h.rateLimit(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
@@ -86,18 +94,23 @@ beforeEach(() => {
 });
 
 describe('/api/admin/callable-functions/:id/platform', () => {
-  it('is JWT-only and needs models:curate and the admin scope', async () => {
+  it('is JWT-only, needs models:curate and the admin scope, and is rate-limited', async () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
       adminPermissions: { POST: 'models:curate', PATCH: 'models:curate', DELETE: 'models:curate' },
     });
+    expect(h.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ bucket: 'admin-callable-function-platform' }));
     const delegate = { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] };
     await expect(run('POST', delegate).promise).rejects.toThrow(missingAdminPermissionMessage('models:curate'));
     await expect(run('DELETE', delegate).promise).rejects.toThrow(missingAdminPermissionMessage('models:curate'));
-    await expect(run('PATCH', delegate, FUNCTION_ID, { audience: 'signed_in' }).promise).rejects.toThrow(
-      missingAdminPermissionMessage('models:curate')
-    );
+    // The function's owner, and a project or organization admin, hold no platform admin permission.
+    const owner = { id: 'owner1', isAdmin: false };
+    for (const user of [delegate, owner]) {
+      await expect(run('PATCH', user, FUNCTION_ID, { audience: 'signed_in' }).promise).rejects.toThrow(
+        missingAdminPermissionMessage('models:curate')
+      );
+    }
     expect(h.setPlatformMark).not.toHaveBeenCalled();
     expect(h.clearPlatformMark).not.toHaveBeenCalled();
     expect(h.setPlatformAudience).not.toHaveBeenCalled();
