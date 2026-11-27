@@ -129,6 +129,20 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
     expect(response._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
+  it("passes the new account's stored signupClientId to its signup event, null when it has none", async () => {
+    mockSamlUser.mockReturnValue({ id: 'u-new', isBanned: false, isNewUser: true, signupClientId: 'b4m_sat_0123abcd' });
+    await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new', clientId: 'b4m_sat_0123abcd' })
+    );
+
+    mockSamlUser.mockReturnValue({ id: 'u-new2', isBanned: false, isNewUser: true, signupClientId: null });
+    await runCallback(new URLSearchParams({ idp: 'idp-1' }).toString());
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new2', clientId: null })
+    );
+  });
+
   it("carries a new account's verified hop, when its cookies reach the callback, to the signup funnel", async () => {
     // Usually they do not: the IdP's cross-site POST carries no Lax cookie. The write is the
     // shared one either way, so what it decides reaches signup_completed.

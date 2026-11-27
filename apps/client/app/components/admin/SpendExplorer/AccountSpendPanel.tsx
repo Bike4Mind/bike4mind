@@ -29,7 +29,8 @@ export function AccountSpendPanel({ account, range, onClose }: AccountSpendPanel
   const modelMix = useMemo(() => {
     const totals = new Map<string, number>();
     for (const bucket of timeline.data?.buckets ?? []) {
-      for (const [model, cost] of Object.entries(bucket.series)) totals.set(model, (totals.get(model) ?? 0) + cost);
+      for (const [model, cost] of Object.entries(bucket.series ?? {}))
+        totals.set(model, (totals.get(model) ?? 0) + cost);
     }
     const rows = [...totals.entries()].sort((a, b) => b[1] - a[1]);
     return { rows, total: rows.reduce((sum, [, cost]) => sum + cost, 0) };

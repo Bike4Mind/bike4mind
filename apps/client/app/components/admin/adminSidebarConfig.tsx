@@ -184,6 +184,8 @@ export type SidebarItem = {
   badge?: SidebarBadge;
   /** The count a delegated admin sees in place of `badge`. */
   delegateBadge?: AdminActionCountKey;
+  /** A copy shown in the Pinned group: it never renders active or carries a badge, its home row does. */
+  pinned?: boolean;
 };
 
 /** A link to a contributed admin page (a premium route that is not an `AdminTab`); see adminContributedPages.ts. */

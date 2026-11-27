@@ -2,7 +2,12 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { CreditHolderType, type SpendAccountRow, type SpendTimelineResponse } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  type SpendAccountRow,
+  type SpendTimelineBucket,
+  type SpendTimelineResponse,
+} from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({ useSpendTimeline: vi.fn(), userFeatures: vi.fn() }));
@@ -98,6 +103,23 @@ describe('AccountSpendPanel', () => {
     expect(mix).toHaveTextContent(/opus\s*\$35\.00/);
     expect(mix).toHaveTextContent(/haiku\s*\$5\.00/);
     expect(mix.textContent!.indexOf('opus')).toBeLessThan(mix.textContent!.indexOf('haiku'));
+  });
+
+  it('counts a bucket that arrives without a series object as zero', () => {
+    const { series: _dropped, ...emptyBucket } = bucket('2026-11-11T00:00:00.000Z', {});
+    h.useSpendTimeline.mockReturnValue({
+      data: {
+        ...TIMELINE,
+        buckets: [bucket('2026-11-10T00:00:00.000Z', { haiku: 5, opus: 15 }), emptyBucket as SpendTimelineBucket],
+      },
+      isLoading: false,
+      isError: false,
+    });
+    renderPanel();
+
+    const mix = screen.getByTestId('spend-account-model-mix');
+    expect(mix).toHaveTextContent(/opus\s*\$15\.00/);
+    expect(mix).toHaveTextContent(/haiku\s*\$5\.00/);
   });
 
   it('links only the organizations that were billed', () => {

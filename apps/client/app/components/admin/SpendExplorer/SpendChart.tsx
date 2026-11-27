@@ -64,7 +64,8 @@ function SpendChartInner({ testId, data, showPrevious, selectedStart, onSelectBu
   const colors = useSeriesColors(data.seriesKeys.length);
 
   const rows: ChartRow[] = useMemo(
-    () => data.buckets.map(b => ({ ...b, label: formatBucket(b.start, bucket) })),
+    // A cached timeline can arrive with `series` dropped on empty buckets.
+    () => data.buckets.map(b => ({ ...b, series: b.series ?? {}, label: formatBucket(b.start, bucket) })),
     [data.buckets, bucket]
   );
 
