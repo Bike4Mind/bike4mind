@@ -199,20 +199,25 @@ describe('LakeContradictionReadingService.evaluate', () => {
   });
 
   it('rethrows a credit refusal from the meter without calling the provider', async () => {
-    const meter = vi.fn().mockRejectedValue(insufficientCreditsError('no credits'));
+    const refusal = insufficientCreditsError('no credits');
+    const meter = vi.fn().mockRejectedValue(refusal);
 
-    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
-      statusCode: 422,
-    });
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toBe(refusal);
+    expect(completeCalls).toBe(0);
+  });
+
+  it('treats any other meter failure as a bad batch rather than ending the run', async () => {
+    const meter = vi.fn().mockRejectedValue(new Error('ledger unavailable'));
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).resolves.toBeNull();
     expect(completeCalls).toBe(0);
   });
 
   it("rethrows the owner's AI-access refusal from the meter without calling the provider", async () => {
-    const meter = vi.fn().mockRejectedValue(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+    const refusal = new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
+    const meter = vi.fn().mockRejectedValue(refusal);
 
-    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
-      statusCode: 403,
-    });
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toBe(refusal);
     expect(completeCalls).toBe(0);
   });
 

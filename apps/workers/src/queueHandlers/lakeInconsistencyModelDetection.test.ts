@@ -63,6 +63,8 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findUserById },
 }));
 
+import { ForbiddenError } from '@bike4mind/utils';
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { dispatch } from './lakeInconsistencyModelDetection';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme', createdByUserId: 'owner1' };
@@ -141,6 +143,8 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
     await invoke();
 
     expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.createCompletionMeter).not.toHaveBeenCalled();
+    expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
   });
 
@@ -152,6 +156,21 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
     await expect(invoke()).resolves.toBeUndefined();
     expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
     expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('lake owner refused'));
+  });
+
+  it('consumes the message when the owner may not use AI, instead of retrying into the DLQ', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+
+    await expect(invoke()).resolves.toBeUndefined();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('lake owner refused'));
+  });
+
+  it('still retries a 403 that is not an AI-access refusal', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(new ForbiddenError('some other forbidden'));
+
+    await expect(invoke()).rejects.toThrow('some other forbidden');
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
   });
 
   it('bills the creator when the lake carries no owner grant', async () => {
