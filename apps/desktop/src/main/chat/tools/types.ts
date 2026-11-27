@@ -37,6 +37,7 @@ import type { BranchReservation } from '../project/workspace';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
+import type { ApprovalReasonCode } from '../permissions/approvalReasons';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import type { WebSearchTurn } from './webSearchLimits';
@@ -550,8 +551,7 @@ export interface HostSessionView {
  * one in it that is neither the caller nor a child of it, so the model cannot probe either.
  */
 export type HostRenameOutcome =
-  | { ok: true; session: HostSessionView }
-  | { ok: false; reason: 'out-of-scope' | 'user-title' };
+  { ok: true; session: HostSessionView } | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -752,6 +752,8 @@ export interface ApprovalPrompt {
    * carries a reason it would otherwise drop.
    */
   reasons?: readonly string[];
+  /** One code per entry of `reasons`, in the same order, for the approval log. */
+  reasonCodes?: readonly ApprovalReasonCode[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**

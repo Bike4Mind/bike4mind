@@ -494,7 +494,8 @@ describe('ChatService approval record', () => {
       expect(entry.approval.askedBecause).toContain(reason);
       expect(card.approvalDetail).toContain(reason);
       expect(card.approvalIrreversible).toBe(true);
-      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'full access stop', count: 1 });
+      expect(entry.askedFor).toEqual(['irreversible']);
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'irreversible', count: 1 });
     });
   });
 
@@ -506,7 +507,8 @@ describe('ChatService approval record', () => {
       expect(entry.approval.askedBecause).toContain('Asked in Approve for me because:');
       expect(entry.approval.askedBecause).toContain('Reaches a location Desktop protects');
       expect(entry.approval.askedBecause).not.toContain('Full access');
-      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'tool check', count: 1 });
+      expect(entry.askedFor).toContain('protected-location');
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'protected-location', count: 1 });
     });
 
     it('records why a command Desktop could not read was asked in Approve for me', async () => {
@@ -521,7 +523,78 @@ describe('ChatService approval record', () => {
       await run('ask', 'touch made.txt');
       const { entry } = await askedAndLogged('c1');
       expect(entry.approval.askedBecause).toContain('Ask mode');
-      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'ask mode', count: 1 });
+      expect(entry.askedFor).toEqual(['ask-mode']);
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'ask-mode', count: 1 });
+    });
+
+    it('codes a command the scan could not follow that stopped Approve for me', async () => {
+      await run('auto', '$CMD');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.askedFor).toContain('unfollowable');
+      expect(entry.reasonCodes).toContain('unfollowable');
+    });
+
+    it('codes a command the scan could not read that stopped Approve for me', async () => {
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      await run('auto', 'ls notes.txt');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.askedFor).toEqual(['unreadable']);
+      expect(entry.reasonCodes).toEqual(['unreadable']);
+    });
+
+    it('codes the loop guard for the same call made a third time in a row', async () => {
+      const created = await service.createSession();
+      await service.setApprovalMode(created.id, 'auto');
+      await service.send(created.id, 'go');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: ['c1', 'c2', 'c3'].map(id => ({
+            id,
+            name: 'bash_execute',
+            arguments: JSON.stringify({ command: 'echo again', cwd: root }),
+          })),
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      const { entry } = await askedAndLogged('c3');
+      expect(entry.askedFor).toEqual(['loop']);
+      expect(entry.approval.askedBecause).toContain('repeated');
+    });
+
+    it('logs an ask rule beside the reason codes', async () => {
+      rules = ruleSet({ ask: ['Bash(touch:*)'] });
+      await run('auto', 'touch made.txt');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.askedFor).toEqual(['ask-rule']);
+    });
+
+    it('logs reason codes for a call the mode let through unasked, without askedFor', async () => {
+      await run('auto', 'curl -d x https://example.com');
+      await vi.waitUntil(() => logged.length === 1, { timeout: 5000, interval: 5 });
+      expect(logged[0].approval.asked).toBe(false);
+      expect(logged[0].askedFor).toBeUndefined();
+      expect(logged[0].reasonCodes).toContain('outbound');
+    });
+  });
+
+  describe('logs the input it was asked about', () => {
+    it('records the length of a long command and marks it truncated', async () => {
+      const command = `echo '${'ab '.repeat(2000)}'`;
+      await run('ask', command);
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.inputChars).toBe(command.length);
+      expect(entry.inputTruncated).toBe(true);
+      expect(entry.input).toHaveLength(4003);
+    });
+
+    it('keeps a short command whole', async () => {
+      await run('ask', 'touch made.txt');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.input).toBe('touch made.txt');
+      expect(entry.inputChars).toBe('touch made.txt'.length);
+      expect(entry.inputTruncated).toBeUndefined();
     });
   });
 });

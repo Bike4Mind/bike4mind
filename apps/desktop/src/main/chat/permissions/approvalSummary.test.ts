@@ -114,6 +114,24 @@ describe('summarizeApprovals', () => {
     expect(summary.reasons).toEqual([{ reason: 'full access stop', count: 1 }]);
   });
 
+  it('prefers the logged reason codes over the sentence', () => {
+    const summary = summarizeApprovals([
+      entry({
+        askedFor: ['loop', 'unfollowable'],
+        approval: {
+          asked: true,
+          askedBecause: 'Asked because the same call was repeated 3 times in a row.',
+        },
+      }),
+      entry({ askedFor: ['ask-mode'], mode: 'ask', approval: { asked: true } }),
+      entry({ askedFor: ['ask-mode'], mode: 'ask', approval: { asked: true } }),
+    ]);
+    expect(summary.reasons).toEqual([
+      { reason: 'ask-mode', count: 2 },
+      { reason: 'loop + unfollowable', count: 1 },
+    ]);
+  });
+
   it('groups prompts by tool, pattern and project folder name, and picks the always-allowed ones', () => {
     const summary = summarizeApprovals(entries);
     expect(summary.prompted[0]).toEqual({
