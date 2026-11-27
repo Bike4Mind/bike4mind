@@ -9,7 +9,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { SectionCard, formatMoney } from '../shared';
 import { formatCount } from '../Analytics/analyticsFormat';
 import { AdminTab } from '../adminSidebarConfig';
-import { RANGE_DAYS, spendKpi, type DashboardRange } from './dashboardRange';
+import { RANGE_DAYS, spendKpi, trendWindow, type DashboardRange } from './dashboardRange';
 
 type QueryState<T> = { data: T | undefined; isLoading: boolean; isError: boolean; refetch: () => unknown };
 type Tone = 'neutral' | 'success' | 'warning' | 'danger';
@@ -129,14 +129,11 @@ export function PlatformHealthCard({
   );
 }
 
-/** Sums the daily snapshots over the range; `newMrr` and `churnedMrr` each cover one day. */
+/** Sums the daily snapshots over the range; `newMrr` and `churnedMrr` each cover one day. Null when the data does not span the range. */
 export function revenueMovement(revenue: AdminRevenueTrendResponse | undefined, days: number) {
   if (!revenue?.stripeConfigured || revenue.trend.length === 0) return null;
-  const { trend } = revenue;
-  const snapshots = trend.slice(-days);
-  const latest = trend[trend.length - 1];
-  // Same baseline as the MRR tile: the snapshot `days` before the latest, or the oldest one there is.
-  const baseline = trend[trend.length - 1 - days] ?? trend[0];
+  const { latest, baseline, window: snapshots } = trendWindow(revenue.trend, days);
+  if (!baseline) return null;
   const sum = (pick: (point: (typeof snapshots)[number]) => number) =>
     snapshots.reduce((total, p) => total + pick(p), 0);
   return {

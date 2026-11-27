@@ -33,7 +33,7 @@ export function pinnedSidebarSection(
   const items = pins.flatMap(slug => {
     const tab = adminTabFromSlug(slug);
     const item = tab === undefined ? undefined : sidebarItemForTab(tab);
-    return item && canOpenTab(item.tab) ? [{ ...item, testid: `admin-sidebar-pinned-${slug}` }] : [];
+    return item && canOpenTab(item.tab) ? [{ ...item, testid: `admin-sidebar-pinned-${slug}`, pinned: true }] : [];
   });
   return items.length > 0 ? { key: 'pinned', Icon: PushPinOutlinedIcon, label: 'Pinned', items } : null;
 }

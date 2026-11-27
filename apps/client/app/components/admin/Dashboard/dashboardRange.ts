@@ -23,3 +23,16 @@ export function spendWindow(range: DashboardRange, now = Date.now()): { dateFrom
 
 export const spendKpi = (data: SpendData | undefined, key: SpendKpi['key']): SpendKpi | undefined =>
   data?.kpis.find(kpi => kpi.key === key);
+
+/**
+ * Splits a date-ordered daily series at `days` UTC days before its latest point: the baseline is the
+ * latest point on or before that cutoff and `window` the points after it. The baseline is null when
+ * the series does not reach back that far.
+ */
+export function trendWindow<T extends { date: string }>(trend: readonly T[], days: number) {
+  const latest = trend[trend.length - 1];
+  const cutoff = Date.parse(latest.date) - days * DAY_MS;
+  const baseline = trend.findLast(point => Date.parse(point.date) <= cutoff) ?? null;
+  const window = trend.filter(point => Date.parse(point.date) > cutoff);
+  return { latest, baseline, window };
+}

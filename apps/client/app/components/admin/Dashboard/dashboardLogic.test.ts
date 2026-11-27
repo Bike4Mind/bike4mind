@@ -6,9 +6,9 @@ import { AdminTab } from '../adminSidebarConfig';
 import { adminTabToSlug } from '../adminTabSlugs';
 import { EMPTY_PAGE_USAGE, MAX_PINNED_PAGES, mostVisitedSlugs, withPinToggled, withVisit } from './adminPageVisits';
 import { ACTION_COUNT_TABS, pinnedSidebarSection } from './dashboardNav';
-import { spendWindow } from './dashboardRange';
+import { spendWindow, trendWindow } from './dashboardRange';
 import { splitActionCounts } from './NeedsAttentionStrip';
-import { costPerActiveUser } from './PulseSection';
+import { costPerActiveUser, mrrPoints } from './PulseSection';
 import { revenueMovement } from './HealthAndRevenue';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -61,24 +61,31 @@ describe('dashboard navigation', () => {
     const section = pinnedSidebarSection([feedback, 'no-such-tab', revenue], tab => tab !== AdminTab.Revenue);
     expect(section?.items.map(item => item.tab)).toEqual([AdminTab.Feedback]);
     expect(section?.items[0].testid).toBe(`admin-sidebar-pinned-${feedback}`);
+    expect(section?.items.every(item => item.pinned === true)).toBe(true);
     expect(pinnedSidebarSection([], () => true)).toBeNull();
   });
 });
 
 describe('splitActionCounts', () => {
   it('orders waiting queues by size and separates clear and failed counts', () => {
-    const { waiting, clear, failed } = splitActionCounts({
-      feedback: 3,
-      signupRiskReview: 12,
-      approvals: 0,
-      sreAgent: null,
-    });
+    const { waiting, clear, failed } = splitActionCounts(
+      { feedback: 3, signupRiskReview: 12, approvals: 0, sreAgent: null },
+      []
+    );
     expect(waiting.map(item => [item.id, item.count])).toEqual([
       ['signupRiskReview', '12'],
       ['feedback', '3'],
     ]);
     expect(clear).toEqual(['approvals']);
     expect(failed).toEqual(['sreAgent']);
+  });
+
+  it('treats waiting subscribers as clear when the admin hid that notification', () => {
+    const counts = { waitingSubscribers: 4, feedback: 3 };
+    expect(splitActionCounts(counts, []).waiting.map(item => item.id)).toEqual(['waitingSubscribers', 'feedback']);
+    const hidden = splitActionCounts(counts, ['waiting-subscribers']);
+    expect(hidden.waiting.map(item => item.id)).toEqual(['feedback']);
+    expect(hidden.clear).toEqual(['waitingSubscribers']);
   });
 });
 
@@ -114,25 +121,43 @@ describe('costPerActiveUser', () => {
   });
 });
 
-describe('revenueMovement', () => {
-  const point = (newMrr: number, churnedMrr: number, payingCount: number) => ({
-    date: '2026-11-01',
-    mrr: 0,
-    payingCount,
-    newMrr,
-    churnedMrr,
-    pastDueMrr: 500,
-    cancelingMrr: 0,
-    payingUsers: 0,
-    payingOrgs: 0,
-    mrrByPlan: {},
-  });
+const day = (offset: number) => new Date(Date.UTC(2026, 10, 1) + offset * DAY).toISOString().slice(0, 10);
 
-  it('sums the per-day movement over the last N snapshots', () => {
-    const revenue: AdminRevenueTrendResponse = {
-      stripeConfigured: true,
-      trend: [point(999, 999, 1), point(100, 10, 40), point(200, 0, 42)],
-    };
+const revenuePoint = (date: string, newMrr: number, churnedMrr: number, payingCount: number, mrr = 0) => ({
+  date,
+  mrr,
+  payingCount,
+  newMrr,
+  churnedMrr,
+  pastDueMrr: 500,
+  cancelingMrr: 0,
+  payingUsers: 0,
+  payingOrgs: 0,
+  mrrByPlan: {},
+});
+
+const trendOf = (...points: ReturnType<typeof revenuePoint>[]): AdminRevenueTrendResponse => ({
+  stripeConfigured: true,
+  trend: points,
+});
+
+describe('trendWindow', () => {
+  it('takes the baseline on the cutoff day and the window after it', () => {
+    const trend = [0, 1, 2, 3].map(offset => ({ date: day(offset) }));
+    const { latest, baseline, window } = trendWindow(trend, 2);
+    expect(latest.date).toBe(day(3));
+    expect(baseline?.date).toBe(day(1));
+    expect(window.map(point => point.date)).toEqual([day(2), day(3)]);
+  });
+});
+
+describe('revenueMovement', () => {
+  it('sums the per-day movement over a full daily trend', () => {
+    const revenue = trendOf(
+      revenuePoint(day(0), 999, 999, 1),
+      revenuePoint(day(1), 100, 10, 40),
+      revenuePoint(day(2), 200, 0, 42)
+    );
     expect(revenueMovement(revenue, 2)).toEqual({
       newMrr: 300,
       churnedMrr: 10,
@@ -142,7 +167,45 @@ describe('revenueMovement', () => {
     });
   });
 
+  it('is null when the trend does not reach back N days', () => {
+    const revenue = trendOf(revenuePoint(day(0), 100, 0, 40), revenuePoint(day(1), 200, 0, 42));
+    expect(revenueMovement(revenue, 7)).toBeNull();
+  });
+
+  it('picks the baseline by date when a day is missing', () => {
+    const revenue = trendOf(
+      revenuePoint(day(0), 999, 999, 10),
+      revenuePoint(day(1), 50, 0, 20),
+      revenuePoint(day(3), 70, 5, 30)
+    );
+    expect(revenueMovement(revenue, 2)).toEqual({
+      newMrr: 70,
+      churnedMrr: 5,
+      pastDueMrr: 500,
+      payingCount: 30,
+      payingChange: 10,
+    });
+  });
+
   it('is null without Stripe', () => {
     expect(revenueMovement({ stripeConfigured: false }, 7)).toBeNull();
+  });
+});
+
+describe('mrrPoints', () => {
+  it('compares against the point on or before the cutoff date', () => {
+    const revenue = trendOf(
+      revenuePoint(day(0), 0, 0, 0, 100),
+      revenuePoint(day(1), 0, 0, 0, 200),
+      revenuePoint(day(3), 0, 0, 0, 300)
+    );
+    const points = mrrPoints(revenue, 2);
+    expect(points?.latest.mrr).toBe(300);
+    expect(points?.previous?.mrr).toBe(200);
+  });
+
+  it('has no previous point when the trend is shorter than the range', () => {
+    const revenue = trendOf(revenuePoint(day(0), 0, 0, 0, 100), revenuePoint(day(1), 0, 0, 0, 200));
+    expect(mrrPoints(revenue, 7)?.previous).toBeNull();
   });
 });

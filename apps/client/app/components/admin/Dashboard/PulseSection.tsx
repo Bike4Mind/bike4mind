@@ -6,7 +6,7 @@ import type { AnalyticsOverview } from '@client/app/utils/analyticsOverview';
 import { ErrorState, LoadingState, StatSparkline, StatStrip, StatTile, formatMoney } from '../shared';
 import { comparisonLine, formatCount, formatPercent, sparklineValues } from '../Analytics/analyticsFormat';
 import { formatUsd } from '../SpendExplorer/spendExplorerModel';
-import { RANGE_DAYS, spendKpi, type DashboardRange } from './dashboardRange';
+import { RANGE_DAYS, spendKpi, trendWindow, type DashboardRange } from './dashboardRange';
 
 type QueryState<T> = { data: T | undefined; isLoading: boolean; isError: boolean; refetch: () => unknown };
 
@@ -69,10 +69,10 @@ export function costPerActiveUser(spend: SpendData, overview: AnalyticsOverview,
   return { value: per(cost?.value, users.value), previous: per(cost?.priorValue, users.previous) };
 }
 
-function mrrPoints(revenue: AdminRevenueTrendResponse | undefined, days: number) {
+export function mrrPoints(revenue: AdminRevenueTrendResponse | undefined, days: number) {
   if (!revenue?.stripeConfigured || revenue.trend.length === 0) return null;
   const { trend } = revenue;
-  return { latest: trend[trend.length - 1], previous: trend[trend.length - 1 - days] ?? null, trend };
+  return { latest: trend[trend.length - 1], previous: trendWindow(trend, days).baseline, trend };
 }
 
 function MoneyStrip({

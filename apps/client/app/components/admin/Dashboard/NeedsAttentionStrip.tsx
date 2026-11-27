@@ -13,6 +13,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { adminTabFromSlug } from '../adminTabSlugs';
 import type { AdminTab } from '../adminSidebarConfig';
 import { ErrorState, LoadingState } from '../shared';
+import { useAdminNotifications } from '../useAdminNotifications';
 import { ACTION_COUNT_TABS } from './dashboardNav';
 
 type AttentionItem = { id: string; count: string; label: string; tab: AdminTab; sortKey: number };
@@ -20,14 +21,15 @@ type AttentionItem = { id: string; count: string; label: string; tab: AdminTab; 
 const CAMPAIGN_WATCHES_SLUG = 'shadow-detections';
 
 /** Queues with work waiting, most first. Zero and failed counts are returned separately. */
-export function splitActionCounts(counts: AdminActionCounts) {
+export function splitActionCounts(counts: AdminActionCounts, hiddenNotifications: string[]) {
   const waiting: AttentionItem[] = [];
   const clear: AdminActionCountKey[] = [];
   const failed: AdminActionCountKey[] = [];
   for (const [key, value] of Object.entries(counts) as [AdminActionCountKey, number | null | undefined][]) {
     const tab = ACTION_COUNT_TABS.get(key);
+    const hidden = key === 'waitingSubscribers' && hiddenNotifications.includes('waiting-subscribers');
     if (value === null) failed.push(key);
-    else if (!value) clear.push(key);
+    else if (!value || hidden) clear.push(key);
     else if (tab !== undefined)
       waiting.push({
         id: key,
@@ -64,13 +66,14 @@ export function NeedsAttentionStrip({ onNavigate }: { onNavigate: (tab: AdminTab
   const impersonating = useAccessToken(state => state.impersonating);
   // Same query key as the sidebar badges, so this adds no request.
   const counts = useAdminActionCounts({ enabled: !impersonating });
+  const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const watchItem = useOpenWatchItem();
 
   if (counts.isLoading) return <LoadingState label="Loading queues" />;
   if (counts.isError || !counts.data)
     return <ErrorState message="Queue counts could not be loaded." onRetry={() => void counts.refetch()} />;
 
-  const { waiting, clear, failed } = splitActionCounts(counts.data);
+  const { waiting, clear, failed } = splitActionCounts(counts.data, hiddenNotifications);
   const items = watchItem ? [...waiting, watchItem] : waiting;
 
   return (
