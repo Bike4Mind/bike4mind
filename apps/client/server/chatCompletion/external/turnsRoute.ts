@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import {
   DEFAULT_SESSION_TURN_HISTORY_COUNT,
   NotFoundError,
@@ -48,6 +49,7 @@ import { checkApiKeyRateLimitOrThrow, checkRateLimit, type ApiKeyInfo } from '@b
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -308,6 +310,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
         apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
         oauthClientId: apiKeyInfo?.oauthExchangeClientId,
         adminRoleWithheld: adminRoleWithheldFor(apiKeyInfo),
+        contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       });
       if (!quest) throw new NotFoundError('Failed to create quest');
       const questId = quest.id;
