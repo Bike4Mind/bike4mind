@@ -1,6 +1,6 @@
 import { expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { buildAuthSuccessUrl, type SpecAuth } from './auth-seed';
-import { installWafBypass } from './waf-bypass';
+import { installWafBypass, type SlowLink } from './waf-bypass';
 
 /**
  * Launch-readiness gate A6.1: the money paths must work on a short phone screen over a slow link.
@@ -18,14 +18,17 @@ export const SHORT_SCREEN_MOBILE = {
  * Chrome DevTools' "Slow 4G" preset (formerly "Fast 3G"): 562.5 ms round trip, ~1.44 Mbps down,
  * ~675 kbps up. Throughputs are bytes per second, as CDP expects.
  */
-const SLOW_LINK = {
+const SLOW_LINK: SlowLink & { offline: boolean; uploadThroughput: number } = {
   offline: false,
   latency: 562.5,
   downloadThroughput: (1.6 * 1024 * 1024 * 0.9) / 8,
   uploadThroughput: (750 * 1024 * 0.9) / 8,
-} as const;
+};
 
-/** Throttles every request the page makes, including the SPA bundle, for the rest of the test. */
+/**
+ * Throttles the page's network stack for the rest of the test. With the WAF bypass token set,
+ * stage-origin requests skip it and installWafBypass paces them to SLOW_LINK instead.
+ */
 export async function throttleToSlowLink(page: Page): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
@@ -44,8 +47,8 @@ export async function openShortScreenPageAs(
   auth: SpecAuth
 ): Promise<{ page: Page; goto: (path: string) => Promise<void>; close: () => Promise<void> }> {
   const context = await browser.newContext({ ...SHORT_SCREEN_MOBILE, baseURL });
+  await installWafBypass(context, { slowLink: SLOW_LINK });
   const page = await context.newPage();
-  await installWafBypass(page);
   await throttleToSlowLink(page);
   const goto = async (path: string) => {
     await page.goto(buildAuthSuccessUrl(path, auth));

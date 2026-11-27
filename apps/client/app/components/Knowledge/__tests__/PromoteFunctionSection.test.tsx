@@ -320,6 +320,42 @@ describe('PromoteFunctionSection', () => {
     ]);
   });
 
+  it('rounds a call duration before choosing its unit, so just under a minute shows as 1 min 0 s, never 60.0 s', () => {
+    const durations = [999, 1000, 59_940, 59_949, 59_950, 59_960, 60_000, 60_499, 60_500];
+    h.calls = {
+      isError: false,
+      data: {
+        since: new Date(),
+        total: durations.length,
+        outcomes: { ok: durations.length },
+        recent: durations.map((durationMs, i) => ({
+          id: `c${i}`,
+          startedAt: '2026-11-23T10:00:00.000Z',
+          outcome: 'ok',
+          surface: 'rest',
+          byRecipient: false,
+          pinSeq: 1,
+          durationMs,
+        })),
+      },
+    };
+    renderSection(live('verified'));
+    const shown = screen
+      .getAllByTestId('python-function-call-row')
+      .map(row => within(row).getAllByRole('cell')[4]!.textContent);
+    expect(shown).toEqual([
+      '999 ms',
+      '1.0 s',
+      '59.9 s',
+      '59.9 s',
+      '1 min 0 s',
+      '1 min 0 s',
+      '1 min 0 s',
+      '1 min 0 s',
+      '1 min 1 s',
+    ]);
+  });
+
   it('says so when there are no calls', () => {
     renderSection(tool());
     expect(screen.getByTestId('python-function-calls-total').textContent).toBe('No calls.');

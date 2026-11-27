@@ -21,6 +21,9 @@ import {
   ANN_HITS_METRIC,
   ANN_MODELS_QUERIED_METRIC,
   ANN_QUERY_DURATION_METRIC,
+  VECTOR_INDEX_NOT_QUERYABLE_METRIC,
+  ANN_QUERY_FAILED_METRIC,
+  ANN_SERVED_NOTHING_METRIC,
   type DataLakeSearchMetrics,
 } from './dataLakeSearchMetrics';
 
@@ -31,6 +34,7 @@ const metrics: DataLakeSearchMetrics = {
   annHits: 12,
   annModelsQueried: 2,
   annSlowestQueryMs: 2558,
+  fallbacks: { indexNotQueryable: false, annQueryFailed: false, annServedNothingReason: null },
 };
 
 /** Every datapoint published for one metric name, in emit order. */
@@ -188,6 +192,84 @@ describe('recordDataLakeSearchMetrics', () => {
 // carries the strings by hand and nothing links the two - a rename here ships green and leaves
 // the dashboard graphing a metric that no longer exists, which is the silent-success failure the
 // metrics were added to detect in the first place.
+describe('recordDataLakeSearchMetrics fallback signals', () => {
+  const originalStage = process.env.SEED_STAGE_NAME;
+  const withFallbacks = (fallbacks: Partial<DataLakeSearchMetrics['fallbacks']>): DataLakeSearchMetrics => ({
+    ...metrics,
+    fallbacks: { ...metrics.fallbacks, ...fallbacks },
+  });
+
+  beforeEach(() => {
+    send.mockReset().mockResolvedValue(undefined);
+    process.env.SEED_STAGE_NAME = 'production';
+  });
+
+  afterEach(() => {
+    if (originalStage === undefined) delete process.env.SEED_STAGE_NAME;
+    else process.env.SEED_STAGE_NAME = originalStage;
+  });
+
+  // infra/alarms.ts reads these strings and cannot import the constants.
+  it('pins the metric names infra alarms on', () => {
+    expect(VECTOR_INDEX_NOT_QUERYABLE_METRIC).toBe('VectorIndexNotQueryable');
+    expect(ANN_QUERY_FAILED_METRIC).toBe('AnnQueryFailed');
+    expect(ANN_SERVED_NOTHING_METRIC).toBe('AnnServedNothing');
+  });
+
+  it('publishes no fallback datapoint on a healthy search', async () => {
+    await recordDataLakeSearchMetrics(metrics);
+
+    for (const name of ['VectorIndexNotQueryable', 'AnnQueryFailed', 'AnnServedNothing']) {
+      expect(dataFor(name)).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['VectorIndexNotQueryable', { indexNotQueryable: true }],
+    ['AnnQueryFailed', { annQueryFailed: true }],
+  ] as const)('publishes %s once per dimension set, Stage-only plus Backend', async (name, fallbacks) => {
+    await recordDataLakeSearchMetrics(withFallbacks(fallbacks));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(dataFor(name)).toEqual([
+      expect.objectContaining({ Value: 1, Unit: 'Count', Dimensions: [{ Name: 'Stage', Value: 'production' }] }),
+      expect.objectContaining({
+        Value: 1,
+        Unit: 'Count',
+        Dimensions: [
+          { Name: 'Stage', Value: 'production' },
+          { Name: 'Backend', Value: 'atlas' },
+        ],
+      }),
+    ]);
+  });
+
+  it('publishes AnnServedNothing with its reason as a dimension', async () => {
+    await recordDataLakeSearchMetrics(withFallbacks({ annServedNothingReason: 'index-not-queryable' }));
+
+    expect(dataFor('AnnServedNothing')).toEqual([
+      expect.objectContaining({ Value: 1, Dimensions: [{ Name: 'Stage', Value: 'production' }] }),
+      expect.objectContaining({
+        Value: 1,
+        Dimensions: [
+          { Name: 'Stage', Value: 'production' },
+          { Name: 'Reason', Value: 'index-not-queryable' },
+        ],
+      }),
+    ]);
+  });
+
+  it('never throws when CloudWatch rejects a fallback datapoint', async () => {
+    send.mockRejectedValue(new Error('throttled'));
+    const logger = { warn: vi.fn() } as unknown as ILogger;
+
+    await expect(
+      recordDataLakeSearchMetrics(withFallbacks({ indexNotQueryable: true, annQueryFailed: true }), logger)
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('infra/dataLakeSearchDashboard.ts stays in sync', () => {
   const dashboard = readFileSync(new URL('../../../../infra/dataLakeSearchDashboard.ts', import.meta.url), 'utf8');
 
@@ -214,6 +296,11 @@ describe('infra/alarms.ts stays in sync', () => {
   it('alarms on the duration metric this module publishes', () => {
     expect(alarms).toContain(`metricName: '${ANN_QUERY_DURATION_METRIC}'`);
     expect(alarms).toContain("namespace: 'Lumina5/DataLakeRetrieval'");
+  });
+
+  it('alarms on both fallback metrics this module publishes', () => {
+    expect(alarms).toContain(`metricName: '${VECTOR_INDEX_NOT_QUERYABLE_METRIC}'`);
+    expect(alarms).toContain(`metricName: '${ANN_QUERY_FAILED_METRIC}'`);
   });
 
   /** The alarm's own threshold, read out of the resource so the assertions below cannot drift. */

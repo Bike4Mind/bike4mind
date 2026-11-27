@@ -40,7 +40,7 @@ private struct AccountRestoreContent: View {
           .foregroundStyle(Tokens.Palette.warning)
           .accessibilityHidden(true)
         Text("Your account is scheduled for deletion")
-          .font(.title2.bold())
+          .font(Tokens.Typography.title)
           .foregroundStyle(Tokens.Palette.primaryText)
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
