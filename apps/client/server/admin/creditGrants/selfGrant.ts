@@ -26,9 +26,16 @@ export const isApprovedSelfGrant = (approval: AdminApproval | undefined, targetI
   approval?.requiredPermission === SELF_GRANT_APPROVAL.requiredPermission &&
   targetIds.some(id => id === approval.requestedBy.id || approval.requestedBy.selfIds.includes(id));
 
-/** An approved self-grant skips the delegate target checks, so its approver must not be one of the accounts it credits. */
-export function assertApproverOutsideTargets(actor: CreditActor, targetIds: readonly string[]): void {
+/**
+ * The approver of a `credits:approve_self_grant` approval (a held self-grant, or a grant over the immediate limit)
+ * must not be one of the accounts it credits. `what` names them in the refusal.
+ */
+export function assertApproverOutsideTargets(
+  actor: CreditActor,
+  targetIds: readonly string[],
+  what = 'an organization you belong to'
+): void {
   if (targetIds.some(id => isSelfOrImpersonator(actor, id))) {
-    throw new ForbiddenError('You cannot approve credits for an organization you belong to');
+    throw new ForbiddenError(`You cannot approve credits for ${what}`);
   }
 }

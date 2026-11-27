@@ -11,6 +11,7 @@ import {
   creditTransactionRepository,
   TelemetryAuditLogModel,
   realtimeConnectionRepository,
+  outsideTransaction,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
@@ -316,8 +317,19 @@ const handler = baseApi().put(
       // immediate limit they go to a listed approver other than the requester.
       const targetsSelf = isSelfOrImpersonator(currentUser, userId);
 
-      // Validated before any write so a missing reason never leaves a half-applied update.
+      // Validated before any write so a missing reason never leaves a half-applied update, and before the
+      // grant cap reserves so a refusal here holds nothing.
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
+      const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
+
+      const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
+      const previousTelemetryLevel = incomingTelemetryLevel
+        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
+        : undefined;
+
+      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
+      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
 
       // The grant cap (server/admin/creditGrants/tierCap.ts) reserves the grant before the write. Above the
       // admin's immediate limit the whole grant goes for approval instead.
@@ -358,149 +370,145 @@ const handler = baseApi().put(
       // The cap returns approval only for a confirmed grant, which carries a reason.
       if (cap.outcome !== 'immediate') throw new BadRequestError('A reason is required for this credit grant.');
       // The service re-runs the cap from the balance it reads in the transaction, so a balance that fell
-      // since targetBefore was read is capped at its real grant rather than refused.
+      // since targetBefore was read is capped at its real grant rather than refused. That runs outside the
+      // transaction: a concurrent grant must see the raised hold at once, a refusal's audit must survive the
+      // rollback it causes, and the hold must outlive a retried transaction, which then skips re-reserving.
       let releaseCreditGrant = cap.release;
       let clearedCredits = creditGrant;
-      const confirmCreditGrant = async (credits: number) => {
-        if (credits <= clearedCredits) return;
-        await releaseCreditGrant();
-        releaseCreditGrant = async () => undefined;
-        releaseCreditGrant = await enforceImmediateCreditGrant({ ...capRequest, credits }, requestAuditWriter(req));
-        clearedCredits = credits;
-      };
-      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
-      const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
+      const confirmCreditGrant = (credits: number) =>
+        outsideTransaction(async () => {
+          if (credits <= clearedCredits) return;
+          await releaseCreditGrant();
+          releaseCreditGrant = async () => undefined;
+          releaseCreditGrant = await enforceImmediateCreditGrant({ ...capRequest, credits }, requestAuditWriter(req));
+          clearedCredits = credits;
+        });
 
-      const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
-      const previousTelemetryLevel = incomingTelemetryLevel
-        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
-        : undefined;
-
-      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
-      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
-
-      req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      const {
-        snapshot: blockSnapshot,
-        updated: blockUpdated,
-        appliedCreditDelta,
-      } = await commitWithSessionEnd(
-        req,
-        async () => {
-          // Read inside the transaction so the reason sees the state the write saw; an
-          // outside read can be stale by the time the write commits.
-          const snapshot = (await User.findById(userId)
-            .select('email isBanned suspensionReasonCategory isModerated disputePending moderation')
-            .lean()) as AccountStateSnapshot | null;
-          const {
-            user: updated,
-            creditAdjustment,
-            bannedRiskReviewFrom,
-          } = await userService.adminUpdateUser(
-            currentUser.id,
-            changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
-            {
-              db: {
-                users: userRepository,
-                organizations: Organization,
-                friendship: friendshipRepository,
-                userApiKeys: userApiKeyRepository,
-                realtimeConnections: realtimeConnectionRepository,
-                creditTransactions: creditTransactionRepository,
-              },
-              resolveAdminRoles: resolveRoleAdminPermissions,
-              confirmCreditGrant: changesCredits ? confirmCreditGrant : undefined,
-            }
-          );
-
-          // These entries are strict: a failed audit write aborts this transaction, so no balance,
-          // suspension or restriction change can commit without its record. Status entries follow
-          // what this write flipped, not the pre-read: a concurrent edit can make the pre-read stale,
-          // and a flip it missed still needs its reason, or the 400 rolls it back. No written user
-          // (the row vanished) means nothing flipped.
-          for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
-            const before = !!snapshot?.[field];
-            const after = !!updated?.[field];
-            if (before === after) continue;
-            await recordAdminActionFromRequest(req, {
-              ...(after ? on : off),
-              target: auditTarget,
-              reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
-              changes: [
-                { field, before, after },
-                ...(field === 'isBanned' && bannedRiskReviewFrom
-                  ? [{ field: 'riskScore.reviewState', before: bannedRiskReviewFrom, after: 'banned' }]
-                  : []),
-                ...(field === 'isBanned' &&
-                (snapshot?.suspensionReasonCategory ?? null) !== (updated?.suspensionReasonCategory ?? null)
-                  ? [
-                      {
-                        field: 'suspensionReasonCategory',
-                        before: snapshot?.suspensionReasonCategory ?? null,
-                        after: updated?.suspensionReasonCategory ?? null,
-                      },
-                    ]
-                  : []),
-              ],
-            });
-          }
-          const moderationBefore = snapshot?.moderation?.status ?? 'active';
-          const moderationAfter = updated?.moderation?.status ?? 'active';
-          // Every moderation decision is recorded, including one that keeps the status: it re-arms the
-          // throttle and marks the account reviewed.
-          if (body.moderationStatus && updated) {
-            const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
-            const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
-            await recordAdminActionFromRequest(req, {
-              action: 'user.moderation_status.changed',
-              target: auditTarget,
-              summary: `set the moderation status to ${moderationAfter}`,
-              reason: readAdminActionReason(body.statusChangeReason),
-              changes: [
-                { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
-                ...(throttledBefore !== throttledAfter
-                  ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
-                  : []),
-              ],
-            });
-          }
-          if (creditAdjustment) {
-            const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
-            await recordAdminActionFromRequest(req, {
-              action: 'user.credits.adjusted',
-              target: auditTarget,
-              summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
-              reason: creditAdjustment.note,
-              changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
-              details: { credits, selfGrant: targetsSelf },
-              related: creditTransactionId ? { creditTransactionId } : undefined,
-            });
-          }
-          if (body.throttleTier && throttleReason) {
-            const tierChange = await userService.setThrottleTier(
-              userId,
-              body.throttleTier,
-              { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
-              { db: { users: userRepository } }
+      // A throw anywhere up to the end of the commit releases the hold.
+      let committed;
+      try {
+        req.logger.updateMetadata({ updatedFields: Object.keys(body) });
+        committed = await commitWithSessionEnd(
+          req,
+          async () => {
+            // Read inside the transaction so the reason sees the state the write saw; an
+            // outside read can be stale by the time the write commits.
+            const snapshot = (await User.findById(userId)
+              .select('email isBanned suspensionReasonCategory isModerated disputePending moderation')
+              .lean()) as AccountStateSnapshot | null;
+            const {
+              user: updated,
+              creditAdjustment,
+              bannedRiskReviewFrom,
+            } = await userService.adminUpdateUser(
+              currentUser.id,
+              changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
+              {
+                db: {
+                  users: userRepository,
+                  organizations: Organization,
+                  friendship: friendshipRepository,
+                  userApiKeys: userApiKeyRepository,
+                  realtimeConnections: realtimeConnectionRepository,
+                  creditTransactions: creditTransactionRepository,
+                },
+                resolveAdminRoles: resolveRoleAdminPermissions,
+                confirmCreditGrant: changesCredits ? confirmCreditGrant : undefined,
+              }
             );
-            if (tierChange.changed) {
+
+            // These entries are strict: a failed audit write aborts this transaction, so no balance,
+            // suspension or restriction change can commit without its record. Status entries follow
+            // what this write flipped, not the pre-read: a concurrent edit can make the pre-read stale,
+            // and a flip it missed still needs its reason, or the 400 rolls it back. No written user
+            // (the row vanished) means nothing flipped.
+            for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
+              const before = !!snapshot?.[field];
+              const after = !!updated?.[field];
+              if (before === after) continue;
               await recordAdminActionFromRequest(req, {
-                action: 'user.throttle_tier.changed',
+                ...(after ? on : off),
                 target: auditTarget,
-                summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
-                reason: throttleReason,
-                changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+                reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+                changes: [
+                  { field, before, after },
+                  ...(field === 'isBanned' && bannedRiskReviewFrom
+                    ? [{ field: 'riskScore.reviewState', before: bannedRiskReviewFrom, after: 'banned' }]
+                    : []),
+                  ...(field === 'isBanned' &&
+                  (snapshot?.suspensionReasonCategory ?? null) !== (updated?.suspensionReasonCategory ?? null)
+                    ? [
+                        {
+                          field: 'suspensionReasonCategory',
+                          before: snapshot?.suspensionReasonCategory ?? null,
+                          after: updated?.suspensionReasonCategory ?? null,
+                        },
+                      ]
+                    : []),
+                ],
               });
             }
+            const moderationBefore = snapshot?.moderation?.status ?? 'active';
+            const moderationAfter = updated?.moderation?.status ?? 'active';
+            // Every moderation decision is recorded, including one that keeps the status: it re-arms the
+            // throttle and marks the account reviewed.
+            if (body.moderationStatus && updated) {
+              const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
+              const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
+              await recordAdminActionFromRequest(req, {
+                action: 'user.moderation_status.changed',
+                target: auditTarget,
+                summary: `set the moderation status to ${moderationAfter}`,
+                reason: readAdminActionReason(body.statusChangeReason),
+                changes: [
+                  { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
+                  ...(throttledBefore !== throttledAfter
+                    ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
+                    : []),
+                ],
+              });
+            }
+            if (creditAdjustment) {
+              const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
+              await recordAdminActionFromRequest(req, {
+                action: 'user.credits.adjusted',
+                target: auditTarget,
+                summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+                reason: creditAdjustment.note,
+                changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
+                details: { credits, selfGrant: targetsSelf },
+                related: creditTransactionId ? { creditTransactionId } : undefined,
+              });
+            }
+            if (body.throttleTier && throttleReason) {
+              const tierChange = await userService.setThrottleTier(
+                userId,
+                body.throttleTier,
+                { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
+                { db: { users: userRepository } }
+              );
+              if (tierChange.changed) {
+                await recordAdminActionFromRequest(req, {
+                  action: 'user.throttle_tier.changed',
+                  target: auditTarget,
+                  summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
+                  reason: throttleReason,
+                  changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+                });
+              }
+            }
+            return { snapshot, updated, appliedCreditDelta: creditAdjustment?.credits };
+          },
+          // adminUpdateUser returns the user as written, read inside the same transaction.
+          ({ snapshot, updated }) => {
+            const reason = adminEditSessionEndReason(typeof body.password === 'string', snapshot, updated);
+            return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
           }
-          return { snapshot, updated, appliedCreditDelta: creditAdjustment?.credits };
-        },
-        // adminUpdateUser returns the user as written, read inside the same transaction.
-        ({ snapshot, updated }) => {
-          const reason = adminEditSessionEndReason(typeof body.password === 'string', snapshot, updated);
-          return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
-        }
-      ).finally(() => releaseCreditGrant());
+        );
+      } finally {
+        await releaseCreditGrant();
+      }
+      const { snapshot: blockSnapshot, updated: blockUpdated, appliedCreditDelta } = committed;
 
       // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
       // and never throws, so it cannot undo the admin's change.

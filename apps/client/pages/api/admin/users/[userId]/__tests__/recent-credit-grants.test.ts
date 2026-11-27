@@ -74,7 +74,7 @@ describe('GET /api/admin/users/[userId]/recent-credit-grants', () => {
     });
   });
 
-  it('reads the last 24 hours, three grants at most, and keeps the newest-first order', async () => {
+  it('reads the last 24 hours, three grants at most, newest first, naming admins but never their email', async () => {
     h.sum.mockResolvedValue(9_000);
     h.reserved.mockResolvedValue(1_000);
     h.list.mockResolvedValue([
@@ -99,7 +99,7 @@ describe('GET /api/admin/users/[userId]/recent-credit-grants', () => {
       immediateLimit: 100_000,
       grants: [
         { at: '2026-06-15T11:00:00.000Z', credits: 4_000, grantedBy: 'Grace' },
-        { at: '2026-06-15T09:00:00.000Z', credits: 2_500, grantedBy: 'ops@example.com' },
+        { at: '2026-06-15T09:00:00.000Z', credits: 2_500, grantedBy: 'Unknown admin' },
         { at: '2026-06-14T13:00:00.000Z', credits: 1_000, grantedBy: 'Unknown admin' },
       ],
     });
@@ -142,6 +142,18 @@ describe('GET /api/admin/users/[userId]/recent-credit-grants', () => {
     const { res, promise } = run(userId, user);
     await promise;
     expect(res._getJSONData()).toMatchObject({ immediateLimit });
+  });
+
+  it("refuses a delegate reading an admin account's grants, and lets it read a regular account's", async () => {
+    const delegate = { id: 'admin-1', adminPermissions: ['credits:adjust'] };
+    h.findUser.mockResolvedValue({ id: USER_ID, isAdmin: true });
+    await expect(run(USER_ID, delegate).promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.list).not.toHaveBeenCalled();
+
+    h.findUser.mockResolvedValue({ id: USER_ID });
+    const { res, promise } = run(USER_ID, delegate);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('rejects a malformed id and answers 404 for a missing user', async () => {

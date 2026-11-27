@@ -157,10 +157,13 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
     id => isSelfOrImpersonator(req.user!, id) || (approval?.requestedBy.selfIds.includes(id) ?? false)
   );
   const user = await validateGrantSubscription(params, teamPlan);
+  // Covers a grant over the immediate limit to the approver as well as a held self-grant.
+  if (isLargeGrantApproval(approval)) {
+    const what = params.subscriptionType === 'team' ? undefined : 'your own account';
+    assertApproverOutsideTargets(req.user!, targetIds, what);
+  }
   if (!isApprovedSelfGrant(approval, targetIds)) {
     await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
-  } else if (params.subscriptionType === 'team') {
-    assertApproverOutsideTargets(req.user!, targetIds);
   }
 
   // Runs now: a grant that has come to need approval since it was checked is refused rather than queued.

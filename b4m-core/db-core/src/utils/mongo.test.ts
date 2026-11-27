@@ -12,6 +12,7 @@ import {
   isMongoNetworkError,
   withTransaction,
   softDeletePlugin,
+  outsideTransaction,
 } from './mongo';
 
 describe('MongoDB Utility Functions', () => {
@@ -550,6 +551,34 @@ describe('MongoDB Utility Functions', () => {
       expect(delays[1]).toBeGreaterThanOrEqual(200);
       expect(delays[1]).toBeLessThanOrEqual(250);
     });
+  });
+});
+
+describe('outsideTransaction', () => {
+  type Als = { run<R>(store: unknown, callback: () => R): R; getStore(): unknown };
+  // index.ts turns this on for every import of the package; this file imports ./mongo directly.
+  mongoose.set('transactionAsyncLocalStorage', true);
+  const als = (mongoose as unknown as { transactionAsyncLocalStorage: Als }).transactionAsyncLocalStorage;
+
+  it('runs its callback, across awaits, with no ambient transaction session, and leaves the caller its own', async () => {
+    const store = { session: { id: 'session-1' } };
+    await als.run(store, async () => {
+      const inside = await outsideTransaction(async () => {
+        await Promise.resolve();
+        return als.getStore();
+      });
+      expect(inside).toBeUndefined();
+      expect(als.getStore()).toBe(store);
+    });
+  });
+
+  it('passes the callback result and rejection through', async () => {
+    await expect(outsideTransaction(async () => 42)).resolves.toBe(42);
+    await expect(
+      outsideTransaction(async () => {
+        throw new Error('refused');
+      })
+    ).rejects.toThrow('refused');
   });
 });
 

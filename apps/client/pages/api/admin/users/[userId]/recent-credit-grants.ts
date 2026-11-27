@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import { adminAuditLogRepository, userRepository } from '@bike4mind/database';
 import { isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
+import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
 import { immediateGrantLimit, receivedInWindow } from '@server/admin/creditGrants/tierCap';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -15,7 +16,7 @@ import { respond } from '@server/utils/respond';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
-const grantedBy = (actor: AuditActor) => actor.name.trim() || actor.email || 'Unknown admin';
+const grantedBy = (actor: AuditActor) => actor.name.trim() || 'Unknown admin';
 
 /**
  * GET /api/admin/users/[userId]/recent-credit-grants
@@ -31,6 +32,8 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
 
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
+    // A delegate reads only the grants it could make: never to an account with admin access.
+    await assertDelegateCanCreditUser(req.user, user.id, 'view grants to');
 
     const since = new Date(Date.now() - ADMIN_GRANT_WINDOW_MS);
     const [receivedCredits, entries] = await Promise.all([

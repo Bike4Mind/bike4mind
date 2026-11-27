@@ -286,13 +286,15 @@ export const useGrantSubscription = () => {
       });
       return data;
     },
-    onSuccess: data => {
+    onSuccess: (data, { userId }) => {
       if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
+      // The user's admin views, the recent credit grants among them (hooks/data/adminUserCredits.ts).
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] });
       toast.success(data.message);
     },
     onError: err => {

@@ -781,6 +781,34 @@ describe('POST /api/admin/users/[userId]/grant-subscription - per-recipient gran
       expect(grantCap.rows.size).toBe(0);
     });
 
+    it.each([
+      [
+        'an individual grant to the approver',
+        { subscriptionType: 'individual' as const, userId: 'admin-2' },
+        'You cannot approve credits for your own account',
+      ],
+      [
+        'a team grant to an organization the approver belongs to',
+        { subscriptionType: 'team' as const, userId: 'user-1' },
+        'You cannot approve credits for an organization you belong to',
+      ],
+    ])('refuses a large-grant approval of %s, crediting nothing', async (_label, target, message) => {
+      mockUserFindById.mockResolvedValue({ id: target.userId, email: 'b@example.com' });
+      mockOrgFindById.mockResolvedValue({ ...ORG, users: [{ userId: 'user-1' }, { userId: 'admin-2' }] });
+      const plan = SUBSCRIPTION_PLANS[0];
+      const individual = { ...params, ...target, priceId: plan.priceId, creditsAtRequest: undefined };
+
+      await expect(
+        grantSubscription(
+          approverReq,
+          target.subscriptionType === 'team' ? params : individual,
+          approval('credits:approve_self_grant')
+        )
+      ).rejects.toMatchObject({ statusCode: 403, message });
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(mockSubCreate).not.toHaveBeenCalled();
+    });
+
     it('refuses an ordinary approval that would take the organization past the approver limit, pointing at it', async () => {
       grantCap.orgReceived.mockResolvedValue(98_000);
 

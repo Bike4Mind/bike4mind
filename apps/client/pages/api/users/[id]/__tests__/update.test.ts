@@ -39,6 +39,8 @@ const {
 const grantCap = vi.hoisted(() => ({
   received: vi.fn(async (..._args: unknown[]) => 0),
   rows: new Map<string, { recipientId: string; kind: string; amount: number }>(),
+  // Whether each reservation was written while the change callback (the write's transaction) was running.
+  reservedInChange: [] as boolean[],
 }));
 
 // Runs the change and the session-end decision exactly as the real helper does (its transaction
@@ -171,11 +173,22 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   Organization: {},
   withTransaction: (fn: () => unknown) => fn(),
+  // Leaves the change callback for the duration of fn, as the real helper leaves its transaction.
+  outsideTransaction: async (fn: () => Promise<unknown>) => {
+    const inChange = txnState.changeRunning;
+    txnState.changeRunning = false;
+    try {
+      return await fn();
+    } finally {
+      txnState.changeRunning = inChange;
+    }
+  },
   TelemetryAuditLogModel: { create: vi.fn().mockResolvedValue(undefined) },
   // The real grant cap (server/admin/creditGrants/tierCap.ts) runs over these.
   adminAuditLogRepository: { sumCreditsGrantedTo: (...a: unknown[]) => grantCap.received(...a) },
   adminGateReservationRepository: {
     reserve: async (recipientId: string, kind: string, amount: number) => {
+      grantCap.reservedInChange.push(txnState.changeRunning);
       const id = String(grantCap.rows.size + 1);
       grantCap.rows.set(id, { recipientId, kind, amount });
       return id;
@@ -269,6 +282,7 @@ beforeEach(() => {
   mockCancelAccountSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
   grantCap.received.mockReset().mockResolvedValue(0);
   grantCap.rows.clear();
+  grantCap.reservedInChange = [];
 });
 
 describe('PUT /api/users/:id/update - admin grant cap', () => {
@@ -451,6 +465,63 @@ describe('PUT /api/users/:id/update - admin grant cap', () => {
       });
       expect(grantCap.rows.size).toBe(0);
     });
+
+    it('reserves the raised grant outside the write transaction, so concurrent grants see it at once', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(90_000);
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await grant(ADMIN, { currentCredits: 150_000 }).promise;
+
+      // The first hold is taken before the change runs, the raised one during it.
+      expect(grantCap.reservedInChange).toEqual([false, false]);
+    });
+
+    it('writes the refusal audit outside the write transaction, so its rollback keeps the entry', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      let deniedInChange: boolean | undefined;
+      mockRecord.mockImplementation(async (_req: unknown, input: { action: string }) => {
+        if (input.action === 'user.credits.denied') deniedInChange = txnState.changeRunning;
+      });
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(130_000);
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await expect(grant(ADMIN, { currentCredits: 150_000 }).promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(deniedInChange).toBe(false);
+    });
+
+    it('keeps the raised hold through a retried transaction, which confirms the same grant again', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      let heldOnRetry: unknown[] = [];
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(90_000);
+        // A transient-error retry runs the callback again; the hold was never part of the rolled-back attempt.
+        await deps.confirmCreditGrant?.(90_000);
+        heldOnRetry = [...grantCap.rows.values()];
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await grant(ADMIN, { currentCredits: 150_000 }).promise;
+
+      expect(heldOnRetry).toEqual([{ recipientId: 'other-user', kind: 'recipientCredits', amount: 90_000 }]);
+      expect(grantCap.reservedInChange).toHaveLength(2);
+      expect(grantCap.rows.size).toBe(0);
+    });
+  });
+
+  it('checks every reason before reserving, so a 400 leaves no hold on the recipient', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+
+    await expect(grant(ADMIN, { creditDelta: 100_000, throttleTier: 'shadow' }).promise).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(grantCap.reservedInChange).toEqual([]);
+    expect(grantCap.rows.size).toBe(0);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 
   it.each([

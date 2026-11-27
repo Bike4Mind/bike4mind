@@ -287,6 +287,87 @@ describe('checkCreditGrantCap', () => {
     });
   });
 
+  describe('boundaries', () => {
+    const outcomeOf = async (overrides: Partial<CreditGrantCapRequest>) => {
+      const result = await checkCreditGrantCap(request(overrides), mocks.audit);
+      return result.outcome === 'refused' ? result.refusal.reason : result.outcome;
+    };
+
+    it.each([
+      ['100,000 runs at once', {}, 0, 100_000, 'immediate'],
+      ['100,001 without the phrase is refused', {}, 0, 100_001, 'confirmation_required'],
+      ['100,001 with the phrase goes for approval', { confirmLargeGrant: true }, 0, 100_001, 'approval'],
+      [
+        '500,000 (400,000 received + 100,000) runs for a listed approver with the phrase',
+        { actor: APPROVER, confirmLargeGrant: true },
+        400_000,
+        100_000,
+        'immediate',
+      ],
+      ['500,000 runs on an approval', { approved: true }, 400_000, 100_000, 'immediate'],
+      [
+        '500,001 is refused for a listed approver',
+        { actor: APPROVER, confirmLargeGrant: true },
+        400_000,
+        100_001,
+        'hard_limit',
+      ],
+      ['500,001 is refused on an approval', { approved: true }, 400_000, 100_001, 'hard_limit'],
+    ])('%s', async (_label, overrides, received, credits, expected) => {
+      mocks.received.mockResolvedValue(received);
+      expect(await outcomeOf({ credits, ...overrides })).toBe(expected);
+    });
+  });
+
+  describe('a grant that loses a reservation race', () => {
+    // The pre-check reads `before`; by the time the grant reserves, other grants have taken the recipient to `later`.
+    const raced = (before: number, later: number) =>
+      mocks.received.mockResolvedValueOnce(before).mockResolvedValue(later);
+
+    it.each([
+      [
+        'queues the whole grant when the path can ask for approval and has the phrase',
+        { confirmLargeGrant: true },
+        80_000,
+        'approval',
+      ],
+      ['asks for the phrase when the path can ask for approval', {}, 80_000, 'confirmation_required'],
+      [
+        'refuses where the path cannot ask for approval',
+        { confirmLargeGrant: true, approvalAvailable: false },
+        80_000,
+        'approval_unavailable',
+      ],
+      ['refuses at the hard limit, phrase or not', { confirmLargeGrant: true }, 460_000, 'hard_limit'],
+    ])('%s', async (_label, overrides, later, expected) => {
+      raced(0, later);
+      const result = await checkCreditGrantCap(request({ credits: 50_000, ...overrides }), mocks.audit);
+
+      expect(result.outcome === 'refused' ? result.refusal.reason : result.outcome).toBe(expected);
+      expect(reservations.rows.size).toBe(0);
+    });
+
+    it("refuses a listed approver's unconfirmed grant that concurrent grants took past 100,000", async () => {
+      const first = await checkCreditGrantCap(request({ actor: APPROVER, credits: 60_000 }), mocks.audit);
+      expect(first.outcome).toBe('immediate');
+      // The second grant read the recipient before the first one reserved.
+      reservations.sumReserved.mockResolvedValueOnce(0);
+
+      expect(await refusalOf({ actor: APPROVER, credits: 60_000 })).toMatchObject({
+        reason: 'confirmation_required',
+        receivedCredits: 60_000,
+        remainingCredits: 40_000,
+      });
+      expect([...reservations.rows.values()]).toEqual([
+        { actorUserId: RECIPIENT.id, kind: 'recipientCredits', amount: 60_000 },
+      ]);
+
+      reservations.sumReserved.mockResolvedValueOnce(0);
+      const confirmedSecond = await checkCreditGrantCap(confirmed({ actor: APPROVER, credits: 60_000 }), mocks.audit);
+      expect(confirmedSecond.outcome).toBe('immediate');
+    });
+  });
+
   it('writes every refusal to the admin audit log as user.credits.denied', async () => {
     mocks.received.mockResolvedValue(90_000);
 
