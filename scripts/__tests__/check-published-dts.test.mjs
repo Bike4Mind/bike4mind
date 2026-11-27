@@ -16,6 +16,7 @@ import {
   run,
   selfTestVerdict,
   splitTscOutput,
+  usesShimmedName,
 } from '../check-published-dts.mjs';
 
 const dual = stem => ({
@@ -362,5 +363,17 @@ describe('bike4mindSpecifiers', () => {
 
   it('ignores the scope in prose', () => {
     expect(bike4mindSpecifiers('/** see @bike4mind/common for the contracts */')).toEqual([]);
+  });
+});
+
+describe('usesShimmedName', () => {
+  it('flags a declaration that names HeadersInit', () => {
+    expect(usesShimmedName('export declare function call(h: HeadersInit): void;')).toBe(true);
+  });
+
+  it('ignores names that only contain it', () => {
+    expect(usesShimmedName('export type MyHeadersInit = Record<string, string>; type HeadersInitLike = string;')).toBe(
+      false
+    );
   });
 });
