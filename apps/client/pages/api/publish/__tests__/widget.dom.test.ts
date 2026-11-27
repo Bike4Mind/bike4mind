@@ -774,7 +774,7 @@ describe('publish widget - pin anchor text', () => {
     (document.getElementById('b4m-send') as HTMLButtonElement).click();
     await vi.advanceTimersByTimeAsync(0);
 
-    const post = calls.find(c => c.init?.method === 'POST');
+    const post = calls.find(c => c.init?.method === 'POST' && !c.url.includes(REFRESH));
     return (JSON.parse(post!.init!.body as string) as { anchor?: Record<string, unknown> }).anchor;
   }
 
