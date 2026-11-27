@@ -10,7 +10,7 @@ import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, prefixArmTagNames } from '@bik
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { addFileToLake, type MembershipActor, type MembershipEventLinks } from './lakeMembership';
 import { assertLakeWritable } from './assertLakeAccess';
-import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from './manageRule';
+import { canColdAddFileToLake, canManageLake } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
 import { createDataLakeFallbackTagger, UNCATEGORIZED_TAG_SUFFIX } from './fallbackLakeTags';
@@ -150,11 +150,7 @@ export const addFileToDataLake = async (
     // leaves the platform-admin rung exactly as wide as it already was - deliberately NOT wider:
     // `actor.isAdmin` gates the same file-side test rather than replacing it, so an admin still
     // cannot cold-add a third party's file.
-    const isOwner =
-      file.userId === actor.userId ||
-      ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
-        resolveEffectiveOwnerIds(lake, grants).includes(file.userId));
-    if (!isOwner) {
+    if (!canColdAddFileToLake(lake, actor, grants, file.userId)) {
       throw new NotFoundError('File not found');
     }
   }

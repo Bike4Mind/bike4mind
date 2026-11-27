@@ -16,7 +16,7 @@ import {
   isStaticRegistryDatalakeTag,
 } from '../dataLakeService/authorizeLakeWrite';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
-import { isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
+import { canColdAddFileToLake } from '../dataLakeService/manageRule';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
@@ -225,9 +225,9 @@ export const reconcileLakeTags = async (
   const owner = fileOwnerUserId ?? cachedFile?.userId;
   if (owner === undefined) {
     // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
-    // first) - both always supply one of the two owner signals. Logged, not thrown: a
-    // hypothetical future caller missing both should degrade to skipping prefix-arm
-    // preservation, not fail the whole write.
+    // first) - both always supply one of the two owner signals. A hypothetical future caller
+    // missing both has any meta-tag join refused below; logged rather than thrown so a write
+    // that joins nothing still goes through, minus prefix-arm preservation.
     logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
   }
 
@@ -235,15 +235,8 @@ export const reconcileLakeTags = async (
     if (!canManage(lake)) {
       throw new BadRequestError('You do not have permission to add files to this data lake');
     }
-    // Same cold-add ownership conjunct as toggleTags and addFileToDataLake: membership is read
-    // access, so managing the lake is not enough to stamp its meta-tag on a file the actor does not own.
-    const grants = grantResolver.get(lake.id);
-    const isOwner =
-      owner !== undefined &&
-      (owner === actor.userId ||
-        ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
-          resolveEffectiveOwnerIds(lake, grants).includes(owner)));
-    if (!isOwner) {
+    // Managing the lake is not enough: its meta-tag is read access, so the cold-add ownership rule applies.
+    if (!canColdAddFileToLake(lake, actor, grantResolver.get(lake.id), owner)) {
       throw new BadRequestError('You do not have permission to add files to this data lake');
     }
     assertLakeWritable(lake);
