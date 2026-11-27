@@ -7,7 +7,7 @@ import {
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
-import { LlmTimeoutError, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import { LlmTimeoutError, SafetyRefusalError, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 const h = vi.hoisted(() => ({
   getEffectiveLLMApiKeys: vi.fn(),
@@ -24,8 +24,12 @@ vi.mock('sst', () => ({
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
-  organizationRepository: { findById: h.findOrganization },
-  usageEventRepository: { record: h.recordUsage },
+}));
+vi.mock('@bike4mind/database/zero-credit-operational-usage', () => ({
+  createBoundedZeroCreditOperationalUsageStore: () => ({
+    findOrganizationById: h.findOrganization,
+    usageEvents: { record: h.recordUsage },
+  }),
 }));
 vi.mock('@bike4mind/utils', () => ({ secureParameters: vi.fn(), getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -133,6 +137,25 @@ describe('quest export summary usage', () => {
     );
 
     expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not look up an organization for a requester without one', async () => {
+    await run();
+
+    expect(h.findOrganization).not.toHaveBeenCalled();
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ownerId: 'requester-1', ownerType: CreditHolderType.User })
+    );
+  });
+
+  it('records usage carried by a safety refusal without marking it a timeout', async () => {
+    h.complete.mockRejectedValueOnce(new SafetyRefusalError(model.id, { inputTokens: 300, outputTokens: 5 }));
+
+    await expect(run()).resolves.toBeNull();
+
+    const [[row]] = h.recordUsage.mock.calls;
+    expect(row).toMatchObject({ inputTokens: 300, outputTokens: 5, requestMeta: { stopReason: 'refusal' } });
+    expect(row.status).not.toBe('timeout');
   });
 
   it('records reported usage when the provider fails, and the export still gets no summary', async () => {

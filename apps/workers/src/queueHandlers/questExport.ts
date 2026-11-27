@@ -7,9 +7,8 @@ import {
   userRepository,
   apiKeyRepository,
   adminSettingsRepository,
-  organizationRepository,
-  usageEventRepository,
 } from '@bike4mind/database';
+import { createBoundedZeroCreditOperationalUsageStore } from '@bike4mind/database/zero-credit-operational-usage';
 import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -53,6 +52,9 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
 import path from 'path';
+
+const USAGE_LOOKUP_TIMEOUT_MS = 10_000;
+const USAGE_WRITE_TIMEOUT_MS = 20_000;
 
 const QuestExportPayload = z.object({
   exportJobId: z.string(),
@@ -353,6 +355,10 @@ ${content}`;
       throw controller.signal.aborted ? timeoutError : error;
     } finally {
       clearTimeout(deadline);
+      const usageStore = createBoundedZeroCreditOperationalUsageStore({
+        lookupTimeoutMS: USAGE_LOOKUP_TIMEOUT_MS,
+        writeTimeoutMS: USAGE_WRITE_TIMEOUT_MS,
+      });
       const priced = priceCompletionUsage(modelInfo, usage);
       const reported = priced.inputTokens + priced.outputTokens + priced.cachedInputTokens + priced.cacheWriteTokens;
       try {
@@ -361,7 +367,7 @@ ${content}`;
         } else {
           // An org member's usage belongs to the org; when that lookup fails, skip rather than book it personally.
           const organization = requester.organizationId
-            ? await organizationRepository.findById(requester.organizationId)
+            ? await usageStore.findOrganizationById(requester.organizationId)
             : undefined;
           if (organization === null) {
             logger.warn('Quest export summary usage organization is missing; usage not recorded');
@@ -387,7 +393,7 @@ ${content}`;
                   usageEvents: {
                     // A timed-out call keeps the provider's counts as COGS but out of the local token columns.
                     record: event =>
-                      usageEventRepository.record({
+                      usageStore.usageEvents.record({
                         ...event,
                         ...(timedOut ? timedOutCompletionUsageFields(priced) : {}),
                       }),

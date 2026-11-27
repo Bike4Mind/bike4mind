@@ -88,6 +88,9 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
 }));
+vi.mock('@bike4mind/database/zero-credit-operational-usage', () => ({
+  createBoundedZeroCreditOperationalUsageStore: vi.fn(),
+}));
 
 // The real parse, not an identity stub: this queue now carries two message shapes and the union
 // that tells them apart is what these tests drive.
