@@ -159,7 +159,8 @@ import {
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
-  withFederatedSharedKeys,
+  parseProviderCredentialMode,
+  withProviderCredentialPlan,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -252,7 +253,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { z } from 'zod';
 import { admitsPrivateFileInputs } from './questStartBody';
-import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders, userKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
@@ -2925,9 +2926,18 @@ export class ChatCompletionProcess {
       // The model id handed to features and tools that call the backend themselves: the
       // post-resolution id, never a retired pin the provider would reject.
       const runModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
-      // Reuse trusted federation provenance across primary and fallback chat backends.
-      // Direct-SDK consumers below keep the original static key table.
-      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      // Reuse trusted key provenance (platform vs user key) and the per-provider credential mode
+      // across primary and fallback chat backends. Direct-SDK consumers below keep the original
+      // static key table.
+      const chatApiKeyTable = withProviderCredentialPlan(apiKeyTable, {
+        platformKeys: sharedAdminKeyProviders(apiKeyTable),
+        userKeys: userKeyProviders(apiKeyTable),
+        modes: {
+          openai: parseProviderCredentialMode(getSettingsValue('openaiCredentialMode', defaultAdminSettings)),
+          anthropic: parseProviderCredentialMode(getSettingsValue('anthropicCredentialMode', defaultAdminSettings)),
+        },
+        logger,
+      });
       const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
