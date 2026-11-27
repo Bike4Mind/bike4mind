@@ -35,7 +35,6 @@ import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
 import {
   ADMIN_PERMISSION_LABELS,
-  SIGNUP_CLIENT_RECORDED_SINCE,
   USER_ROLE_LABELS,
   adminActionBlockedReason,
   isManagedTag,
@@ -91,11 +90,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       </Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
       <Fact label="Signed up via" data-testid="user-profile-fact-signup-client">
-        {user.signupClientId
-          ? (oauthApps.data?.signupClient?.name ?? user.signupClientId)
-          : user.createdAt && new Date(user.createdAt) >= SIGNUP_CLIENT_RECORDED_SINCE
-            ? 'Bike4Mind'
-            : 'Unknown'}
+        {user.signupClientId ? (oauthApps.data?.signupClient?.name ?? user.signupClientId) : 'Unknown'}
       </Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
         {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (

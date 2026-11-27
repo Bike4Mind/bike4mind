@@ -115,12 +115,8 @@ describe('OverviewTab signed up via', () => {
     expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('Alpha');
   });
 
-  it('says Bike4Mind for an unattributed account created once recording began', () => {
-    expect(show({ signupClientId: null, createdAt: new Date('2026-11-27T00:00:00Z') })).toHaveTextContent('Bike4Mind');
-  });
-
-  it('says Unknown for an unattributed account created before recording began', () => {
-    expect(show({ signupClientId: null, createdAt: new Date('2026-11-01T00:00:00Z') })).toHaveTextContent('Unknown');
+  it('says Unknown for an unattributed account', () => {
+    expect(show({ signupClientId: null })).toHaveTextContent('Unknown');
   });
 });
 
