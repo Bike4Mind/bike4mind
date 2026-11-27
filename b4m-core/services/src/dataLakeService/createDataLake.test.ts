@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
-import { MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
+} from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 import { buildDatalakeTag, createDataLake, isDatalakeTagWellFormed, previewDataLakeSlug } from './createDataLake';
 import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
@@ -307,6 +312,14 @@ describe('previewDataLakeSlug', () => {
 
   it('lowercases a mixed-case name, as create does', async () => {
     await expect(previewDataLakeSlug(dbWith([]) as never, 'MiXeD Case')).resolves.toBe('mixed-case');
+  });
+
+  it.each([
+    ['an org', 'org-1'],
+    ['no org', undefined],
+  ])('suffixes past a registry lake id in %s scope', async (_label, organizationId) => {
+    const registryId = DATA_LAKES[0].id;
+    await expect(previewDataLakeSlug(dbWith([]) as never, registryId, organizationId)).resolves.toBe(`${registryId}-1`);
   });
 });
 

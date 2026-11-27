@@ -82,7 +82,7 @@ vi.mock('./bedrockBackend/deepseek', () => ({
 
 import {
   getLlmByModel,
-  withFederatedSharedKeys,
+  withProviderCredentialPlan,
   OPENAI_FEDERATED_KEY,
   ANTHROPIC_FEDERATED_KEY,
   resetReplacedByOverlay,
@@ -135,7 +135,7 @@ describe('getLlmByModel', () => {
     it('returns AnthropicBackend when key is present', () => {
       const result = getLlmByModel(fullApiKeys, { modelInfo, logger });
       expect((result as any)._mock).toBe('anthropic');
-      expect((result as any).key).toBe('anthropic-key');
+      expect((result as any).key).toEqual({ kind: 'static', key: 'anthropic-key' });
     });
 
     it('returns null when key is absent', () => {
@@ -318,35 +318,57 @@ describe('getLlmByModel', () => {
     });
   });
 
-  describe('trusted federated key provenance', () => {
+  describe('trusted key provenance and credential mode', () => {
+    const federatedModes = { openai: 'federated', anthropic: 'federated' } as const;
+    const plan = (
+      keys: ApiKeyTable,
+      platform: { openai: boolean; anthropic: boolean } | undefined,
+      userKeys: string[] = [],
+      modes: { openai: 'static' | 'federated'; anthropic: 'static' | 'federated' } = federatedModes
+    ) => withProviderCredentialPlan(keys, { platformKeys: platform, userKeys: new Set(userKeys), modes });
+
     it.each([
-      ['openai', undefined, OPENAI_FEDERATED_KEY],
-      ['openai', 'openai-chat', OPENAI_FEDERATED_KEY],
-      ['openai', 'openai-responses', OPENAI_FEDERATED_KEY],
-      ['anthropic', undefined, ANTHROPIC_FEDERATED_KEY],
-      ['anthropic', 'anthropic-messages', ANTHROPIC_FEDERATED_KEY],
-    ] as const)('selects federation only for marked %s / %s tables', (backend, adapterFamily, sentinel) => {
-      vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
-      const modelInfo = makeModelInfo({ backend, adapterFamily });
-      const keys = { openai: 'federated', anthropic: 'federated' };
-      const marked = withFederatedSharedKeys(keys, { openai: true, anthropic: true });
-      const keyOf = (table: ApiKeyTable): unknown =>
-        (getLlmByModel(table, { modelInfo, logger }) as unknown as { key: unknown }).key;
-      expect(keyOf(marked)).toBe(sentinel);
-      expect(keyOf(keys)).toBe('federated');
-      expect(keyOf({ ...marked })).toBe('federated');
+      ['openai', undefined],
+      ['openai', 'openai-chat'],
+      ['openai', 'openai-responses'],
+      ['anthropic', undefined],
+      ['anthropic', 'anthropic-messages'],
+    ] as const)(
+      'federates only a marked platform key for %s / %s, keeping it as the fallback',
+      (backend, adapterFamily) => {
+        vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+        const modelInfo = makeModelInfo({ backend, adapterFamily });
+        const keys = { openai: 'platform-key', anthropic: 'platform-key' };
+        const credentialOf = (table: ApiKeyTable): unknown =>
+          (getLlmByModel(table, { modelInfo, logger }) as unknown as { key: unknown }).key;
+        const marked = plan(keys, { openai: true, anthropic: true });
 
-      const userKeys = withFederatedSharedKeys(keys, { openai: false, anthropic: false });
-      expect(keyOf(userKeys)).toBe('federated');
-      const otherProviderShared = withFederatedSharedKeys(keys, {
-        openai: backend !== 'openai',
-        anthropic: backend !== 'anthropic',
-      });
-      expect(keyOf(otherProviderShared)).toBe('federated');
+        expect(credentialOf(marked)).toEqual({ kind: 'federated', fallbackKey: 'platform-key' });
+        expect(credentialOf(keys)).toEqual({ kind: 'static', key: 'platform-key' });
+        expect(credentialOf({ ...marked })).toEqual({ kind: 'static', key: 'platform-key' });
+        expect(
+          credentialOf(plan(keys, { openai: true, anthropic: true }, [], { openai: 'static', anthropic: 'static' }))
+        ).toEqual({
+          kind: 'static',
+          key: 'platform-key',
+        });
+        expect(credentialOf(plan(keys, { openai: false, anthropic: false }, [backend]))).toEqual({
+          kind: 'user_key',
+          key: 'platform-key',
+        });
+        const otherProviderShared = plan(keys, { openai: backend !== 'openai', anthropic: backend !== 'anthropic' });
+        expect(credentialOf(otherProviderShared)).toEqual({ kind: 'static', key: 'platform-key' });
 
-      const missing = withFederatedSharedKeys({ ...keys }, { openai: true, anthropic: true });
-      delete (missing as ApiKeyTable)[backend];
-      expect(getLlmByModel(missing, { modelInfo, logger })).toBeNull();
+        const missing = plan({ ...keys }, { openai: true, anthropic: true });
+        delete (missing as ApiKeyTable)[backend];
+        expect(getLlmByModel(missing, { modelInfo, logger })).toBeNull();
+      }
+    );
+
+    it.each(['openai', 'anthropic'] as const)('passes the bare %s federated sentinel through unchanged', backend => {
+      const sentinel = backend === 'openai' ? OPENAI_FEDERATED_KEY : ANTHROPIC_FEDERATED_KEY;
+      const result = getLlmByModel({ [backend]: sentinel }, { modelInfo: makeModelInfo({ backend }), logger });
+      expect((result as unknown as { key: unknown }).key).toBe(sentinel);
     });
   });
 

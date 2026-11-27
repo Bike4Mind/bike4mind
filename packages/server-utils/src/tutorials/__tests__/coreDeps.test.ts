@@ -1,9 +1,15 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
+import { hasAutoNamePlaceholderName, TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
+import { sessionRepository } from '@bike4mind/database';
+import { getOrCreateSession } from '../../managers/sessionCrud';
 import type { TutorialRequest } from '../routes/types';
 
-const found = vi.hoisted(() => ({ session: undefined as Record<string, unknown> | undefined }));
+const found = vi.hoisted(() => ({
+  session: undefined as Record<string, unknown> | undefined,
+  projects: [] as unknown[],
+  knowledgeFiles: [] as unknown[],
+}));
 const mocks = vi.hoisted(() => ({
   deleteSession: vi.fn(),
   findFiles: vi.fn(),
@@ -14,7 +20,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   sessionRepository: { findByIdAndUserId: async () => found.session, update: vi.fn() },
-  fabFileRepository: { find: mocks.findFiles },
+  fabFileRepository: { find: mocks.findFiles, findAllByIds: async () => found.knowledgeFiles },
+  projectRepository: { findAllBySessionId: async () => found.projects },
   withTransaction: mocks.transaction,
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { deleteSession: mocks.deleteSession } }));
@@ -114,5 +121,99 @@ describe('tutorial notebook deletion', () => {
     expect(await deps().deleteSession('s1', 'owner')).toBe(false);
     expect(mocks.transaction).not.toHaveBeenCalled();
     expect(mocks.rescope).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSession', () => {
+  it('names the notebook after the tutorial and leaves it out of auto-naming', async () => {
+    const session = { id: 's1', name: 'Tutorial: First steps' } as Record<string, unknown>;
+    vi.mocked(getOrCreateSession).mockResolvedValue({
+      session,
+      sessionId: 's1',
+      asyncPromises: [],
+    } as unknown as Awaited<ReturnType<typeof getOrCreateSession>>);
+    vi.mocked(sessionRepository.update).mockImplementation(async update => {
+      Object.assign(session, update);
+      return session as never;
+    });
+    const deps = coreTutorialDepsFor({ user: { id: 'u1' }, logger: { warn: vi.fn() } } as unknown as TutorialRequest);
+
+    await deps.createSession({ id: 'first-steps', title: 'First steps' } as never);
+
+    expect(vi.mocked(getOrCreateSession).mock.calls[0][0]).toMatchObject({ sessionName: 'Tutorial: First steps' });
+    expect(hasAutoNamePlaceholderName(session as { name: string; autoNamePlaceholder?: string })).toBe(false);
+  });
+});
+
+describe('deleteSession', () => {
+  const deleteSession = coreTutorialDepsFor({ logger: { warn: vi.fn() } } as unknown as TutorialRequest).deleteSession;
+  const untouched = { id: 's1', name: 'Tutorial: First steps', users: [], groups: [], knowledgeIds: [] };
+
+  beforeEach(() => {
+    mocks.deleteSession.mockReset().mockResolvedValue(null);
+    mocks.transaction.mockReset().mockImplementation(async (change: () => Promise<unknown>) => change());
+    mocks.rescope.mockReset().mockResolvedValue(undefined);
+  });
+
+  const deletes = async (
+    session: Record<string, unknown>,
+    files: unknown[] = [],
+    projects: unknown[] = [],
+    knowledgeFiles: unknown[] = []
+  ) => {
+    found.session = session;
+    found.projects = projects;
+    found.knowledgeFiles = knowledgeFiles;
+    mocks.findFiles.mockReset().mockResolvedValue(files);
+    const result = await deleteSession('s1', 'u1');
+    expect(mocks.deleteSession).toHaveBeenCalledTimes(result ? 1 : 0);
+    return result;
+  };
+
+  it('deletes an untouched tutorial notebook', async () => {
+    expect(await deletes(untouched)).toBe(true);
+  });
+
+  it.each([
+    ['renamed', { ...untouched, name: 'My heater email' }],
+    ['shared with a user', { ...untouched, users: [{ userId: 'u2', permissions: ['read'] }] }],
+    ['shared with a group', { ...untouched, groups: [{ groupId: 'g1', permissions: ['read'] }] }],
+    ['shared by link', { ...untouched, isGlobalRead: true }],
+    ['given knowledge', { ...untouched, knowledgeIds: ['f1'] }],
+  ])('keeps a notebook the user %s', async (_label, session) => {
+    expect(await deletes(session)).toBe(false);
+  });
+
+  it('keeps a notebook the user uploaded to', async () => {
+    expect(await deletes(untouched, [{ id: 'f1' }])).toBe(false);
+  });
+
+  it('keeps a notebook the user put in a project', async () => {
+    expect(await deletes(untouched, [], [{ id: 'p1' }])).toBe(false);
+  });
+
+  describe('after the walk attached its sample sheet', () => {
+    const sampleSheet = { id: 'k1', userId: 'u1', tags: [{ name: 'tutorial:first-steps' }] };
+    const attached = { ...untouched, knowledgeIds: ['k1'] };
+
+    it('deletes a notebook whose only knowledge is the sample sheet', async () => {
+      expect(await deletes(attached, [], [], [sampleSheet])).toBe(true);
+    });
+
+    it('keeps a notebook given the user knowledge besides the sample sheet', async () => {
+      const ownFile = { id: 'k2', userId: 'u1', tags: [] };
+      expect(await deletes({ ...untouched, knowledgeIds: ['k1', 'k2'] }, [], [], [sampleSheet, ownFile])).toBe(false);
+    });
+
+    it.each([
+      ['tagged like it by the user', { ...sampleSheet, tags: [{ name: 'tutorial:my-notes' }] }],
+      ['owned by someone else', { ...sampleSheet, userId: 'u2' }],
+    ])('keeps a notebook whose sheet is %s', async (_label, file) => {
+      expect(await deletes(attached, [], [], [file])).toBe(false);
+    });
+
+    it('keeps a notebook whose knowledge no longer resolves', async () => {
+      expect(await deletes(attached, [], [], [])).toBe(false);
+    });
   });
 });

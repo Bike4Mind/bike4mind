@@ -396,7 +396,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '09162fa71a33427d40a39e1bfb0d2ecb586c9f17dcc86b65f9641b90d78e372d',
+    '5bf17f11c35d5235b8f6b504a61b4ad231aeae08614ecd4f0c325be098a1642d',
     'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
@@ -405,7 +405,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    'b88ef16199363841a4936939f80279e1919e225c21485c738f2236b3b0481936',
+    'b2c76c1b7a98c20402863db9c1b25502526341372920d9a07e8b39f6cf9b966a',
     'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
@@ -1326,7 +1326,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c1f4e7cdb3ffd85316ea918cda0b0ba6c950e512143539c2539f146a36213a58',
+    'c01849c37004687a89c06c1a60dd1dbe1ed290d89c7b5842c09389a10483e2ca',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

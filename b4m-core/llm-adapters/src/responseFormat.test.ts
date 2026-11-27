@@ -460,8 +460,7 @@ describe('AnthropicBackend cache token forwarding', () => {
 
 describe('OpenAIBackend response_format', () => {
   it('passes response_format through to OpenAI natively and reports native mode', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    const backend = new OpenAIBackend('test-key');
     let lastParams: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (backend as unknown as { _api: any })._api = {

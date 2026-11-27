@@ -179,7 +179,7 @@ const handler = baseApi()
               const updated = await updateProfile();
               if (profile.sharingPolicy !== undefined) {
                 await recordOrganizationAuditEvent({
-                  organizationId: orgId,
+                  organizationId: updated.id,
                   actorUserId: req.user!.impersonatedBy ?? req.user!.id,
                   action: 'policy.updated',
                 });

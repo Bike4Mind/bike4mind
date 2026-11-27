@@ -30,6 +30,16 @@ export const ALL_TOOL_NAMES = Object.values(TOOL_CATEGORIES).flat();
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
 
+/**
+ * Write tools that preview and issue a confirmation token instead of writing. The confirm executors
+ * (web confirm route, Slack Confirm button) execute only these; keep in sync with the
+ * `createPreviewResponse` execParams in ./tools/pages.ts.
+ */
+export const NOTION_CONFIRMABLE_TOOLS: ReadonlySet<string> = new Set([
+  TOOL_NOTION_CREATE_PAGE,
+  TOOL_NOTION_APPEND_BLOCKS,
+]);
+
 // Tool descriptions - single source of truth referenced by both the MCP server
 // registrations and the MCP_PROVIDER_METADATA fallback in @bike4mind/common.
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {

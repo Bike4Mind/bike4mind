@@ -26,6 +26,7 @@ import {
   TOOL_NOTION_APPEND_BLOCKS,
   TOOL_NOTION_READ_PAGE,
   TOOL_DESCRIPTIONS,
+  NOTION_CONFIRMABLE_TOOLS,
 } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 import { clearParentCache } from '../../helpers/ancestry.js';
@@ -84,6 +85,48 @@ describe('Page Tools', () => {
     }
   });
 
+  describe('confirm gate', () => {
+    const decodeToken = (token: unknown) => JSON.parse(Buffer.from(String(token), 'base64').toString('utf-8'));
+
+    it('previews notion_create_page without writing unless the confirm button set _executeFromButton', async () => {
+      const result = await registeredTools
+        .get(TOOL_NOTION_CREATE_PAGE)!
+        .handler({ title: 'New Page', content: 'Hello', _executeFromButton: false });
+
+      expect(notionRequest).not.toHaveBeenCalled();
+      const parsed = parseResponse(result);
+      expect(parsed.confirmation_required).toBe(true);
+      expect(decodeToken(parsed._confirmToken)).toMatchObject({
+        tool: TOOL_NOTION_CREATE_PAGE,
+        params: { title: 'New Page', content: 'Hello' },
+      });
+    });
+
+    it('previews notion_append_blocks without writing, after the root-tree check', async () => {
+      const blockId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      vi.mocked(notionRequest).mockResolvedValueOnce({
+        id: blockId,
+        object: 'page',
+        parent: { type: 'page_id', page_id: ROOT_PAGE_ID },
+      });
+      const blocks = [{ type: 'paragraph', text: 'Hi' }];
+
+      const result = await registeredTools.get(TOOL_NOTION_APPEND_BLOCKS)!.handler({ blockId, blocks });
+
+      expect(notionRequest).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(notionRequest).mock.calls[0][0]).not.toContain('/children');
+      const parsed = parseResponse(result);
+      expect(decodeToken(parsed._confirmToken)).toMatchObject({
+        tool: TOOL_NOTION_APPEND_BLOCKS,
+        params: { blockId, blocks },
+      });
+    });
+
+    it('lists exactly the write tools as confirmable', () => {
+      expect([...NOTION_CONFIRMABLE_TOOLS].sort()).toEqual([TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_CREATE_PAGE].sort());
+    });
+  });
+
   describe(TOOL_NOTION_CREATE_PAGE, () => {
     it('should register the tool', () => {
       expect(registeredTools.has(TOOL_NOTION_CREATE_PAGE)).toBe(true);
@@ -98,7 +141,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'New Page' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'New Page' });
 
       expect(result.isError).toBeUndefined();
       const parsed = parseResponse(result);
@@ -134,7 +177,7 @@ describe('Page Tools', () => {
         });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Child Page', parentPageId: parentId });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Child Page', parentPageId: parentId });
 
       expect(result.isError).toBeUndefined();
     });
@@ -150,7 +193,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Outside', parentPageId: outsideId });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Outside', parentPageId: outsideId });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -168,7 +211,11 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Outside DB', parentDatabaseId: outsideDbId });
+      const result = await tool!.handler({
+        _executeFromButton: true,
+        title: 'Outside DB',
+        parentDatabaseId: outsideDbId,
+      });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -192,7 +239,7 @@ describe('Page Tools', () => {
         });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'DB Entry', parentDatabaseId: dbId });
 
       expect(result.isError).toBeUndefined();
       expect(notionRequest).toHaveBeenCalledWith('/pages', {
@@ -218,7 +265,7 @@ describe('Page Tools', () => {
         });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      await tool!.handler({ title: 'Test', parentDatabaseId: dbId, parentPageId: pageId });
+      await tool!.handler({ _executeFromButton: true, title: 'Test', parentDatabaseId: dbId, parentPageId: pageId });
 
       // ancestry check (1) + write (1)
       expect(notionRequest).toHaveBeenCalledTimes(2);
@@ -240,7 +287,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'DB Entry', parentDatabaseId: dbId });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -257,7 +304,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      await tool!.handler({ title: 'With Content', content: 'Hello world' });
+      await tool!.handler({ _executeFromButton: true, title: 'With Content', content: 'Hello world' });
 
       const callBody = JSON.parse((vi.mocked(notionRequest).mock.calls[0][1] as { body: string }).body);
       expect(callBody.children).toHaveLength(1);
@@ -272,7 +319,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      await tool!.handler({ title: 'No Content' });
+      await tool!.handler({ _executeFromButton: true, title: 'No Content' });
 
       const callBody = JSON.parse((vi.mocked(notionRequest).mock.calls[0][1] as { body: string }).body);
       expect(callBody.children).toBeUndefined();
@@ -282,7 +329,7 @@ describe('Page Tools', () => {
       vi.mocked(notionRequest).mockRejectedValueOnce(new Error('Notion API error: 403 Forbidden'));
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Will Fail' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Will Fail' });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -303,7 +350,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Blocked' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Blocked' });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -323,7 +370,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'No Root' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'No Root' });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -348,6 +395,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'paragraph', text: 'Hello world' }],
       });
@@ -370,6 +418,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId: rootId,
         blocks: [{ type: 'paragraph', text: 'Directly on root' }],
       });
@@ -389,6 +438,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'paragraph', text: 'Outside root' }],
       });
@@ -410,6 +460,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [
           { type: 'heading_1', text: 'Title' },
@@ -431,6 +482,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'to_do', text: 'Task', checked: true }],
       });
@@ -449,6 +501,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'code', text: 'const x = 1;', language: 'typescript' }],
       });
@@ -466,10 +519,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
-      await tool!.handler({
-        blockId,
-        blocks: [{ type: 'divider' }],
-      });
+      await tool!.handler({ _executeFromButton: true, blockId, blocks: [{ type: 'divider' }] });
 
       const patchCall = vi.mocked(notionRequest).mock.calls[1];
       const callBody = JSON.parse((patchCall[1] as { body: string }).body);
@@ -488,6 +538,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'paragraph', text: 'Will fail' }],
       });
@@ -512,6 +563,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'paragraph', text: 'Blocked' }],
       });
@@ -535,6 +587,7 @@ describe('Page Tools', () => {
 
       const tool = registeredTools.get(TOOL_NOTION_APPEND_BLOCKS);
       const result = await tool!.handler({
+        _executeFromButton: true,
         blockId,
         blocks: [{ type: 'paragraph', text: 'No root' }],
       });
@@ -738,7 +791,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Test' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Test' });
 
       expect(result.isError).toBe(true);
       const parsed = parseResponse(result);
@@ -762,7 +815,7 @@ describe('Page Tools', () => {
       });
 
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      const result = await tool!.handler({ title: 'Test' });
+      const result = await tool!.handler({ _executeFromButton: true, title: 'Test' });
 
       expect(result.isError).toBeUndefined();
     });

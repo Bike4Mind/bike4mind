@@ -68,6 +68,7 @@ import {
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { RowActionsMenu } from './shared/RowActionsMenu';
+import { AdminPermissionAction, useFullAdminOnlyReason } from './shared/MissingPermission';
 import { usersTabLinkSearch } from './Users/usersTabSearch';
 
 type FederatedForm = {
@@ -657,24 +658,34 @@ function ClientRowMenu({
   onEdit,
   onRotate,
   onViewUsage,
+  writeBlocked,
 }: {
   client: OAuthClientView;
   onEdit: () => void;
   onRotate: () => void;
   onViewUsage: () => void;
+  writeBlocked: string | null;
 }) {
   return (
     <RowActionsMenu testId={`oauth-client-actions-${client.clientId}`} ariaLabel={`Actions for ${client.name}`}>
-      <MenuItem onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
-        Edit client
-      </MenuItem>
+      <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+        {disabled => (
+          <MenuItem disabled={disabled} onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
+            Edit client
+          </MenuItem>
+        )}
+      </AdminPermissionAction>
       <MenuItem onClick={onViewUsage} data-testid={`oauth-client-usage-${client.clientId}`}>
         View usage
       </MenuItem>
       {isConfidential(client) && (
-        <MenuItem onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
-          Rotate secret
-        </MenuItem>
+        <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+          {disabled => (
+            <MenuItem disabled={disabled} onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
+              Rotate secret
+            </MenuItem>
+          )}
+        </AdminPermissionAction>
       )}
     </RowActionsMenu>
   );
@@ -682,6 +693,7 @@ function ClientRowMenu({
 
 export default function OAuthClientsTab() {
   const queryClient = useQueryClient();
+  const writeBlocked = useFullAdminOnlyReason();
   const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
@@ -947,15 +959,19 @@ export default function OAuthClientsTab() {
       label: 'Active',
       width: '5rem',
       render: client => (
-        <Switch
-          size="sm"
-          checked={client.isActive}
-          disabled={activeMutation.isPending && activeMutation.variables?.client.id === client.id}
-          onChange={() =>
-            client.isActive ? setDeactivateTarget(client) : activeMutation.mutate({ client, isActive: true })
-          }
-          slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
-        />
+        <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+          {disabled => (
+            <Switch
+              size="sm"
+              checked={client.isActive}
+              disabled={disabled || (activeMutation.isPending && activeMutation.variables?.client.id === client.id)}
+              onChange={() =>
+                client.isActive ? setDeactivateTarget(client) : activeMutation.mutate({ client, isActive: true })
+              }
+              slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
+            />
+          )}
+        </AdminPermissionAction>
       ),
     },
     {
@@ -979,9 +995,19 @@ export default function OAuthClientsTab() {
           'Apps registered to use "Sign in with Bike4Mind". Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs (exact match). Active users counts people who signed in through the app since sign-in tracking began, so it includes existing accounts.'
         }
         actions={
-          <Button size="sm" startDecorator={<AddIcon />} onClick={openCreate} data-testid="oauth-client-add-btn">
-            Register client
-          </Button>
+          <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+            {disabled => (
+              <Button
+                size="sm"
+                startDecorator={<AddIcon />}
+                disabled={disabled}
+                onClick={openCreate}
+                data-testid="oauth-client-add-btn"
+              >
+                Register client
+              </Button>
+            )}
+          </AdminPermissionAction>
         }
       />
 
@@ -1009,15 +1035,20 @@ export default function OAuthClientsTab() {
               title="No OAuth clients registered yet"
               description="Register an app to let it offer Sign in with Bike4Mind."
               action={
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  startDecorator={<AddIcon />}
-                  onClick={openCreate}
-                  data-testid="oauth-clients-empty-add-btn"
-                >
-                  Register client
-                </Button>
+                <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+                  {disabled => (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      startDecorator={<AddIcon />}
+                      disabled={disabled}
+                      onClick={openCreate}
+                      data-testid="oauth-clients-empty-add-btn"
+                    >
+                      Register client
+                    </Button>
+                  )}
+                </AdminPermissionAction>
               }
             />
           </Box>
@@ -1027,6 +1058,7 @@ export default function OAuthClientsTab() {
             client={client}
             onEdit={() => openEdit(client)}
             onRotate={() => setRotateTarget(client)}
+            writeBlocked={writeBlocked}
             onViewUsage={() => {
               useCreditAnalysisStore.getState().openSideApps(client.clientId);
               useAdminModal.getState().setActiveTab(AdminTab.CreditAnalytics);

@@ -1063,6 +1063,7 @@ export async function processQuickAskInDM(
 
     // Trigger AI response using the existing quest
     await chatCompletion.invoke({
+      contributedToolNames: new Set<string>(),
       body: {
         params: {
           model: 'gpt-4.1-mini-2025-04-14',

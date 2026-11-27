@@ -72,8 +72,8 @@ const handler = baseApi().put(
     const modal = isValidObjectId(id) ? await ModalModel.findById(id) : null;
     if (!modal) throw new NotFoundError('Modal not found');
 
-    if (updateData.imageUrl) {
-      updateData.imageUrl = await storableModalImageUrl(updateData.imageUrl);
+    if (updateData.imageUrl && updateData.imageUrl !== modal.imageUrl) {
+      updateData.imageUrl = await storableModalImageUrl(updateData.imageUrl, req.user!.id);
     }
 
     if (updateData.images && updateData.images.length > 0) {
