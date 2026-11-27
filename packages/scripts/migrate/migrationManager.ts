@@ -32,14 +32,14 @@ export class MigrationManager {
   }
 
   /**
-   * Runs `work` only while this process holds the single migration-runner lease. A concurrent run
-   * that finds the lease held exits cleanly without touching any migration.
+   * Runs `work` only while this process holds the single migration-runner lease. A run that finds
+   * the lease held throws without touching any migration: the holder may be a dead run whose lease
+   * has not expired yet, so reporting success could let a deploy ship before its migrations ran.
    */
   private async withLease(work: (lease: MigrationLease) => Promise<void>): Promise<void> {
     const lease = await acquireMigrationLease(this.logger, this.leaseOptions);
     if (!lease) {
-      this.logger.warn('Another migration run holds the migration lease; exiting without running migrations');
-      return;
+      throw new Error('Another migration run holds the migration lease; not running migrations');
     }
     try {
       await work(lease);

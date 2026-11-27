@@ -61,8 +61,12 @@ describe('MigrationManager single-runner lease', () => {
     const calls = new Map<number, number>();
     available = [countingMigration(1, calls), countingMigration(2, calls), countingMigration(3, calls)];
 
-    await Promise.all([new MigrationManager(logger).up(null), new MigrationManager(logger).up(null)]);
+    const results = await Promise.allSettled([
+      new MigrationManager(logger).up(null),
+      new MigrationManager(logger).up(null),
+    ]);
 
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect([...calls.entries()].sort()).toEqual([
       [1, 1],
       [2, 1],
@@ -72,14 +76,14 @@ describe('MigrationManager single-runner lease', () => {
     expect(await MigrationLock.countDocuments()).toBe(0);
   });
 
-  it('exits without applying anything while another run holds a live lease', async () => {
+  it('fails without applying anything while another run holds a live lease', async () => {
     const calls = new Map<number, number>();
     available = [countingMigration(1, calls)];
     const expiresAt = new Date(Date.now() + 60_000);
     await MigrationLock.create({ _id: MIGRATION_LOCK_ID, owner: 'other-run', acquiredAt: new Date(), expiresAt });
 
-    await new MigrationManager(logger).up(null);
-    await new MigrationManager(logger).down(null);
+    await expect(new MigrationManager(logger).up(null)).rejects.toThrow(/holds the migration lease/);
+    await expect(new MigrationManager(logger).down(null)).rejects.toThrow(/holds the migration lease/);
 
     expect(calls.size).toBe(0);
     expect(await Migration.countDocuments()).toBe(0);

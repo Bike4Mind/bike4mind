@@ -46,8 +46,9 @@ their own repositories and are not checked by it, but the same rule applies.
 (`migrationLock.ts`).
 
 - The lease is taken with one atomic upsert that matches only an expired lease. A second run that
-  starts while a live lease exists logs a warning and returns without running anything; the run
-  holding the lease applies the pending migrations.
+  starts while a live lease exists fails with an error without running anything. The holder may be
+  a dead run whose lease has not expired yet, so the failing run turns the deploy red instead of
+  letting it ship before its migrations ran; re-run the deploy once the lease is free.
 - The holder renews the lease every minute for another 5 minutes, and releases it when it finishes
   (also when it fails).
 - A run that dies without releasing (a Lambda timeout, a crash) leaves a lease that expires within
