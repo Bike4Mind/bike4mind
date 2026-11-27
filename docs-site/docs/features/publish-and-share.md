@@ -77,6 +77,7 @@ Never rely on a URL being hard to guess. If content shouldn't be seen by everyon
 
 - **List:** `GET /api/publish/artifacts` returns everything you can see (yours + anything shared with you).
 - **Update:** change `title`, `description`, or `visibility` (owner/admin).
+- **Link-card image:** set `shareImageUrl` (on upload-url or the update call) to an absolute `https://` URL of an image you host, ideally 1200x630. Link previews show it instead of the deployment's default image. Presigned (expiring) links are rejected. Send `null` on the update call to remove it.
 - **Unpublish:** delete an item — it's soft-deleted and immediately drops from all listings and stops serving (404). The slug becomes free to reuse.
 
 ## Safety notes

@@ -4477,6 +4477,124 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
   });
 });
 
+describe('GET /api/publish/serve - per-artifact link-card image', () => {
+  const DEFAULT_IMAGE = 'https://cdn.example.com/default-card.png';
+  const OWN_IMAGE = 'https://images.example.org/covers/my-card.png';
+  const BODY = '<html><head></head><body><p>Body</p></body></html>';
+  const headOf = (res: ReturnType<typeof run>['res']) => String(res._getData()).split('</head>')[0];
+  const reply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r1',
+    title: 'A reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: 'Reply body.',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'x',
+    ...over,
+  });
+  const expectOwnImage = (head: string, alt: string) => {
+    expect(head).toContain(`<meta property="og:image" content="${OWN_IMAGE}">`);
+    expect(head).toContain(`<meta property="og:image:alt" content="${alt}">`);
+    expect(head).toContain(`<meta name="twitter:image" content="${OWN_IMAGE}">`);
+    expect(head).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(head).not.toContain(DEFAULT_IMAGE);
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('PUBLISH_SHARE_IMAGE_URL', DEFAULT_IMAGE);
+    vi.stubEnv('APP_NAME', 'ExampleApp');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prefers the artifact image over the default on an open-public bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ shareImageUrl: OWN_IMAGE }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expectOwnImage(headOf(res), 'My Artifact');
+  });
+
+  it('prefers the artifact image on an ungated share-token bundle link', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', shareImageUrl: OWN_IMAGE }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expectOwnImage(headOf(res), 'My Artifact');
+  });
+
+  it('prefers the artifact image on an open-public reply page and its token link', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ shareImageUrl: OWN_IMAGE }));
+    const pub = run(['r', 'r1']);
+    await pub.promise;
+    expectOwnImage(headOf(pub.res), 'A reply');
+
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'private', shareImageUrl: OWN_IMAGE }));
+    const tok = run(['a', 'tok123']);
+    await tok.promise;
+    expect(tok.res._getStatusCode()).toBe(200);
+    expectOwnImage(headOf(tok.res), 'A reply');
+  });
+
+  it('still gives a gated artifact no card, on the public path and a token link', async () => {
+    const gated = { accessGate: { kind: 'passphrase' }, shareImageUrl: OWN_IMAGE };
+    for (const path of [
+      ['u', 'scope123', 'my-slug'],
+      ['a', 'tok123'],
+    ]) {
+      mockArtifactFindOne.mockReturnValue(bundle(gated));
+      mockDownload.mockResolvedValue(Buffer.from(BODY));
+      const { res, promise } = run(path);
+      await promise;
+      expect(String(res._getData())).not.toMatch(/og:image|twitter:image|my-card\.png/);
+    }
+  });
+
+  it.each([
+    ['an artifact thumbnail', `https://cdn.example.com/publish-thumbnails/pub1/${'d'.repeat(64)}.webp`],
+    ['a presigned link', 'https://bucket.example.com/card.png?X-Amz-Signature=abc'],
+    ['a non-https URL', 'http://images.example.org/card.png'],
+  ])('drops a stored %s and falls back to the default image', async (_label, stored) => {
+    mockArtifactFindOne.mockReturnValue(bundle({ shareImageUrl: stored }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const page = String(res._getData());
+    expect(headOf(res)).toContain(`<meta property="og:image" content="${DEFAULT_IMAGE}">`);
+    expect(page).not.toContain(stored);
+    expect(page).not.toContain('publish-thumbnails');
+  });
+
+  it('never turns the artifact thumbnail into the card, even with an image set', async () => {
+    const thumbKey = `publish-thumbnails/pub1/${'e'.repeat(64)}.webp`;
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        shareImageUrl: OWN_IMAGE,
+        thumbnail: { key: thumbKey, versionId: 'e'.repeat(64), renderedAt: new Date() },
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expectOwnImage(headOf(res), 'My Artifact');
+    expect(String(res._getData())).not.toContain('publish-thumbnails');
+  });
+});
+
 describe('GET /api/publish/serve - immutable current index', () => {
   const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
   it('serves the committed payload instead of a legacy canonical object', async () => {
