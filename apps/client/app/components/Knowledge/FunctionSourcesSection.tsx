@@ -26,7 +26,7 @@ export default function FunctionSourcesSection({ tool }: { tool: ICallableFuncti
     url: sourceUrl,
     mode: sourceMode,
   }));
-  const full = tool.dataPins.length + sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins;
+  const full = sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxSources;
   const onError = (error: unknown) => toast.error(callableFunctionErrorMessage(error, 'Could not change the sources.'));
 
   return (
@@ -34,7 +34,8 @@ export default function FunctionSourcesSection({ tool }: { tool: ICallableFuncti
       <Typography level="title-sm">Sources</Typography>
       <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
         Read outside the sandbox from the data origins an administrator listed. Live sources are fetched on every call;
-        pinned ones are fetched once at promotion. Changing them returns the tool to draft.
+        pinned ones are fetched once at promotion. Changing them returns the tool to draft. {sources.length} of{' '}
+        {CALLABLE_FUNCTION_DATA_LIMITS.maxSources} used.
       </Typography>
       {sources.map(entry => (
         <Stack key={entry.name} direction="row" spacing={1} alignItems="center" data-testid="python-function-source">

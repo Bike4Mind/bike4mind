@@ -79,12 +79,26 @@ describe('FunctionSourcesSection', () => {
     expect(h.save.mutate).toHaveBeenCalledWith({ id: 'fn-1', sources: [RATES] }, { onError: expect.any(Function) });
   });
 
-  it('disables Add once data files and sources together reach the shared cap', () => {
-    const dataPins = Array.from({ length: 9 }, (_, i) => ({ name: `f${i}.csv` }));
-    renderSection(tool({ dataPins: dataPins as never, sources: [RATES] as never }));
+  it('disables Add at the source limit, whatever the data files hold', () => {
+    const sources = Array.from({ length: 10 }, (_, i) => ({ ...RATES, name: `s${i}.csv` }));
+    renderSection(tool({ sources: sources as never }));
     type('python-function-source-url', 'https://data.example.com/more.csv');
     type('python-function-source-name', 'more.csv');
     expect(addButton()).toBeDisabled();
+  });
+
+  it('counts the sources against their own limit, not the data files', () => {
+    const dataPins = Array.from({ length: 4 }, (_, i) => ({ name: `f${i}.csv` }));
+    renderSection(tool({ dataPins: dataPins as never, sources: [RATES, BASE] as never }));
+    expect(screen.getByText(/2 of 10 used\./)).toBeInTheDocument();
+  });
+
+  it('keeps Add open when the data files are full, because sources have their own count', () => {
+    const dataPins = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.csv` }));
+    renderSection(tool({ dataPins: dataPins as never, sources: [RATES] as never }));
+    type('python-function-source-url', 'https://data.example.com/more.csv');
+    type('python-function-source-name', 'more.csv');
+    expect(addButton()).not.toBeDisabled();
   });
 
   it("shows the server's refusal in a toast", () => {

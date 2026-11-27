@@ -1055,19 +1055,18 @@ describe('PythonFunctionPanel save controls', () => {
       );
     });
 
-    it('for a promoted tool, names the promotion and updates anyway to a draft only when confirmed', async () => {
+    it('for a promoted tool, names the promotion and offers no way to update to a version promotion refuses', async () => {
       const promotedRefusal = refusal();
       Object.assign(promotedRefusal.response.data, { promotedSeq: 2 });
       await refuseUpdate(promotedRefusal);
 
       const dialog = await screen.findByTestId('breaking-change-dialog');
       expect(within(dialog).getByTestId('breaking-change-dialog-promoted').textContent).toBe(
-        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse this version.'
+        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. A promoted tool cannot be moved to a version promotion would refuse, so the tool stays pinned to version 3.'
       );
+      expect(within(dialog).queryByTestId('breaking-change-dialog-accept-btn')).toBeNull();
+      expect(dialog.textContent).not.toContain('Update anyway');
       expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
-      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-accept-btn'));
-      expect(fns.repin.mutate).toHaveBeenCalledTimes(2);
-      expect(fns.repin.mutate.mock.calls[1]![0]).toMatchObject({ expectedVersion: 4, acceptBreaking: true });
     });
 
     it('any other refusal stays a toast', async () => {

@@ -219,6 +219,23 @@ describe('sharing', () => {
     expect(shared(null).dataPins).toEqual([]);
   });
 
+  it('names the live and pinned sources and never their URLs', () => {
+    const view = toCallableFunctionShared(
+      doc({
+        state: 'live',
+        sources: [
+          { name: 'rates.csv', url: 'https://data.example.com/private/rates.csv', mode: 'live' },
+          { name: 'base.csv', url: 'https://data.example.com/private/base.csv', mode: 'pinned' },
+        ],
+      }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: null }
+    );
+    expect(view.sources).toEqual(['rates.csv', 'base.csv']);
+    expect(JSON.stringify(view)).not.toMatch(/data\.example\.com|private/);
+    expect(shared(null).sources).toEqual([]);
+  });
+
   it('reads reviewed only while the review names the current hash and is on', () => {
     expect(shared(review)).toMatchObject({ status: 'reviewed', review: { approval: 'always_ask', current: true } });
     expect(shared({ ...review, enabled: false }).status).toBe('disabled');

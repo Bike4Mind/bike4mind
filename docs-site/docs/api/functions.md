@@ -96,6 +96,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
+- A saved function can read up to 10 data files and, separately, up to 10 sources, so a call sees at most 20 under `/data`. Together they stay within the size an administrator sets as **Callable Functions: Data Per Function (MB)**, where each source counts at the most it can fetch.
 - The function runs for at most 30 seconds unless your organization sets a longer **Callable Function Time Limit** (up to 795 seconds). A call that waits for its result still has 45 seconds to finish; use `"mode": "async"` to run to the full limit.
 - Requests are rate limited per user and per route, at your account's per-minute limit. Each response carries the rate-limit headers.
 
@@ -108,6 +109,6 @@ Errors use the shared error envelope described in [Errors](./errors.md).
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.
-- `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
+- `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included. For `output_invalid`, the `error` names the first output field that does not fit and why, for example `Output report must be at most 2000 characters (it has 4000000).` A text field without a `maxLength` holds at most 2000 characters.
 - `503`: no function runtime is available, the runtime was slow to start or did not answer, or the call could not be queued; try again later. On a self-hosted install, where `"mode": "async"` is not available, an asynchronous call also answers `503`.
-- `504`: the call ran past its time limit. `errorCode` is `request_timeout`. When your time limit is longer than 45 seconds, the `error` says to send `"mode": "async"`.
+- `504`: the call ran past its time limit. `errorCode` is `request_timeout`. When your time limit is longer than 45 seconds, the `error` says to send `"mode": "async"`, or on a self-hosted install, where asynchronous calls are not available, that a time limit above 45 seconds cannot be used.

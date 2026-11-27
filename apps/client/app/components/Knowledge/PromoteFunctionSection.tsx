@@ -428,7 +428,7 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
         <ShareFunctionDialog
           tool={tool}
           dataPins={tool.dataPins.map(pin => pin.name)}
-          sources={[]}
+          sources={(tool.sources ?? []).map(source => source.name)}
           onClose={() => setOpen(false)}
         />
       )}

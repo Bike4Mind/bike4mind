@@ -178,6 +178,7 @@ const {
   FUNCTION_CALL_STOPPED_MESSAGE,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
   FUNCTION_SYNC_STOP_MESSAGE,
+  FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE,
   TIMEOUT_MESSAGE,
   functionCallAnswer,
   invokeAnswer,
@@ -576,7 +577,16 @@ describe('invoke', () => {
     [
       'output_invalid',
       { outcome: 'ok', outputs: { deflection: 'x' }, durationMs: 3 },
-      'The function returned outputs that do not fit its output schema.',
+      'The function returned outputs that do not fit its output schema. Output deflection must be a number.',
+    ],
+    [
+      'output_invalid',
+      {
+        outcome: 'output_invalid',
+        problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }],
+        durationMs: 3,
+      },
+      'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
     ],
   ] as const)('answers a run that ends in %s with 502, its outcome, and its stamp', async (outcome, run, error) => {
     h.runner.mockResolvedValue(run);
@@ -608,6 +618,29 @@ describe('invoke', () => {
       body: { error: 'The function runtime did not answer. Try again later.' },
     });
     expect(h.calls).toEqual([expect.objectContaining({ outcome: 'error', reason: 'runtime_unavailable' })]);
+  });
+
+  it('names the field, the limit, and the length when an output text is too long', () => {
+    const problems = [
+      { path: 'report', message: 'must be at most 2000 characters (it has 4000000)' },
+      { path: 'note', message: 'must be at most 500 characters (it has 900)' },
+    ];
+    const answer = invokeAnswer({ outcome: 'output_invalid', problems, durationMs: 1, callId: 'c' });
+    expect(answer.status).toBe(502);
+    expect(answer.body.error).toBe(
+      'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000) (and 1 more).'
+    );
+  });
+
+  it('keeps the plain output refusal when the contract or result could not be read', () => {
+    const answer = invokeAnswer({
+      outcome: 'output_invalid',
+      reason: 'result_not_json',
+      problems: [{ path: 'inputs.x', message: 'is not valid' }],
+      durationMs: 1,
+      callId: 'c',
+    });
+    expect(answer.body.error).toBe('The function returned outputs that do not fit its output schema.');
   });
 
   it('answers 503 when the runtime never replied', () => {
@@ -720,6 +753,21 @@ describe('synchronous stop', () => {
     const res = await pastBudget();
     expect(res.body.error).toBe(TIMEOUT_MESSAGE);
     expect(h.runner.mock.calls[0][0].limits.timeoutMs).toBe(40_000);
+  });
+
+  it('says async mode is unavailable on self-host instead of pointing to it', async () => {
+    h.limitMs.value = 300_000;
+    h.runner.mockResolvedValue({ outcome: 'timeout', durationMs: 45_000 });
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    try {
+      const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
+      expect(res.status).toBe(504);
+      expect(res.body.error).toBe(FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE);
+      expect(res.body.error).not.toContain('"mode": "async"');
+      expect(res.body.error).toContain('not available on self-hosted installs');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('names async mode when the runtime stops a run the 45 s cap cut short', async () => {
@@ -855,6 +903,24 @@ describe('async invoke and poll', () => {
       errorClass: 'ValueError',
     } as Parameters<typeof functionCallAnswer>[0]);
     expect(answer.error).toBe('The function raised an error (ValueError).');
+  });
+
+  it('polls an over-long output text with the field, the limit, and the length', () => {
+    const problems = [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }];
+    const answer = functionCallAnswer({
+      callId: 'c1',
+      state: 'finished',
+      outcome: 'output_invalid',
+      problems,
+    } as Parameters<typeof functionCallAnswer>[0]);
+    expect(answer).toEqual({
+      call_id: 'c1',
+      status: 'finished',
+      outcome: 'output_invalid',
+      error:
+        'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
+      problems,
+    });
   });
 
   it("answers another person's call id exactly as a made-up or malformed one", async () => {

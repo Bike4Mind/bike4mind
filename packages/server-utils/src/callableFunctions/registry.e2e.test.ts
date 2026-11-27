@@ -664,7 +664,7 @@ describe('repinning a promoted function', () => {
     expect(record?.pin.runtime).toBeUndefined();
   });
 
-  it('warns of a break with the promoted contract before the update, and updates to a draft once confirmed', async () => {
+  it('refuses an update that breaks the promoted contract, even when the caller asks to accept it', async () => {
     const view = await save();
     await promoteDirectly(view.id);
     const version = await addVersion('artifact-1', code('# reworked\n'));
@@ -676,6 +676,9 @@ describe('repinning a promoted function', () => {
       repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next })
     ).rejects.toMatchObject({
       statusCode: 409,
+      message: expect.stringMatching(
+        /^Output deflection was removed since promotion 1, which could break callers of the tool, .* save this version as a new tool, give the function a new name in FUNCTION, save the artifact, and select Make this a tool\.$/
+      ),
       additionalInfo: {
         code: 'breaking_change',
         promotedSeq: 1,
@@ -684,12 +687,19 @@ describe('repinning a promoted function', () => {
     });
     expect(await stored(view.id)).toMatchObject({ state: 'live', pin: { version: 1 } });
 
-    const repinned = await repinCallableFunction(OWNER, view.id, {
-      expectedVersion: version,
-      contract: next,
-      acceptBreaking: true,
-    });
-    expect(repinned).toMatchObject({ state: 'draft', pin: { version: 2 } });
+    await expect(
+      repinCallableFunction(OWNER, view.id, {
+        expectedVersion: version,
+        contract: next,
+        acceptBreaking: true,
+      } as Parameters<typeof repinCallableFunction>[2])
+    ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'breaking_change' } });
+    expect(await stored(view.id)).toMatchObject({ state: 'live', pin: { version: 1 } });
+
+    const compatible = contract();
+    Object.assign(compatible.inputs.properties, { depth: { type: 'number', unit: 'm' } });
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: compatible });
+    expect(repinned.pin).toMatchObject({ version });
   });
 });
 

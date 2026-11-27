@@ -94,11 +94,11 @@ export async function setCallableFunctionSources(
   const fn = await callableFunctionRepository.findByIdForOwner(functionId, userOwner(actor));
   if (!fn) throw notFound();
   const pins = fn.pin.dataPins ?? [];
-  if (pins.length + sources.length > CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
-    throw new ConflictError(
-      `A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files and sources together.`,
-      { code: 'data_pin_limit', limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins }
-    );
+  if (sources.length > CALLABLE_FUNCTION_DATA_LIMITS.maxSources) {
+    throw new ConflictError(`A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxSources} sources.`, {
+      code: 'source_limit',
+      limit: CALLABLE_FUNCTION_DATA_LIMITS.maxSources,
+    });
   }
   if (sources.length > 0) {
     const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));

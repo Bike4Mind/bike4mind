@@ -217,14 +217,11 @@ export async function pinCallableFunctionData(
   if (pins.some(pin => pin.name === input.name) || sources.some(source => source.name === input.name)) {
     throw new ConflictError(`A data file or source named ${input.name} already exists.`, { code: 'data_name_taken' });
   }
-  if (pins.length + sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
-    throw new ConflictError(
-      `A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files and sources.`,
-      {
-        code: 'data_pin_limit',
-        limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins,
-      }
-    );
+  if (pins.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
+    throw new ConflictError(`A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files.`, {
+      code: 'data_pin_limit',
+      limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins,
+    });
   }
 
   const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId, {

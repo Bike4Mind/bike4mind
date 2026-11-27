@@ -166,17 +166,11 @@ export const useCreateCallableFunction = () => {
 export const useRepinCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({
-    mutationFn: async ({
-      id,
-      expectedVersion,
-      contract,
-      acceptBreaking,
-    }: CallableFunctionPinInput & { id: string; acceptBreaking?: true }) =>
+    mutationFn: async ({ id, expectedVersion, contract }: CallableFunctionPinInput & { id: string }) =>
       (
         await api.post<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/pin`, {
           expectedVersion,
           contract,
-          ...(acceptBreaking ? { acceptBreaking } : {}),
         })
       ).data,
     onSettled: invalidate,

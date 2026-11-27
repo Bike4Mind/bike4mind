@@ -114,8 +114,9 @@ describe('SaveFunctionDialog', () => {
       Outputs: '1 output',
     });
     expect(dialog.textContent).toContain(
-      'Only you can call it, and it runs in your browser. Nothing runs on the server.'
+      'Only you can call it, and your browser runs it here. Server tests, promotion, and every call to a promoted tool from the API, chat, or an agent run it on the server.'
     );
+    expect(dialog.textContent).not.toContain('Nothing runs on the server');
     expect(screen.getByTestId('save-function-dialog-submit-btn').textContent).toBe('Save as a draft tool');
   });
 

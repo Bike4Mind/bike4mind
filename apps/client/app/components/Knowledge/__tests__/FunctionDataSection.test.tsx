@@ -104,4 +104,11 @@ describe('FunctionDataSection', () => {
     expect(screen.getByTestId('python-function-data-pin-btn')).toBeDisabled();
     expect(screen.getAllByTestId('python-function-data-pin')).toHaveLength(CALLABLE_FUNCTION_DATA_LIMITS.maxPins);
   });
+
+  it('keeps pinning open when sources fill their own count', () => {
+    const sources = Array.from({ length: CALLABLE_FUNCTION_DATA_LIMITS.maxSources }, (_, i) => ({ name: `s${i}.csv` }));
+    renderSection({ ...toolWith(1), sources } as unknown as ICallableFunctionPublic);
+    fill('file9', 'points.csv');
+    expect(screen.getByTestId('python-function-data-pin-btn')).not.toBeDisabled();
+  });
 });
