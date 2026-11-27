@@ -660,12 +660,12 @@ describe('a function shared with the caller', () => {
     expect(h.runner).toHaveBeenCalledTimes(1);
   });
 
-  it('lists, reads, and reviews one the signed-in audience alone reaches as a shared entry', async () => {
+  it('lists, reads, and reviews one the signed-in audience alone reaches as a platform entry', async () => {
     const offer = { setBy: 'admin1', setAt: T0, audience: 'signed_in' };
     h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2', platform: offer });
     const listed = async () => (await call(listRoute, { user: RECIPIENT })).body.data;
     const read = async () => (await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).body.data;
-    const entry = { id: OTHERS_ID, group: 'shared', trust_label: 'platform' };
+    const entry = { id: OTHERS_ID, group: 'platform', trust_label: 'platform' };
     const detail = {
       shared_by: { name: 'Owner Two' },
       shared_via: 'signed_in',
@@ -699,6 +699,37 @@ describe('a function shared with the caller', () => {
       status: 404,
       body: { error: 'Function not found' },
     });
+  });
+
+  it('lists one also shared with the caller under the share, and keeps it there when the audience is withdrawn', async () => {
+    const BOTH_ID = '6b0000000000000000000004';
+    const owner = { ownerKey: 'u2', userId: 'u2' };
+    const offered = (audience?: 'signed_in') => ({ setBy: 'admin1', setAt: T0, ...(audience ? { audience } : {}) });
+    const grants = { visibility: 'private', userIds: [RECIPIENT] };
+    const place = (audience?: 'signed_in') => {
+      h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ...owner, platform: offered(audience) });
+      h.functions[3] = fnDoc(BOTH_ID, { slug: 'beam_both', ...owner, grants, platform: offered(audience) });
+    };
+    h.artifacts.push({ id: `artifact-${BOTH_ID}`, userId: 'u2', version: 5, deletedAt: null });
+    const listed = async () => (await call(listRoute, { user: RECIPIENT })).body.data;
+    const read = async (id: string) => (await call(getRoute, { query: { id }, user: RECIPIENT })).body.data;
+    const both = { id: BOTH_ID, group: 'shared', review_status: 'needs_review', trust_label: 'platform' };
+
+    place('signed_in');
+    expect(await listed()).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, group: 'platform' }),
+      expect.objectContaining(both),
+    ]);
+    expect(await read(OTHERS_ID)).toMatchObject({ group: 'platform', shared_via: 'signed_in' });
+    expect(await read(BOTH_ID)).toMatchObject({ ...both, shared_via: 'person' });
+    expect((await call(listRoute, { user: 'u2' })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, group: 'own', review_status: null }),
+      expect.objectContaining({ id: BOTH_ID, group: 'own', review_status: null }),
+    ]);
+
+    place();
+    expect(await listed()).toEqual([expect.objectContaining(both)]);
+    expect(await read(BOTH_ID)).toMatchObject({ ...both, shared_via: 'person' });
   });
 
   it('neither lists nor reads a function shared with someone else, or one shared with no one', async () => {

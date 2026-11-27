@@ -27,13 +27,15 @@ The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `s
 
 `group` says whose the function is:
 
-| Group      | Meaning                                                                              |
-| ---------- | ------------------------------------------------------------------------------------ |
-| `own`      | You own it.                                                                          |
-| `shared`   | Shared with you by name, project, or organization, or offered to everyone signed in. |
-| `platform` | Reserved for a function the platform publishes to everyone. No entry carries it now. |
+| Group      | Meaning                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `own`      | You own it.                                                                                                   |
+| `shared`   | Shared with you by name, project, or organization.                                                            |
+| `platform` | [Offered to everyone signed in](#functions-offered-to-everyone-signed-in), and not shared with you otherwise. |
 
-`review_status` is `null` on your own functions. On a function shared with you it is `needs_review` until you allow it, `allowed` once you have, and `withdrawn` after you take the allow back. A function whose interface changed since you allowed it reads `needs_review` again. Only an `allowed` function can be called. When two functions you reach have the same name, the shared one's `slug` ends in `_` and the last six characters of its id.
+A function both shared with you and offered to everyone signed in lists as `shared`, and stays listed when the offer ends. Your own function is always `own`.
+
+`review_status` is `null` on your own functions. On a `shared` or `platform` function it is `needs_review` until you allow it, `allowed` once you have, and `withdrawn` after you take the allow back. A function whose interface changed since you allowed it reads `needs_review` again. Only an `allowed` function can be called. When two functions you reach have the same name, the shared one's `slug` ends in `_` and the last six characters of its id.
 
 ### Trust labels
 
@@ -49,7 +51,7 @@ Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified
 
 ### Functions offered to everyone signed in
 
-An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Over the API it lists and reads with `group: "shared"` and `shared_via: "signed_in"` before and after the review, and calls once reviewed. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, its calls, or its data files, not even their names: a call's `stamp` lists each data file by its hash and size with an empty `name`. It does not add you to any project or organization.
+An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Over the API it lists and reads with `group: "platform"` and `shared_via: "signed_in"` before and after the review, and calls once reviewed. If it is also shared with you, it lists and reads as that share instead, with `group: "shared"`. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, its calls, or its data files, not even their names: a call's `stamp` lists each data file by its hash and size with an empty `name`. It does not add you to any project or organization.
 
 ## Find your functions in the app
 

@@ -32,7 +32,7 @@ const FunctionSchemaObject = z
       'Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless).'
   );
 
-/** How the key owner reaches a function: their own, shared with them, or published to everyone by the platform. */
+/** How the key owner reaches a function: their own, shared with them, or offered to everyone signed in. */
 export const PUBLIC_FUNCTION_GROUPS = ['own', 'shared', 'platform'] as const;
 export type PublicFunctionGroup = (typeof PUBLIC_FUNCTION_GROUPS)[number];
 
@@ -53,8 +53,8 @@ export const PublicFunctionSchema = z.object({
     .enum(PUBLIC_FUNCTION_GROUPS)
     .describe(
       '`own` is a function of the key owner; `shared` is one another person shared with them, by name, project, ' +
-        'or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the ' +
-        'platform publishes to everyone, and no entry carries it now.'
+        'or organization; `platform` is one an admin offered to everyone signed in that no share reaches them by. ' +
+        'A function both shared with them and offered lists as `shared`, and stays listed when the offer ends.'
     ),
   review_status: z
     .enum(PUBLIC_FUNCTION_REVIEW_STATUSES)

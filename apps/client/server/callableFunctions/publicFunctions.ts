@@ -114,9 +114,10 @@ export function publicFunctionGroup(access: CallableFunctionAccess): PublicFunct
     case 'person':
     case 'project':
     case 'organization':
-    // The app lists the signed-in audience under Shared with me, so it lists as shared here too.
-    case 'signed_in':
       return 'shared';
+    // Only when no share reaches the caller: `canCallFunction` (server-utils sharing.ts) prefers any grant.
+    case 'signed_in':
+      return 'platform';
     default: {
       const unmapped: never = access;
       throw new Error(`No group for access ${String(unmapped)}`);

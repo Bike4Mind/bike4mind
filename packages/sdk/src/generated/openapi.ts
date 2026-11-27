@@ -16656,7 +16656,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is one an admin offered to everyone signed in that no share reaches them by. A function both shared with them and offered lists as `shared`, and stays listed when the offer ends.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
@@ -16685,7 +16685,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is one an admin offered to everyone signed in that no share reaches them by. A function both shared with them and offered lists as `shared`, and stays listed when the offer ends.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
@@ -16732,7 +16732,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is one an admin offered to everyone signed in that no share reaches them by. A function both shared with them and offered lists as `shared`, and stays listed when the offer ends.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
