@@ -7,6 +7,7 @@ import {
   type SkillReviewStatus,
   type SkillRiskTier,
 } from '@bike4mind/common';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 
 /**
