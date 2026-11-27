@@ -143,7 +143,7 @@ The server renders the artifact's current version into one `index.html`, and the
 - The rendered `index.html` can be at most 10 MB. A bigger one fails with `422` and a `violations` entry of type `size_exceeded`.
 - The page is validated before it goes live: no `iframe`s, no `eval`, `new Function` or `document.write`, and scripts and stylesheets must come from the allowlist. A rejected page returns `422` with a `violations` list; each entry has a `type`, a `message` and, when known, a `file` and `line`.
 - Your total published storage has a limit. A page that would go over it returns `400` with `errorCode: "storage_limit_exceeded"`.
-- Each publish or republish counts once against a daily allowance over a rolling 24 hours: 200 actions, or 20 actions during the first 7 days of an account. Admins are not limited. Past it you get `429` with `code: "publish_rate_limited"` and a `Retry-After` header. A publish that fails before the page is written hands its action back.
+- Each publish, republish, change that widens who can see a page, or new share link (including a rotated or additional one) counts once against a daily allowance over a rolling 24 hours: 200 actions, or 20 actions during the first 7 days of an account. Admins are not limited. Past it you get `429` with `code: "publish_rate_limited"` and a `Retry-After` header. An action that fails before it takes effect hands itself back.
 - The usual per-user API rate limit also applies and answers `429`.
 - These slugs are reserved and return `422`: `api`, `admin`, `static`, `p`, `u`, `o`, `pj`, `r`, `f`, `a`, `_next`, `health`.
 

@@ -36,7 +36,7 @@ function actor(req: Request, res: Response) {
     return null;
   }
   return {
-    user: { id: String(req.user.id), isAdmin: req.user.isAdmin },
+    user: { id: String(req.user.id), isAdmin: req.user.isAdmin, createdAt: req.user.createdAt },
     logger: req.logger,
     publicId: String((req.query as { publicId?: string }).publicId ?? ''),
   };

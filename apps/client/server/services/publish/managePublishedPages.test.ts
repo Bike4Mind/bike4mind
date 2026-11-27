@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   restrictDuplicatePublications: vi.fn(async () => undefined),
   deletePublishThumbnails: vi.fn(async () => 0),
   assertPublicationPublicLink: vi.fn(async () => undefined),
+  refund: vi.fn(async () => undefined),
+  consume: vi.fn(),
 }));
+mocks.consume.mockImplementation(async () => ({ refund: mocks.refund }));
 
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({ assertOutboundActionAllowed: mocks.assertOutbound }));
 vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({
@@ -27,6 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   liveShareTokens: (artifact: { shareTokens?: { token?: string }[] }) =>
     (artifact.shareTokens ?? []).filter(t => t.token),
 }));
+vi.mock('./publishRateLimit', () => ({ consumePublishAction: mocks.consume }));
 vi.mock('./organizationPolicy', () => ({ assertPublicationPublicLink: mocks.assertPublicationPublicLink }));
 vi.mock('./thumbnailUrl', () => ({ signOwnerThumbnailUrl: vi.fn(async () => 'https://thumb.test/x') }));
 vi.mock('@server/services/publish', async () => {
@@ -216,6 +220,13 @@ describe('updatePublishedPage', () => {
     expect(mocks.assertPublicationPublicLink).toHaveBeenCalled();
     expect(mocks.assertOutbound).toHaveBeenCalledTimes(1);
     expect(mocks.restrictDuplicatePublications).toHaveBeenCalled();
+    expect(mocks.consume).toHaveBeenCalledTimes(1);
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+
+  it('does not charge a non-widening edit', async () => {
+    await run({ title: 'x' });
+    expect(mocks.consume).not.toHaveBeenCalled();
   });
 
   it('throws not_found (404)', async () => {

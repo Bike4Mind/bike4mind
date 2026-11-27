@@ -26,6 +26,7 @@ import {
   type PublishUser,
 } from '@server/services/publish';
 import { assertPublicationPublicLink } from './organizationPolicy';
+import { consumePublishAction } from './publishRateLimit';
 import { displayReplyTitle } from './plainTitle';
 import { signOwnerThumbnailUrl } from './thumbnailUrl';
 
@@ -67,8 +68,11 @@ const MANAGE_ERROR_CODES: ReadonlySet<string> = new Set<ManagePublishedPageError
 /** True for an error thrown by this module; other errors (policy, trust gate) pass through untouched. */
 export function isManagePublishedPageError(error: unknown): error is HTTPError {
   if (!(error instanceof Error) || !('statusCode' in error)) return false;
-  const code = (error as HTTPError).additionalInfo?.errorCode;
-  return typeof code === 'string' && MANAGE_ERROR_CODES.has(code);
+  const info = (error as HTTPError).additionalInfo;
+  // The embed validator's code is passed through as `legacyCode`, so an unlisted validator code still maps.
+  return (
+    (typeof info?.errorCode === 'string' && MANAGE_ERROR_CODES.has(info.errorCode)) || 'legacyCode' in (info ?? {})
+  );
 }
 
 /** The body the `/api/publish/artifacts` routes have always returned for these errors. */
@@ -538,7 +542,14 @@ export async function updatePublishedPage(input: UpdatePublishedPageInput): Prom
     const { assertOutboundActionAllowed: assertAllowed } = await import('@server/auth/assertOutboundActionAllowed');
     await assertAllowed(user, request);
   }
-  await artifact.save();
+  // One widening PATCH is one publish action, however many of the flags above it flips.
+  const action = widensExposure ? await consumePublishAction(user) : undefined;
+  try {
+    await artifact.save();
+  } catch (err) {
+    await action?.refund();
+    throw err;
+  }
 
   // Any change to the CACHED public response must purge the CDN or the stale copy serves until its
   // TTL: (a) leaving open-public, (b) the embed allowlist (frame-ancestors CSP) while open-public,

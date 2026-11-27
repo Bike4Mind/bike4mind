@@ -10,6 +10,7 @@ import * as z from 'zod';
 import { generateShareToken } from '@server/services/publish';
 import { assertPublicationPublicLink, type PublicationPolicyContext } from './organizationPolicy';
 import { PublishServiceError } from './publishServiceError';
+import { consumePublishAction, type PublishActor } from './publishRateLimit';
 
 /**
  * Owner-only management of a published artifact's no-sign-in share links (the capability behind
@@ -52,10 +53,7 @@ export const SHARE_LINK_ERROR_CODES = {
 
 type ShareLinkLogger = { info: (message: string) => void };
 
-export interface ShareLinkUser {
-  id: string;
-  isAdmin?: boolean;
-}
+export type ShareLinkUser = PublishActor;
 
 /** One live link as the owner surface renders it. `id` is the entry `_id` the owner revokes by. */
 export interface ShareLinkView {
@@ -332,6 +330,8 @@ export async function createShareLink(input: CreateShareLinkInput): Promise<Crea
       ? { shareTokens: { $elemMatch: { _id: new Types.ObjectId(rotatingFrom.id), ...liveShareTokenMatch(now) } } }
       : { shareTokens: { $not: { $elemMatch: liveShareTokenMatch(now) } } };
   const entryId = new Types.ObjectId();
+  // Counted only on an actual mint attempt; handed back below unless this request's link lands.
+  const action = await consumePublishAction(user);
   const won = await PublishedArtifact.findOneAndUpdate(
     { publicId: artifact.publicId, deletedAt: null, ...precondition },
     // An aggregation pipeline rather than $push + $set: revoking the outgoing entries and
@@ -382,7 +382,12 @@ export async function createShareLink(input: CreateShareLinkInput): Promise<Crea
       },
     ],
     { new: true }
-  ).lean<ShareTokenArtifactLean>();
+  )
+    .lean<ShareTokenArtifactLean>()
+    .catch(async (err: unknown) => {
+      await action.refund();
+      throw err;
+    });
 
   if (won) {
     logger.info(
@@ -402,6 +407,7 @@ export async function createShareLink(input: CreateShareLinkInput): Promise<Crea
     );
   }
 
+  await action.refund();
   // Lost the race: a concurrent request already minted/rotated/added. An additional mint
   // reports why it failed; otherwise return what persisted unless it no longer fits the request.
   const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })

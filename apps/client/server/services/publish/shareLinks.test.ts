@@ -4,6 +4,8 @@ const mockLoad = vi.fn();
 const mockCurrent = vi.fn();
 const mockFindOneAndUpdate = vi.fn();
 const mockUpdateOne = vi.fn();
+const mockRefund = vi.fn(async () => undefined);
+const mockConsume = vi.fn(async (_actor: unknown) => ({ refund: mockRefund }));
 
 vi.mock('@bike4mind/database', () => ({
   liveShareTokenMatch: () => ({ revokedAt: null }),
@@ -19,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
     (artifact.shareTokens ?? []).filter(entry => !!entry.token && !entry.revokedAt),
 }));
 vi.mock('@server/services/publish', () => ({ generateShareToken: () => 'TESTTOKEN' }));
+vi.mock('./publishRateLimit', () => ({ consumePublishAction: (actor: unknown) => mockConsume(actor) }));
 vi.mock('./organizationPolicy', () => ({ assertPublicationPublicLink: async () => undefined }));
 
 import {
@@ -89,6 +92,14 @@ describe('createShareLink', () => {
     expect(created).toMatchObject({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
     expect(created.expiresAt?.toISOString()).toBe(expiresAt);
     expect(created.shareLinks).toHaveLength(1);
+    expect(mockConsume).toHaveBeenCalledWith(base.user);
+    expect(mockRefund).not.toHaveBeenCalled();
+  });
+
+  it('hands the allowance back when the write throws', async () => {
+    mockFindOneAndUpdate.mockRejectedValue(new Error('db down'));
+    await expect(createShareLink(base)).rejects.toThrow('db down');
+    expect(mockRefund).toHaveBeenCalledOnce();
   });
 
   it('rejects a bad expiry and conflicting modes with their codes', async () => {
