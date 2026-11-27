@@ -54,6 +54,7 @@ describe('resolveCredentialBeforeSend', () => {
     const resolved = await resolveWith({ setupError: new Error('missing env'), exchange });
     expect(resolved.kind).toBe('static_fallback');
     expect(exchange).not.toHaveBeenCalled();
+    expect(logger.warn.mock.calls[0][0]).toMatch(/could not be built/);
   });
 
   it('rethrows and records nothing for the bare sentinel, which has no fallback key', async () => {

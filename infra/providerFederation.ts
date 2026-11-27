@@ -1,7 +1,8 @@
 /**
- * Deploy-time opt-in for provider workload identity federation on the chat completion path
- * (b4m-core/llm-adapters providerAuth.ts, wifTokenSource.ts). Off unless the deploy sets
- * B4M_PROVIDER_AUTH_FEDERATED=true. On or off, the functions spreading it report which
+ * Deploy-time capability for provider workload identity federation on the chat completion path
+ * (b4m-core/llm-adapters providerAuth.ts, wifTokenSource.ts): IAM permission, provider ids and
+ * token source, granted only when the deploy sets B4M_PROVIDER_AUTH_FEDERATED=true. It does not
+ * switch federation on; the anthropicCredentialMode / openaiCredentialMode admin settings do. On or off, the functions spreading it report which
  * credential each provider completion used (llm-adapters providerCredentialMetrics.ts), so the
  * metric covers exactly the runtimes federation is wired into. Spread into every function that
  * runs ChatCompletionProcess (the listed functions are checked by

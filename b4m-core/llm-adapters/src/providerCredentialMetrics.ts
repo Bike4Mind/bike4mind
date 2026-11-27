@@ -6,11 +6,12 @@
  * retries sit under one datapoint, and the max-tool-call wrap-up branch adds one without
  * its own request.
  *
- * Recorded once per request where the credential is resolved (providerCredentialResolution.ts),
- * so a request that falls back counts as `static_fallback` only, never also as `federated`.
- * `static` is the platform admin-setting key, `user_key` a user's own key. A key table nobody
- * marked (callers other than chat completions) counts every key as `static`, so a platform key
- * can never hide under `user_key`.
+ * Each `complete()` call records once, where its credential is resolved
+ * (providerCredentialResolution.ts), so a call that falls back counts as `static_fallback` only,
+ * never also as `federated`. `static` is the platform admin-setting key, `user_key` a user's own
+ * key. A key table nobody marked (callers other than chat completions) counts every key as
+ * `static`, including user keys, so a platform key can never hide under `user_key`; verify a
+ * rollout by `federated` rising, not by `static` reaching zero.
  *
  * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`); the
  * tests pin the literals.

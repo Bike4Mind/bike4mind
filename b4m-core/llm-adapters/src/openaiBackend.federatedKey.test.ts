@@ -94,7 +94,12 @@ describe('OpenAIBackend federated key', () => {
     const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
     expect(clientKey(backend)).toBeNull();
     await expect(apiOf(backend)._options.apiKey()).resolves.toBe('openai-access-token');
-    expect(stsSend).toHaveBeenCalledWith({ input: { Audience: ['aud-sts'], SigningAlgorithm: 'RS256' } });
+    expect(stsSend).toHaveBeenCalledWith(
+      { input: { Audience: ['aud-sts'], SigningAlgorithm: 'RS256' } },
+      {
+        abortSignal: expect.any(AbortSignal),
+      }
+    );
     expect(JSON.parse(tokenExchange.mock.calls[0][1].body)).toMatchObject({
       subject_token: 'sts-jwt',
       identity_provider_id: 'idp_sts',

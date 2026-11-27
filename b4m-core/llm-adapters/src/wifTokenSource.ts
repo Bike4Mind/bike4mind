@@ -7,6 +7,19 @@ export type WifTokenSourceName = 'github-actions' | 'aws-sts';
 
 export type SubjectTokenSource = (audience: string) => Promise<string>;
 
+/**
+ * Upper bound on each call of a token exchange (the STS subject token, the provider exchange).
+ * A hung exchange then fails before the request is sent and falls back to the static key,
+ * instead of holding the turn open.
+ */
+export const TOKEN_EXCHANGE_TIMEOUT_MS = 10_000;
+
+/** `fetch` with TOKEN_EXCHANGE_TIMEOUT_MS added to whatever signal the caller passed. */
+export const exchangeFetch: typeof fetch = (input, init) => {
+  const timeout = AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS);
+  return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout });
+};
+
 export function selectedWifTokenSource(): WifTokenSourceName {
   const raw = process.env.PROVIDER_WIF_TOKEN_SOURCE?.trim();
   if (!raw || raw === 'github-actions') return 'github-actions';
@@ -47,7 +60,12 @@ export async function awsStsIdToken(audience: string): Promise<string> {
   });
   const { STSClient, GetWebIdentityTokenCommand } = await stsModule;
   stsClient ??= new STSClient({});
-  const out = await stsClient.send(new GetWebIdentityTokenCommand({ Audience: [audience], SigningAlgorithm: 'RS256' }));
+  const out = await stsClient.send(
+    new GetWebIdentityTokenCommand({ Audience: [audience], SigningAlgorithm: 'RS256' }),
+    {
+      abortSignal: AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS),
+    }
+  );
   if (!out.WebIdentityToken) throw new Error('STS GetWebIdentityToken returned no token');
   return out.WebIdentityToken;
 }

@@ -1,10 +1,11 @@
 import { ChatModels } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { recordProviderCredentialUse, anthropicExchange, openaiExchange } = vi.hoisted(() => ({
+const { recordProviderCredentialUse, anthropicExchange, openaiExchange, openaiInvalidate } = vi.hoisted(() => ({
   recordProviderCredentialUse: vi.fn(),
   anthropicExchange: vi.fn(),
   openaiExchange: vi.fn(),
+  openaiInvalidate: vi.fn(),
 }));
 vi.mock('./providerCredentialMetrics', () => ({ recordProviderCredentialUse }));
 // The provider-side token exchanges, so a test decides whether federation succeeds.
@@ -13,7 +14,7 @@ vi.mock('@anthropic-ai/sdk/lib/credentials/oidc-federation', () => ({
 }));
 vi.mock('openai/auth/workload-identity-auth', () => ({
   WorkloadIdentityAuth: vi.fn().mockImplementation(function () {
-    return { getToken: () => openaiExchange() };
+    return { getToken: () => openaiExchange(), invalidateToken: () => openaiInvalidate() };
   }),
 }));
 vi.mock('@aws-sdk/client-sts', () => ({
@@ -54,7 +55,7 @@ function stubFederationEnv(): void {
 }
 
 /** Every provider API request, by the credential it carried. Answers each with a 400 (not retried). */
-function stubProviderApi(): { credentials: string[] } {
+function stubProviderApi(status = 400): { credentials: string[] } {
   const sent = { credentials: [] as string[] };
   vi.stubGlobal(
     'fetch',
@@ -63,7 +64,7 @@ function stubProviderApi(): { credentials: string[] } {
       sent.credentials.push(headers.get('x-api-key') ?? headers.get('authorization')?.replace(/^Bearer /, '') ?? '');
       return new Response(
         JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'rejected in test' } }),
-        { status: 400, headers: { 'content-type': 'application/json' } }
+        { status, headers: { 'content-type': 'application/json' } }
       );
     })
   );
@@ -90,6 +91,7 @@ describe.each(['anthropic', 'openai'] as const)('%s backend credential resolutio
     recordProviderCredentialUse.mockReset();
     anthropicExchange.mockReset();
     openaiExchange.mockReset();
+    openaiInvalidate.mockReset();
     stubFederationEnv();
     sent = stubProviderApi();
   });
@@ -154,5 +156,24 @@ describe.each(['anthropic', 'openai'] as const)('%s backend credential resolutio
     }
     expect(sent.credentials).toEqual([]);
     expect(recordProviderCredentialUse).not.toHaveBeenCalled();
+  });
+});
+
+describe('openai backend federated 401', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('drops the cached token on a 401 so the next call re-exchanges, without resending', async () => {
+    recordProviderCredentialUse.mockReset();
+    openaiInvalidate.mockReset();
+    stubFederationEnv();
+    const sent = stubProviderApi(401);
+    openaiExchange.mockResolvedValue(FEDERATED_TOKEN);
+    const backend = new OpenAIBackend({ kind: 'federated', fallbackKey: PLATFORM_KEY });
+    await expect(backend.complete(ChatModels.GPT4o, messages, { stream: false }, async () => {})).rejects.toBeDefined();
+    expect(sent.credentials).toEqual([FEDERATED_TOKEN]);
+    expect(openaiInvalidate).toHaveBeenCalledTimes(1);
   });
 });

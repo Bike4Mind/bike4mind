@@ -53,7 +53,8 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { normalizeProviderCredential, type ProviderCredentialSpec } from './providerAuth';
-import { resolveCredentialBeforeSend, type ResolvedProviderCredential } from './providerCredentialResolution';
+import { resolveCredentialBeforeSend } from './providerCredentialResolution';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
@@ -277,6 +278,13 @@ export class AnthropicBackend implements ICompletionBackend {
   private federatedApi?: Anthropic;
   private federationSetupError: unknown;
   private staticApi?: Anthropic;
+  // The client the in-flight complete() call resolved; see clientForNextRequest.
+  private readonly requestClient = new AsyncLocalStorage<Anthropic>();
+
+  /** The client to send on: the current call's resolved client, else the constructor's. */
+  private get api(): Anthropic {
+    return this.requestClient.getStore() ?? this._api;
+  }
   // Fairness bucket for the shared Anthropic semaphore: the account behind the request. Differs from
   // _endUserId only for a platform key's end user, whose requests still queue as the key owner's.
   private readonly _tenantKey?: string;
@@ -329,7 +337,7 @@ export class AnthropicBackend implements ICompletionBackend {
    * before anything is sent; see ResolvedProviderCredential for why a later failure never
    * falls back.
    */
-  private async useCredentialForNextRequest(): Promise<ResolvedProviderCredential> {
+  private async clientForNextRequest(): Promise<Anthropic> {
     const resolved = await resolveCredentialBeforeSend({
       provider: 'anthropic',
       spec: this.credential,
@@ -337,10 +345,12 @@ export class AnthropicBackend implements ICompletionBackend {
       exchange: () => this.exchangeFederatedToken(),
       logger: this.logger,
     });
-    if (resolved.kind !== 'federated') this._api = this.staticClient(resolved.key);
-    else if (this.federatedApi) this._api = this.federatedApi;
-    else throw new Error('Federated Anthropic credential resolved without a federated client');
-    return resolved;
+    // A static or user key keeps the constructor's client; `_api` itself is never reassigned, so
+    // concurrent calls on this instance each send on the client their own credential resolved.
+    if (resolved.kind === 'static_fallback') return this.staticClient(resolved.key);
+    if (resolved.kind !== 'federated') return this._api;
+    if (!this.federatedApi) throw new Error('Federated Anthropic credential resolved without a federated client');
+    return this.federatedApi;
   }
 
   /**
@@ -1067,7 +1077,20 @@ export class AnthropicBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    await this.useCredentialForNextRequest();
+    const client = await this.clientForNextRequest();
+    return this.requestClient.run(client, () =>
+      this.completeWithResolvedCredential(model, messages, options, cb, toolsUsed)
+    );
+  }
+
+  private async completeWithResolvedCredential(
+    model: string,
+    messages: IMessage[],
+    options: Partial<ICompletionOptions>,
+    cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
+    toolsUsed: Array<RecordableToolUse> = []
+  ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options, true);
     this.currentModel = model;
     if (options._internal?.evaluation) {
       if (options.executeTools !== false)
@@ -1856,7 +1879,7 @@ export class AnthropicBackend implements ICompletionBackend {
               const stream = await withRetry(
                 () =>
                   openObservedMessageStream(
-                    this._api,
+                    this.api,
                     { ...apiParams, stream: true },
                     {
                       signal: combinedSignal,
@@ -2944,7 +2967,7 @@ export class AnthropicBackend implements ICompletionBackend {
             assertAnthropicEvaluationWire(apiParams, info.contextWindow);
             await evaluation.admit(info, apiParams.model, apiParams.max_tokens);
           }
-          const singleAttempt = retrySignal ? this._api.withOptions({ fetch: this.fetchOnce }) : undefined;
+          const singleAttempt = retrySignal ? this.api.withOptions({ fetch: this.fetchOnce }) : undefined;
           response =
             retrySignal && singleAttempt
               ? await retryAbortAware(
@@ -2965,7 +2988,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 )
               : await withRetry(
                   () =>
-                    this._api.messages.create(apiParams, {
+                    this.api.messages.create(apiParams, {
                       signal: options.abortSignal,
                       ...(evaluation ? { maxRetries: 0 } : {}),
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),

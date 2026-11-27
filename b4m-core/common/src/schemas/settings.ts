@@ -3259,7 +3259,7 @@ export const settingsMap = {
     defaultValue: 'static',
     options: [...PROVIDER_CREDENTIAL_MODES],
     description:
-      '"static" (default): the platform authenticates to OpenAI with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key if the token exchange fails. Without the capability it keeps using the API key.',
+      '"static" (default): the platform authenticates to OpenAI with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key for a request whose token exchange fails or times out before it is sent; an error after sending is never retried with the API key. Without the capability it keeps using the API key.',
     category: 'AI',
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 1.5,
@@ -3330,7 +3330,7 @@ export const settingsMap = {
     defaultValue: 'static',
     options: [...PROVIDER_CREDENTIAL_MODES],
     description:
-      '"static" (default): the platform authenticates to Anthropic with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key if the token exchange fails. Without the capability it keeps using the API key.',
+      '"static" (default): the platform authenticates to Anthropic with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key for a request whose token exchange fails or times out before it is sent; an error after sending is never retried with the API key. Without the capability it keeps using the API key.',
     category: 'AI',
     group: API_SERVICE_GROUPS.ANTHROPIC.id,
     order: 2,

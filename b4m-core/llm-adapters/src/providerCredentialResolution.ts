@@ -56,11 +56,10 @@ async function resolve({
     }
   }
   if (spec.fallbackKey === null) throw cause;
-  logger.warn(
-    `[providerCredential] ${provider} federated token exchange failed; using the static key for this request`,
-    {
-      error: cause instanceof Error ? cause.message : String(cause),
-    }
-  );
+  const failed =
+    setupError === undefined ? 'token exchange failed' : 'client could not be built (check the deploy env)';
+  logger.warn(`[providerCredential] ${provider} federated ${failed}; using the static key for this request`, {
+    error: cause instanceof Error ? cause.message : String(cause),
+  });
   return { kind: 'static_fallback', key: spec.fallbackKey, cause };
 }

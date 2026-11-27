@@ -42,7 +42,8 @@ import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { WorkloadIdentityAuth } from 'openai/auth/workload-identity-auth';
 import { normalizeProviderCredential, type ProviderCredentialSpec } from './providerAuth';
-import { resolveCredentialBeforeSend, type ResolvedProviderCredential } from './providerCredentialResolution';
+import { resolveCredentialBeforeSend } from './providerCredentialResolution';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -78,7 +79,7 @@ import {
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
-import { selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
+import { exchangeFetch, selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -150,7 +151,8 @@ const federatedOpenAIClients = new Map<string, FederatedOpenAI>();
  * `workloadIdentity` option, whose exchange runs lazily inside the request and is not reachable
  * from outside. Holding the WorkloadIdentityAuth lets the backend run the exchange before a
  * request is sent (see OpenAIBackend.useCredentialForNextRequest); the request then reads the
- * cached token. Unlike `workloadIdentity`, a 401 does not trigger one re-exchange and retry.
+ * cached token. Unlike `workloadIdentity`, a 401 is not retried (the request was sent); the
+ * backend drops the cached token so the next request exchanges again.
  */
 function federatedOpenAIClient(): FederatedOpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
@@ -166,11 +168,18 @@ function federatedOpenAIClient(): FederatedOpenAI {
   let federated = federatedOpenAIClients.get(cacheKey);
   if (!federated) {
     const getSubjectToken = subjectTokenSource(source);
-    const auth = new WorkloadIdentityAuth({
-      identityProviderId,
-      serviceAccountId,
-      provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
-    });
+    const auth = new WorkloadIdentityAuth(
+      {
+        identityProviderId,
+        serviceAccountId,
+        provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
+        // No background refresh: its failure is an unawaited rejection, and it would let a
+        // request count as federated while the exchange is failing. A token is exchanged again
+        // once it expires, on the awaited path the backend runs before sending.
+        refreshBufferSeconds: 0,
+      },
+      exchangeFetch
+    );
     // A function apiKey never falls back to an OPENAI_API_KEY in the environment.
     const client = new OpenAI({ apiKey: () => auth.getToken(), fetchOptions: providerFetchOptions() });
     federated = { client, auth };
@@ -256,6 +265,13 @@ export class OpenAIBackend implements ICompletionBackend {
   private federated?: FederatedOpenAI;
   private federationSetupError: unknown;
   private staticApi?: OpenAI;
+  // The client the in-flight complete() call resolved; see clientForNextRequest.
+  private readonly requestClient = new AsyncLocalStorage<OpenAI>();
+
+  /** The client to send on: the current call's resolved client, else the constructor's. */
+  private get api(): OpenAI {
+    return this.requestClient.getStore() ?? this._api;
+  }
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
@@ -298,7 +314,7 @@ export class OpenAIBackend implements ICompletionBackend {
    * before anything is sent; see ResolvedProviderCredential for why a later failure never
    * falls back. The exchange itself is forced here via the shared WorkloadIdentityAuth.
    */
-  private async useCredentialForNextRequest(): Promise<ResolvedProviderCredential> {
+  private async clientForNextRequest(): Promise<OpenAI> {
     const federated = this.federated;
     const resolved = await resolveCredentialBeforeSend({
       provider: 'openai',
@@ -309,10 +325,12 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       logger: this.logger,
     });
-    if (resolved.kind !== 'federated') this._api = this.staticClient(resolved.key);
-    else if (federated) this._api = federated.client;
-    else throw new Error('Federated OpenAI credential resolved without a federated client');
-    return resolved;
+    // A static or user key keeps the constructor's client; `_api` itself is never reassigned, so
+    // concurrent calls on this instance each send on the client their own credential resolved.
+    if (resolved.kind === 'static_fallback') return this.staticClient(resolved.key);
+    if (resolved.kind !== 'federated') return this._api;
+    if (!federated) throw new Error('Federated OpenAI credential resolved without a federated client');
+    return federated.client;
   }
 
   setDispatchModel(info: ModelInfo): void {
@@ -1178,12 +1196,34 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
-    const priorToolFailure = toolsUsed.some(t => t.success === false);
     const retrySignal = getAbortAwareRetrySignal(options, true);
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    await this.useCredentialForNextRequest();
+    const client = await this.clientForNextRequest();
+    try {
+      return await this.requestClient.run(client, () =>
+        this.completeWithResolvedCredential(model, messages, options, callback, toolsUsed)
+      );
+    } catch (err) {
+      // The provider rejected an issued token (e.g. revoked early): never resend, but stop
+      // serving that token from the cache.
+      if (err instanceof OpenAI.AuthenticationError && this.federated?.client === client) {
+        this.federated.auth.invalidateToken();
+      }
+      throw err;
+    }
+  }
+
+  private async completeWithResolvedCredential(
+    model: string,
+    messages: IMessage[],
+    options: Partial<ICompletionOptions>,
+    callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
+    toolsUsed: Array<RecordableToolUse> = []
+  ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
+    const retrySignal = getAbortAwareRetrySignal(options, true);
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1421,7 +1461,7 @@ export class OpenAIBackend implements ICompletionBackend {
     const response = retrySignal
       ? await retryAbortAware(
           () =>
-            this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+            this.api.chat.completions.create(parameters as ChatCompletionCreateParams, {
               signal: retrySignal,
               maxRetries: 0,
             }),
@@ -1436,7 +1476,7 @@ export class OpenAIBackend implements ICompletionBackend {
         )
       : await withRetry(
           () =>
-            this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+            this.api.chat.completions.create(parameters as ChatCompletionCreateParams, {
               signal: options.abortSignal,
               ...(evaluation ? { maxRetries: 0 } : {}),
             }),
@@ -2528,7 +2568,7 @@ export class OpenAIBackend implements ICompletionBackend {
     }
     const stream = await withRetry(
       () =>
-        this._api.responses.create(params, { signal: options.abortSignal, ...(evaluation ? { maxRetries: 0 } : {}) }),
+        this.api.responses.create(params, { signal: options.abortSignal, ...(evaluation ? { maxRetries: 0 } : {}) }),
       {
         maxRetries: evaluation ? 0 : 3,
         initialDelayMs: 500,
