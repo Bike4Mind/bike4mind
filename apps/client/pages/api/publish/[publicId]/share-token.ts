@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/database';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { generateShareToken } from '@server/services/publish';
+import { consumePublishAction } from '@server/services/publish/publishRateLimit';
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import * as z from 'zod';
@@ -288,6 +289,9 @@ const handler = baseApi()
       });
     }
 
+    // Counted only on an actual mint attempt; handed back below unless this request's link lands.
+    const action = await consumePublishAction(req.user!);
+
     // Mint, rotate or add under a compare-and-set so two racing POSTs cannot hand a caller a
     // link that loses the write race (which would 404). A mint requires "no live entry" and a
     // rotate pins the exact entry it rotates away from, so only one racer's write lands.
@@ -352,7 +356,12 @@ const handler = baseApi()
         },
       ],
       { new: true }
-    ).lean<ShareTokenArtifactLean>();
+    )
+      .lean<ShareTokenArtifactLean>()
+      .catch(async (err: unknown) => {
+        await action.refund();
+        throw err;
+      });
 
     if (won) {
       req.logger.info(
@@ -366,6 +375,7 @@ const handler = baseApi()
       });
     }
 
+    await action.refund();
     // Lost the race: a concurrent request already minted/rotated/added. An additional mint
     // reports why it failed; otherwise return what persisted unless it no longer fits the request.
     const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })

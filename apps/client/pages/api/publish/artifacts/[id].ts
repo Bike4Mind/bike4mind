@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
+import { consumePublishAction } from '@server/services/publish/publishRateLimit';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
@@ -317,7 +318,14 @@ const handler = baseApi({
       (!!artifact.discoverable && !discoverableBefore) ||
       (artifact.embedOrigins ?? []).some(origin => !embedOriginsBefore.includes(origin));
     if (widensExposure) await assertOutboundActionAllowed(req.user, req);
-    await artifact.save();
+    // One widening PATCH is one publish action, however many of the flags above it flips.
+    const action = widensExposure ? await consumePublishAction(req.user) : undefined;
+    try {
+      await artifact.save();
+    } catch (err) {
+      await action?.refund();
+      throw err;
+    }
 
     // Any change that alters the CACHED public response must purge the CDN, or the
     // stale copy keeps serving up to its TTL. Five triggers: (a) leaving open-public
