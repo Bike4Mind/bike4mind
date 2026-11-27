@@ -306,21 +306,40 @@ final class SessionMutationTests: XCTestCase {
     XCTAssertFalse(model.isLoadingMore)
   }
 
-  func testCancelledRefreshDoesNotReportAFailure() async {
+  func testCancellingTheCallerDoesNotCancelTheRefresh() async {
     let api = FakeAPI()
     let model = SessionsViewModel(api: api, cache: InMemorySessionListCache())
+    await api.setSessionPages([nil: Page(items: [Samples.session("a")], nextCursor: nil)])
     await api.holdSessionLists()
-    // A cancelled URLSession request reaches the model as `.offline`.
-    await api.setFailure(.offline)
 
     let refresh = Task { await model.refresh() }
     await waitForSessionList(api, count: 1)
-    XCTAssertEqual(model.state, .loading)
     refresh.cancel()
     await api.releaseSessionLists()
     await refresh.value
 
-    XCTAssertEqual(model.state, .idle)
+    XCTAssertEqual(model.state, .loaded)
+    XCTAssertEqual(model.sessions.map(\.id), ["a"])
+  }
+
+  func testRefreshAnotherViewIsWaitingOnSurvivesTheFirstCallerGoingAway() async {
+    let api = FakeAPI()
+    let model = SessionsViewModel(api: api, cache: InMemorySessionListCache())
+    await api.setSessionPages([nil: Page(items: [Samples.session("a")], nextCursor: nil)])
+    await api.holdSessionLists()
+
+    let drawer = Task { await model.load() }
+    await waitForSessionList(api, count: 1)
+    let screen = Task { await model.load() }
+    drawer.cancel()
+    await api.releaseSessionLists()
+    await drawer.value
+    await screen.value
+
+    XCTAssertEqual(model.state, .loaded)
+    XCTAssertEqual(model.sessions.map(\.id), ["a"])
+    let calls = await api.sessionCursors.count
+    XCTAssertEqual(calls, 1)
   }
 
   func testCancelledLoadMoreDoesNotReportAFailure() async {

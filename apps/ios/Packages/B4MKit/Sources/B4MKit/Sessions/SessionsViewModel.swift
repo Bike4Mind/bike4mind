@@ -20,7 +20,9 @@ public final class SessionsViewModel {
   @ObservationIgnored private let api: any B4MAPI
   @ObservationIgnored private let cache: any SessionListCache
   @ObservationIgnored private let pageSize: Int
-  @ObservationIgnored private var isRefreshing = false
+  /// The refresh in flight. Unstructured so one view going away (the drawer closing) cannot cancel a refresh
+  /// another view is waiting on.
+  @ObservationIgnored private var refreshTask: Task<Void, Never>?
   @ObservationIgnored private var mutatingIDs: Set<String> = []
   @ObservationIgnored private let onDeleted: @MainActor (String) async -> Void
   @ObservationIgnored private let onRenamed: @MainActor (String, String) async -> Void
@@ -59,10 +61,15 @@ public final class SessionsViewModel {
   }
 
   public func refresh() async {
-    guard !isRefreshing else { return }
+    if let refreshTask { return await refreshTask.value }
+    let task = Task { await self.performRefresh() }
+    refreshTask = task
+    await task.value
+  }
+
+  private func performRefresh() async {
     let generation = self.generation
-    isRefreshing = true
-    defer { if generation == self.generation { isRefreshing = false } }
+    defer { if generation == self.generation { refreshTask = nil } }
 
     if sessions.isEmpty { state = .loading }
     do {
@@ -93,7 +100,7 @@ public final class SessionsViewModel {
   }
 
   public func loadMore() async {
-    guard let cursor = pages.nextCursor, !isLoadingMore, !isRefreshing, !isShowingCachedRows else { return }
+    guard let cursor = pages.nextCursor, !isLoadingMore, refreshTask == nil, !isShowingCachedRows else { return }
     let generation = self.generation
     isLoadingMore = true
     defer { if generation == self.generation { isLoadingMore = false } }
@@ -186,7 +193,7 @@ public final class SessionsViewModel {
     sessions = []
     state = .idle
     isLoadingMore = false
-    isRefreshing = false
+    refreshTask = nil
     mutatingIDs = []
     loadMoreError = nil
     isShowingCachedRows = false

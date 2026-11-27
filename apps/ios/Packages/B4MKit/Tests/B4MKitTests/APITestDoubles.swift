@@ -109,6 +109,7 @@ actor FakeAPI: B4MAPI {
   func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
     sessionCursors.append(cursor)
     if holdingSessionLists { await withCheckedContinuation { heldSessionLists.append($0) } }
+    try Task.checkCancellation()
     if let failure { throw failure }
     return sessionPages[cursor] ?? Page(items: [], nextCursor: nil)
   }
