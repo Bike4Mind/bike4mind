@@ -6,7 +6,7 @@ import { withRetry, type RetryOptions } from '@bike4mind/common';
  * Redelivering the SQS message cannot repair a failed `markFailed`: the redelivery goes through
  * the CAS claim, which expects `continuing`/`pending`, but the execution is still `running`, so
  * the claim loses and the message is acked with nothing fixed. Retrying in-process is the only
- * path that closes the gap before the hourly abandoned-execution sweep. Still throws once the
+ * path that closes the gap before the abandoned-execution sweep, which only marks an execution stale after 6 hours. Still throws once the
  * retries are spent, so the caller can fall back to that sweep.
  *
  * Own module with structural deps so it unit-tests without the executor's Mongo/AWS imports.
