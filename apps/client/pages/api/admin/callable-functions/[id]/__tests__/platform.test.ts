@@ -73,8 +73,9 @@ beforeEach(() => {
 });
 
 describe('/api/admin/callable-functions/:id/platform', () => {
-  it('needs models:curate and the admin API-key scope', async () => {
+  it('is JWT-only and needs models:curate and the admin scope', async () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
+      auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
       adminPermissions: { POST: 'models:curate', DELETE: 'models:curate' },
     });

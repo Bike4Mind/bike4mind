@@ -24,6 +24,7 @@ const view = (fn: Parameters<typeof shownCallableFunctionTrustLabel>[0] & { id: 
 });
 
 const handler = adminApi({
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { POST: 'models:curate', DELETE: 'models:curate' },
 })
