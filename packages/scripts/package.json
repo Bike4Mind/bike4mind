@@ -71,6 +71,7 @@
     "migrate:encrypt-tokens": "tsx migrate/encrypt-tokens-at-rest.ts",
     "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "migrate:reencrypt-stored-secrets": "tsx migrate/reencrypt-stored-secrets.ts",
+    "migrate:rewrap-memory-keys": "tsx migrate/rewrap-memory-keys.ts",
     "audit:credential-census": "tsx migrate/credential-census.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:oauth-starting-grant": "tsx backfillOAuthStartingGrant.ts",
