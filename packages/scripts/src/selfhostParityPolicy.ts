@@ -313,8 +313,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
-    ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+    '06cbb7b563bc2d64ca374dfa3d53dcc23f96bc95c80084c9f00eca29967a4796',
+    [
+      'bedrock:InvokeModel',
+      'bedrock:InvokeModelWithResponseStream',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
   ),
   hostedOnly(
     'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
@@ -440,8 +446,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '5ebca7cdcb9170ef166585b6c8a9f78ae695df60a67779d6500b988185737d8f',
-    ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+    '946cf9f4952fb9a59bdec62d3600b7c8a59c04ea951bcc9631a5627e624d277b',
+    [
+      'bedrock:InvokeModel',
+      'bedrock:InvokeModelWithResponseStream',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
   ),
   broker(
     'queue:infra/queues.ts:agentContinuationQueueDLQ',
@@ -735,8 +747,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:callableFunctionCallQueue',
-    '167794254bb0e6d0e3ee82478574e2130cd7a61461d9bcfc0b7e1a97fe59bc95',
-    'Asynchronous function calls are not wired on self-host: the broker declares the queue but nothing consumes it, so an async invoke answers 503 and a synchronous call still runs.'
+    '3a4962ab3bd5c171403f265dd43d7d0e0775752b9ceaa320d6fa0f706189f38c',
+    'Asynchronous function calls are not wired on self-host: the broker declares the queue but nothing consumes it, so an async invoke answers 503 and a synchronous call still runs.',
+    ['lambda:InvokeFunction']
   ),
   gapBecause(
     'queue:infra/queues.ts:callableFunctionCallQueueDLQ',
@@ -1326,8 +1339,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c01849c37004687a89c06c1a60dd1dbe1ed290d89c7b5842c09389a10483e2ca',
-    ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
+    '9255c6433e28841ef412bd76bf1fcde5031a63b7c0ab25d89750098c7db41a9c',
+    [
+      'bedrock:*',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'execute-api:ManageConnections',
+      'lambda:InvokeFunction',
+    ]
   ),
   gapBecause(
     'service:infra/renderWorker.ts:RenderWorker',

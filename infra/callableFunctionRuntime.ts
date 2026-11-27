@@ -22,7 +22,6 @@ import {
   type RouteTarget,
 } from './callableFunctionNetwork';
 import { PRODUCTION_STAGES, STAGE_LOG_RETENTION_DAYS } from './constants';
-import { dlqAlarmTopic } from './dlqAlarms';
 
 // Runs user-written Python (apps/workers/src/callableFunctions/handler.ts) with no link, secrets, or environment, on a
 // network with no name resolution and no route out but the function-data endpoint. A raw aws.lambda.Function:
@@ -233,12 +232,11 @@ function createCallableFunctionRuntime() {
     { dependsOn: [rolePolicy] }
   );
 
-  if (dlqAlarmTopic) createAlarms(fn, dlqAlarmTopic);
   return { fn, subnetIds: network.subnetIds, dataEndpointId: dataEndpoint?.id };
 }
 
 /** Errors, duration, and throttles, in the shape infra/alarms.ts uses for its Lambda alarms. */
-function createAlarms(fn: aws.lambda.Function, topic: aws.sns.Topic | sst.aws.SnsTopic) {
+export function createCallableFunctionRuntimeAlarms(fn: aws.lambda.Function, topic: aws.sns.Topic | sst.aws.SnsTopic) {
   const alarmPrefix = `${$app.name}-${$app.stage}-callable-function-runtime`;
   const common = {
     namespace: 'AWS/Lambda',
@@ -289,6 +287,22 @@ function createAlarms(fn: aws.lambda.Function, topic: aws.sns.Topic | sst.aws.Sn
 const runtime = enabled ? createCallableFunctionRuntime() : undefined;
 
 export const callableFunctionRuntime = runtime?.fn;
+
+type RuntimeGrant = {
+  environment: Record<string, $util.Output<string>>;
+  permissions: Array<{ actions: string[]; resources: $util.Output<string>[] }>;
+};
+
+/**
+ * Each function that runs callable functions: the runtime's name to invoke and the grant to invoke it. Empty without a
+ * runtime, so packages/server-utils/src/callableFunctions/runtimeRunner.ts finds no runner and a run is refused.
+ */
+export const callableFunctionRuntimeForCallers: RuntimeGrant = callableFunctionRuntime
+  ? {
+      environment: { CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: callableFunctionRuntime.name },
+      permissions: [{ actions: ['lambda:InvokeFunction'], resources: [callableFunctionRuntime.arn] }],
+    }
+  : { environment: {}, permissions: [] };
 
 /** For the stack output: another stage in the same account runs the function in these subnets. */
 export const callableFunctionSubnetIds = runtime?.subnetIds.apply(ids => ids.join(','));

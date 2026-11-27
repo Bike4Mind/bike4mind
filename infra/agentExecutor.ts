@@ -22,6 +22,7 @@ import { cdnUrlForLambdaEnv } from './router';
 import { agentContinuationQueue, generationJobQueue } from './queues';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionRuntimeForCallers } from './callableFunctionRuntime';
 
 // Re-export websocketApi route setup for the agent_execute route.
 // Defined here (not in websocket.ts) to avoid circular dependency:
@@ -74,6 +75,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     // (infra/chatCompletion.ts) -- without it, agent-mode web search never sees the backup
     // provider and stays exposed to the SerpAPI hangs this service exists to hedge against.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
+    ...callableFunctionRuntimeForCallers.environment,
   },
   permissions: [
     mailBodyPutPermission(appFilesBucket),
@@ -108,6 +110,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
       actions: ['sqs:SendMessage'],
       resources: [agentContinuationQueue.arn],
     },
+    ...callableFunctionRuntimeForCallers.permissions,
   ],
   copyFiles: toolRuntimeAssets(),
 };
