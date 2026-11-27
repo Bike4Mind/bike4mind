@@ -48,6 +48,7 @@ import {
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
 } from './assistantInstructions.contract';
+import { getInterruptionFeedbackContract, putInterruptionFeedbackContract } from './interruptionFeedback.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -251,6 +252,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
+  getInterruptionFeedbackContract,
+  putInterruptionFeedbackContract,
   replyToBriefDecisionContract,
   editBriefDecisionContract,
   resolveBriefDecisionContract,

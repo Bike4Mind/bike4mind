@@ -24,6 +24,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
   assembleBrief,
+  blockBriefPushCategories,
   briefedDelegationIds,
   briefedEmailIds,
   briefPushBody,
@@ -194,6 +195,7 @@ export async function composeBrief(
       collapseId: `brief_ready:${input.briefId}`,
       briefId: input.briefId,
       ...(briefAction && { briefAction }),
+      ...(brief.trigger === 'busy_block' && { blockEndCategories: blockBriefPushCategories(composed, activity) }),
     });
   } catch (error) {
     logger.error('[Brief] composition failed', { briefId: input.briefId, error });
