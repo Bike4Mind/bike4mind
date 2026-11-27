@@ -228,7 +228,7 @@ const handler = baseApi({ auth: false })
           );
         } catch (error) {
           if (!(error instanceof ForbiddenError)) {
-            req.logger.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
+            req.logger?.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
           }
         }
       };
