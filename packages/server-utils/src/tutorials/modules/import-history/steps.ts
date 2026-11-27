@@ -19,6 +19,8 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
   {
     id: 'import-history-export',
     type: 'point',
+    // Bottom-left: the default bottom-right corner covers the end of the recorded answer.
+    placement: 'left',
     title: 'Export comes first',
     body: 'The answer shows where to export. The file arrives later by email as a .zip. No export yet? Carry on, the next steps show where it goes.',
   },
@@ -28,7 +30,7 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     anchor: 'profile-menu-card',
     placement: 'right',
     title: 'Open your profile',
-    body: 'Imports live in your settings. Open your account menu at the foot of the side menu and press Profile. Then press Next.',
+    body: 'Imports live in your settings. Open the side menu (the menu button on a phone), then your account menu at its foot, and press Profile. Then press Next.',
   },
   {
     id: 'import-history-settings',
@@ -36,7 +38,7 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     anchor: 'settings-tab',
     placement: 'below',
     title: 'Open Settings',
-    body: 'Open the Settings tab, then press Next.',
+    body: 'On your Profile page, open the Settings tab, then press Next.',
   },
   {
     id: 'import-history-open-importer',
@@ -44,7 +46,7 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     anchor: 'settings-import-history-btn',
     placement: 'below',
     title: 'Open the importer',
-    body: 'Press Import LLM History to open the importer, then press Next.',
+    body: 'In Settings, press Import LLM History to open the importer, then press Next.',
   },
   // No anchor: the dialog covers the page, and an anchored card on a phone docks on the edge away from the
   // anchor, over the dialog's own button. Unanchored, the card docks above what it avoids.
@@ -59,6 +61,8 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
   {
     id: 'import-history-after',
     type: 'point',
+    // Bottom-left: the default bottom-right corner covers the end of the recorded answer.
+    placement: 'left',
     title: 'It runs in the background',
     body: 'Each past chat becomes its own notebook in your list. Your inbox tells you when the import is done. Large exports can take a while.',
   },
