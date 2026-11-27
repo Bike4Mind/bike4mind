@@ -1,7 +1,7 @@
 import { cloneElement, type ReactElement, type ReactNode } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { SecurityDashboardWafLogsInsightsOverview } from '@client/app/hooks/data/admin';
 import { adminChartSeries } from '../EventMetrics/utils/chartTheme';
@@ -33,11 +33,13 @@ const insights = (
 });
 
 const nameTicks = (chart: HTMLElement) =>
-  [...chart.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')].map(
-    tick => tick.textContent
-  );
+  [...chart.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')].map(tick => {
+    const lines = [...tick.querySelectorAll('tspan')];
+    return lines.length ? lines.map(line => line.textContent).join(' ') : tick.textContent;
+  });
 
 describe('WafLogsInsightsSection charts', () => {
+  afterEach(() => vi.restoreAllMocks());
   const data = insights({
     topBlockedUris: [
       { name: '/wp-login.php', count: 30 },
@@ -73,6 +75,35 @@ describe('WafLogsInsightsSection charts', () => {
     expect(chart.querySelector('.recharts-bar-rectangle path')).toHaveAttribute('fill', adminChartSeries(2)[1]);
     expect(within(chart).getByText('Requests')).toBeInTheDocument();
     expect(within(chart).getByText('Location \u{2022} IP')).toBeInTheDocument();
+  });
+
+  it('keeps location and IP words readable when SVG ticks wrap onto separate lines', () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      // Unique fixture words avoid changing cached measurements used by other chart suites.
+      if (
+        this.id === 'recharts_measurement_span' &&
+        ['WRAPPED_FIXTURE', '2001:db8:8713::c1'].includes(this.textContent ?? '')
+      ) {
+        return new DOMRect(0, 0, 240, 14);
+      }
+      return measure.call(this);
+    });
+    render(
+      <WafLogsInsightsSection
+        data={insights({
+          topBlockedUris: [],
+          topClientIps: [{ name: 'WRAPPED_FIXTURE 2001:db8:8713::c1', count: 900 }],
+        })}
+        range="24h"
+      />,
+      { wrapper }
+    );
+
+    const chart = screen.getByTestId('waf-logs-top-client-ips-chart');
+    const tick = chart.querySelector('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value');
+    expect(tick?.querySelectorAll('tspan').length).toBeGreaterThan(1);
+    expect(nameTicks(chart)).toEqual(['WRAPPED_FIXTURE 2001:db8:8713::c1']);
   });
 
   it('says there is no data instead of drawing an empty chart', () => {
