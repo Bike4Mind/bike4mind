@@ -255,14 +255,15 @@ const handler = baseApi({
   // A browse listing mixes the caller's own rows with other people's. The projection above is
   // shaped for the management tab, so on someone else's row it also carries identifiers a viewer
   // has no claim to: the owner's user id, the owning org/project id, the previous version's
-  // authoring metadata, and which gate kind protects it. Strip those from rows the caller does
+  // authoring metadata, which gate kind protects it, and the publisher's source references
+  // (session, message, file and artifact ids). Strip those from rows the caller does
   // not own; the display fields the browse grid renders are untouched. Admins keep the full rows
   // - the admin surface is the reason the wide projection exists.
   //
   // Deliberately NOT stripped: versionsCount and discoverable. Neither identifies a tenant, both
   // are read by the owner's own management tab (PublishedArtifactsTabContent, PublishShareModal),
   // and hiding them would couple those reads to ownerId staying in the projection forever.
-  const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind'] as const;
+  const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind', 'source'] as const;
 
   const rows = await Promise.all(
     ((result?.rows ?? []) as Array<Record<string, unknown>>).map(
