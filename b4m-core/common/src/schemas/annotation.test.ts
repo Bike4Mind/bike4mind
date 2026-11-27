@@ -6,7 +6,9 @@ const parse = (anchor?: unknown) => CreateAnnotationRequestSchema.safeParse({ bo
 describe('annotation anchor elementText', () => {
   it('accepts text up to the cap', () => {
     const elementText = 'a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX);
-    expect(parse({ x: 0.1, y: 0.2, elementText })).toMatchObject({ success: true });
+    const result = parse({ x: 0.1, y: 0.2, elementText });
+    expect(result.success).toBe(true);
+    expect(result.data?.anchor?.elementText).toBe(elementText);
   });
 
   it('rejects text over the cap or of the wrong type', () => {

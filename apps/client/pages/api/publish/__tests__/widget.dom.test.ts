@@ -12,6 +12,7 @@
 // assertions below are load-bearing too: an anonymous reader of a public artifact must issue
 // ZERO requests to /api/auth/refreshToken, which is rate-limited per IP.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { ANNOTATION_ANCHOR_TEXT_MAX } from '@bike4mind/common';
 import handler from '../widget';
 import { ACCESS_TOKEN_STORAGE_KEY } from '@client/app/hooks/useAccessToken';
 
@@ -782,9 +783,9 @@ describe('publish widget - pin anchor text', () => {
     expect(await postedAnchor({ text: '  Hello\n world ' })).toEqual({ x: 0.5, y: 0.25, elementText: 'Hello world' });
   });
 
-  it('truncates long text to 200 characters', async () => {
-    const anchor = await postedAnchor({ text: 'a'.repeat(500) });
-    expect(anchor?.elementText).toBe('a'.repeat(200));
+  it('truncates long text to the anchor text cap', async () => {
+    const anchor = await postedAnchor({ text: 'a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX + 300) });
+    expect(anchor?.elementText).toBe('a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX));
   });
 
   it('drops a non-string value but keeps the pin', async () => {

@@ -88,7 +88,7 @@ describe('toAnnotationDto', () => {
     };
     const withText = toAnnotationDto({ ...base, anchor: { x: 0.1, y: 0.2, elementText: 'Pricing' } });
     expect(withText.anchor).toEqual({ x: 0.1, y: 0.2, elementText: 'Pricing' });
-    expect(AnnotationDtoSchema.safeParse(withText).success).toBe(true);
+    expect(AnnotationDtoSchema.parse(withText).anchor?.elementText).toBe('Pricing');
 
     const legacy = toAnnotationDto({ ...base, anchor: { x: 0.1, y: 0.2 } });
     expect(legacy.anchor).toEqual({ x: 0.1, y: 0.2 });
