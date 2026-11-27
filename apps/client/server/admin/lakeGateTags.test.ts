@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenError } from '@bike4mind/common';
+import { DATA_LAKES, ForbiddenError } from '@bike4mind/common';
 
 const findGateValues = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ dataLakeRepository: { findGateValues } }));
@@ -26,7 +26,11 @@ describe('lakeGateTagsIn', () => {
 
   it('matches the gates of registry lakes', async () => {
     findGateValues.mockResolvedValue({ userTags: [], entitlements: [] });
-    await expect(lakeGateTagsIn(['opti', 'optihashi:pro'])).resolves.toEqual(['opti', 'optihashi:pro']);
+    const registryGates = DATA_LAKES.flatMap(lake => [lake.requiredUserTag, lake.requiredEntitlement]).filter(
+      (gate): gate is string => !!gate
+    );
+    expect(registryGates.length).toBeGreaterThan(0);
+    await expect(lakeGateTagsIn(registryGates)).resolves.toEqual(registryGates);
   });
 
   it('skips the lookup when no tags are given', async () => {
