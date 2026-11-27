@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { ICallableFunctionPublic, ICallableFunctionShared } from '@bike4mind/common';
-import { groupFunctionLibrary, matchesFunctionSearch } from './functionLibrary';
+import { groupFunctionLibrary, matchesFunctionSearch } from './libraryGrouping';
 
 const own = (id: string, overrides: Partial<ICallableFunctionPublic> = {}) =>
   ({
