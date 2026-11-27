@@ -777,6 +777,7 @@ describe('apiKeyAuth with an expired MCP key', () => {
       expect(passed).toBe(false);
       expect(error).toBeInstanceOf(UnauthorizedError);
       expect(error?.message).toBe('API key expired');
+      expect(isExpiredExplicitScopeOnlyKeyMock).toHaveBeenCalledWith(KEY, expect.anything());
       expect((error as UnauthorizedError).additionalInfo).toEqual({
         errorCode: 'api_key_expired',
         renewal: { renew_url: 'https://app.example.com/profile?tab=api-keys' },

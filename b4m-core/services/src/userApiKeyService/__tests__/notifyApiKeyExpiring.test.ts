@@ -25,6 +25,7 @@ describe('notifyApiKeyExpiring', () => {
     await expect(
       notifyApiKeyExpiring({ ...context, keyName: 'laptop', renewUrl: 'https://app.example.com/r' }, d as never)
     ).resolves.toBe(true);
+    expect(d.db.users.findActiveEmailsByIds).toHaveBeenCalledWith(['u1']);
     const [to, message] = d.mailer.sendEmail.mock.calls[0];
     expect(to).toBe('o@example.com');
     expect(message.subject).toBe('Your API key "laptop" expires on 2027-01-14');

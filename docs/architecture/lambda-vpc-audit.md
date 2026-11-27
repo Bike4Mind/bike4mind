@@ -95,6 +95,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/agentProactiveMessaging.checkAndScheduleProactiveMessages` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `agentProactiveMessageQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/analyticsRollup.handler` | `infra/analyticsRollup.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/apiKeyBaselineCalculation.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/apiKeyExpiryReminder.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/apiProbeDetector.handler` | `infra/apiProbeDetector.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/businessMetricAlerts.handler` | `infra/businessMetricAlerts.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/completionSequenceSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
