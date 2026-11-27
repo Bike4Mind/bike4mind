@@ -664,6 +664,44 @@ describe('POST /api/user-api-keys - analytics is best effort', () => {
 });
 
 // Wiring only: the containment rule itself is covered by the service's create.test.ts.
+describe('POST /api/user-api-keys - MCP key is session-only', () => {
+  beforeEach(() => createUserApiKey.mockClear());
+
+  it('forwards the flag and ceiling from a session caller', async () => {
+    const { req, res } = post({
+      name: 'mcp',
+      scopes: ['me:read'],
+      explicitScopeOnly: true,
+      exposureCeiling: 'organization',
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ explicitScopeOnly: true, exposureCeiling: 'organization' }),
+      expect.anything()
+    );
+  });
+
+  it.each([{ explicitScopeOnly: true }, { exposureCeiling: 'public' }])(
+    'refuses an API-key caller sending %o, without calling the service',
+    async extra => {
+      const { req, res } = post({ name: 'mcp', scopes: ['me:read'], ...extra });
+      (req as { apiKeyInfo?: unknown }).apiKeyInfo = { scopes: ['me:read'] };
+      await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+      expect(createUserApiKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it('forwards neither field for an ordinary mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read'] });
+    await mockRefs.postHandler!(req, res);
+    const [, forwarded] = createUserApiKey.mock.calls[0];
+    expect(forwarded).not.toHaveProperty('explicitScopeOnly');
+    expect(forwarded).not.toHaveProperty('exposureCeiling');
+  });
+});
+
 describe('POST /api/user-api-keys - caller key scopes forwarded for containment', () => {
   beforeEach(() => createUserApiKey.mockClear());
 

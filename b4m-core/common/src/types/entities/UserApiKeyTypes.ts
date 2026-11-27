@@ -303,7 +303,7 @@ export const CONFINED_API_KEY_SCOPE_FAMILIES: readonly (readonly ApiKeyScope[])[
 
 /**
  * Confined scopes an OAuth exchange key may hold beside its other scopes. The runtime gate confines every exchange
- * key whatever it holds (`decideScopeGate`'s `exchangeKey`), so these add only the routes that name them.
+ * key whatever it holds (`decideScopeGate`'s `explicitScopeOnly`), so these add only the routes that name them.
  */
 export const EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.FUNCTIONS_INVOKE,
@@ -311,16 +311,45 @@ export const EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: readonly ApiKeyScope[] = [
 ];
 
 /**
+ * Scopes an MCP key (`explicitScopeOnly`) may hold: an allowlist, so a scope added later is refused until it is
+ * added here on purpose. Includes the confined `functions:*` scopes, which an MCP key may hold beside the
+ * ordinary ones.
+ */
+export const MCP_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ME_READ,
+  ApiKeyScope.READ_NOTEBOOKS,
+  ApiKeyScope.READ_FILES,
+  ApiKeyScope.ARTIFACTS_PUBLISH,
+  ApiKeyScope.FUNCTIONS_INVOKE,
+  ApiKeyScope.FUNCTIONS_AUTHOR,
+];
+
+/** Scopes an MCP key must never hold. Documents intent and is asserted disjoint from {@link MCP_API_KEY_SCOPES}. */
+export const MCP_FORBIDDEN_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ADMIN,
+  ApiKeyScope.API_KEYS_MANAGE,
+  ApiKeyScope.PERSONAS_MINT,
+  ApiKeyScope.DATALAKE_SHARE,
+];
+
+/** Default lifetime of an MCP key when the minter sets no expiry. */
+export const MCP_API_KEY_DEFAULT_TTL_DAYS = 180;
+
+/** Widest audience an MCP key may publish or share to. Set by a human at mint and never changed by a key. */
+export const API_KEY_EXPOSURE_CEILINGS = ['private', 'organization', 'public'] as const;
+export type ApiKeyExposureCeiling = (typeof API_KEY_EXPOSURE_CEILINGS)[number];
+
+/**
  * The mint half of confinement: a key holding a confined scope holds nothing else, or only scopes of that one
- * {@link CONFINED_API_KEY_SCOPE_FAMILIES} entry. An exchange key may also hold
+ * {@link CONFINED_API_KEY_SCOPE_FAMILIES} entry. An exchange key or an `explicitScopeOnly` (MCP) key may also hold
  * {@link EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES} beside unconfined scopes.
  */
 export function isMintableConfinedScopeSet(
   scopes: readonly string[],
-  options: { exchangeKey?: boolean } = {}
+  options: { exchangeKey?: boolean; explicitScopeOnly?: boolean } = {}
 ): boolean {
   const isConfined = (scope: string) => (CONFINED_API_KEY_SCOPES as readonly string[]).includes(scope);
-  if (options.exchangeKey) {
+  if (options.exchangeKey || options.explicitScopeOnly) {
     const rest = scopes.filter(
       scope => !(EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES as readonly string[]).includes(scope)
     );
@@ -632,6 +661,13 @@ export interface IUserApiKey {
    * Absent or empty = default deny: the key reaches only what the service account itself created.
    */
   orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
+  /**
+   * An MCP key: admitted only on routes that name a scope it holds, never on a route that declares none, whatever
+   * scopes it holds. Chosen at mint (never inferred from the scope set) and not updatable.
+   */
+  explicitScopeOnly?: boolean;
+  /** Widest audience an `explicitScopeOnly` key may publish or share to. Set at mint by a session caller, never updatable. */
+  exposureCeiling?: ApiKeyExposureCeiling;
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**

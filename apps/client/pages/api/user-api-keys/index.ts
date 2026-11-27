@@ -20,6 +20,7 @@ import {
   IUserApiKey,
   IUserApiKeyDocument,
   UserApiKeyEvents,
+  type ApiKeyExposureCeiling,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -48,6 +49,9 @@ interface CreateApiKeyRequest {
    * (and platform admins) - enforced below.
    */
   organizationId?: string;
+  /** MCP key: admitted only on routes naming a scope it holds. Session callers only. */
+  explicitScopeOnly?: boolean;
+  exposureCeiling?: ApiKeyExposureCeiling;
   /** Embed key (epic #41): the agent to bind, its https origin allow-list, and optional branding. */
   agentId?: string;
   allowedOrigins?: string[];
@@ -161,6 +165,12 @@ const handler = baseApi({
     assertNotOrgServiceAccount(req.user);
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
+    const { explicitScopeOnly, exposureCeiling } = req.body;
+
+    // An MCP key and its exposure ceiling are set by a person in a session; a key minting a key could widen its own reach.
+    if ((explicitScopeOnly !== undefined || exposureCeiling !== undefined) && req.apiKeyInfo) {
+      throw new ForbiddenError('An MCP key can only be created from a signed-in session');
+    }
 
     // Reject any scope outside the self-service allowlist. ADMIN, CC_BRIDGE, and
     // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES
@@ -248,6 +258,9 @@ const handler = baseApi({
         // (fail loud) instead of silently dropping them.
         ...(isEmbedKey || hasEmbedFields
           ? { agentId, allowedOrigins: embedOrigins, branding: screenedBranding, spendCap }
+          : {}),
+        ...(explicitScopeOnly !== undefined || exposureCeiling !== undefined
+          ? { explicitScopeOnly, exposureCeiling }
           : {}),
         ...(organizationId
           ? { organizationId, billingOwnerType: CreditHolderType.Organization }

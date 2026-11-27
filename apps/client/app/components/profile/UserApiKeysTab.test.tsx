@@ -719,6 +719,63 @@ describe('UserApiKeysTab - artifacts:publish', () => {
   });
 });
 
+describe('UserApiKeysTab - MCP access level', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.functionsEnabled = false;
+    h.createMutate.mockClear();
+  });
+
+  const openModal = () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+  };
+  const mcpChip = () => screen.getByTestId('api-key-preset-mcp').querySelector('button')!;
+  const submit = () => {
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'MCP key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return h.createMutate.mock.calls[0][0] as {
+      scopes: ApiKeyScope[];
+      explicitScopeOnly?: boolean;
+      exposureCeiling?: string;
+      expiresAt?: Date;
+    };
+  };
+
+  it('mints the MCP scopes with the flag, a private ceiling and a 180-day expiry', () => {
+    openModal();
+    fireEvent.click(mcpChip());
+    expect(mcpChip()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-key-exposure-ceiling-select')).toBeTruthy();
+    const sent = submit();
+    expect(sent.explicitScopeOnly).toBe(true);
+    expect(sent.exposureCeiling).toBe('private');
+    expect(sent.scopes).toEqual(expect.arrayContaining([ApiKeyScope.ME_READ, ApiKeyScope.READ_NOTEBOOKS]));
+    expect(sent.scopes).not.toContain(ApiKeyScope.FUNCTIONS_INVOKE);
+    const days = ((sent.expiresAt as Date).getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(179);
+    expect(days).toBeLessThan(181);
+  });
+
+  it('sends neither MCP field once another access level is chosen', () => {
+    openModal();
+    fireEvent.click(mcpChip());
+    fireEvent.click(screen.getByTestId('api-key-preset-read').querySelector('button')!);
+    expect(mcpChip()).toHaveAttribute('aria-pressed', 'false');
+    const sent = submit();
+    expect(sent).not.toHaveProperty('explicitScopeOnly');
+    expect(sent).not.toHaveProperty('exposureCeiling');
+  });
+
+  it('badges an MCP key in the list with its ceiling', () => {
+    h.keys = [{ ...activeKey, explicitScopeOnly: true, exposureCeiling: 'organization' }];
+    renderTab();
+    expect(screen.getByTestId('api-key-mcp-badge-key-1').textContent).toContain('organization');
+  });
+});
+
 describe('UserApiKeysTab - API key trust gate', () => {
   const blocked = {
     canCreate: false,

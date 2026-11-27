@@ -71,6 +71,9 @@ import {
   listAgentsContract,
   listDataLakesContract,
   listFunctionsContract,
+  MCP_API_KEY_DEFAULT_TTL_DAYS,
+  MCP_API_KEY_SCOPES,
+  type ApiKeyExposureCeiling,
 } from '@bike4mind/common';
 import {
   EXPLICIT_ONLY_API_KEY_SCOPES,
@@ -209,6 +212,14 @@ const FUNCTIONS_SCOPE_OPTION = findApiKeyScopeOption(ApiKeyScope.FUNCTIONS_INVOK
 const FUNCTIONS_SCOPES: readonly ApiKeyScopeValue[] =
   CONFINED_API_KEY_SCOPE_FAMILIES.find(family => family.includes(ApiKeyScope.FUNCTIONS_INVOKE)) ?? [];
 
+// An MCP key is a confined access level too: the ordinary MCP scopes, with the functions scopes opt-in.
+const MCP_SCOPES: readonly ApiKeyScopeValue[] = MCP_API_KEY_SCOPES.filter(scope => !FUNCTIONS_SCOPES.includes(scope));
+const MCP_EXPOSURE_OPTIONS: { value: ApiKeyExposureCeiling; label: string }[] = [
+  { value: 'private', label: 'Private (only you)' },
+  { value: 'organization', label: 'Organization' },
+  { value: 'public', label: 'Public' },
+];
+
 const isFunctionsOnly = (scopes: ApiKeyScopeValue[]) =>
   scopes.includes(ApiKeyScope.FUNCTIONS_INVOKE) && scopes.every(scope => FUNCTIONS_SCOPES.includes(scope));
 
@@ -240,7 +251,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     const previousModel = seededModel;
     setSeededModel(scopeModel);
     setFormData(fd => {
-      if (isFunctionsOnly(fd.scopes)) return fd;
+      if (fd.explicitScopeOnly || isFunctionsOnly(fd.scopes)) return fd;
       const presetId = PRESETS.find(p => sameScopeSet(fd.scopes, previousModel.presetScopes[p.id]))?.id;
       const scopes = presetId
         ? [...scopeModel.presetScopes[presetId]]
@@ -282,12 +293,30 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   };
 
   const functionsOffered = useCallableFunctionsEnabled() && FUNCTIONS_SCOPE_OPTION !== undefined;
-  const functionsOnly = isFunctionsOnly(formData.scopes);
-  const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
-  const isCustom = !activePreset && !functionsOnly;
+  const mcpKey = formData.explicitScopeOnly === true;
+  const functionsOnly = !mcpKey && isFunctionsOnly(formData.scopes);
+  const activePreset = mcpKey
+    ? undefined
+    : PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
+  const isCustom = !activePreset && !functionsOnly && !mcpKey;
 
-  const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
-  const applyFunctions = () => setFormData(fd => ({ ...fd, scopes: [ApiKeyScope.FUNCTIONS_INVOKE] }));
+  const leaveMcp = (fd: CreateUserApiKeyRequest): CreateUserApiKeyRequest => {
+    const { explicitScopeOnly: _flag, exposureCeiling: _ceiling, ...rest } = fd;
+    return rest;
+  };
+  const applyPreset = (id: PresetId) =>
+    setFormData(fd => ({ ...leaveMcp(fd), scopes: [...scopeModel.presetScopes[id]] }));
+  const applyFunctions = () => setFormData(fd => ({ ...leaveMcp(fd), scopes: [ApiKeyScope.FUNCTIONS_INVOKE] }));
+  // Scopes the account is not offered are left out, so a hidden scope can't be submitted.
+  const applyMcp = () => {
+    setFormData(fd => ({
+      ...fd,
+      scopes: MCP_SCOPES.filter(scope => scopeModel.scopeValues.includes(scope)),
+      explicitScopeOnly: true,
+      exposureCeiling: 'private',
+    }));
+    setExpirationDays(String(MCP_API_KEY_DEFAULT_TTL_DAYS));
+  };
 
   const toggleScope = (value: ApiKeyScopeValue) =>
     setFormData(fd => ({
@@ -406,6 +435,23 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                   </Chip>
                 </Tooltip>
               )}
+              <Tooltip
+                title="For MCP clients. Works only on endpoints that name a permission the key holds, and expires."
+                variant="soft"
+                size="sm"
+              >
+                <Chip
+                  variant={mcpKey ? 'solid' : 'outlined'}
+                  color={mcpKey ? 'primary' : 'neutral'}
+                  startDecorator={mcpKey ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
+                  onClick={applyMcp}
+                  slotProps={{ action: { 'aria-pressed': mcpKey } }}
+                  data-testid="api-key-preset-mcp"
+                  sx={{ '--Chip-radius': '8px', py: 0.5, px: 1.25 }}
+                >
+                  MCP
+                </Chip>
+              </Tooltip>
               {isCustom && (
                 <Chip variant="solid" color="warning" sx={{ '--Chip-radius': '8px' }}>
                   Custom
@@ -414,7 +460,48 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             </Box>
           </FormControl>
 
-          {functionsOnly ? (
+          {mcpKey ? (
+            <Sheet variant="outlined" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }} data-testid="api-key-mcp-summary">
+              <Typography level="title-sm">MCP</Typography>
+              <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 0.5 }}>
+                Holds {formData.scopes.filter(scope => !FUNCTIONS_SCOPES.includes(scope)).join(', ')}. Works only on
+                endpoints that name one of its permissions, and expires.
+              </Typography>
+              {functionsOffered &&
+                FUNCTIONS_SCOPES.map(scope => (
+                  <Checkbox
+                    key={scope}
+                    size="sm"
+                    sx={{ mt: 1, display: 'flex' }}
+                    label={
+                      scope === ApiKeyScope.FUNCTIONS_INVOKE ? 'Also call your functions' : 'Also author your functions'
+                    }
+                    checked={formData.scopes.includes(scope)}
+                    onChange={() => toggleScope(scope)}
+                    data-testid={`api-key-mcp-${scope}-checkbox`}
+                  />
+                ))}
+              <FormControl sx={{ mt: 1.5 }}>
+                <FormLabel>Exposure ceiling</FormLabel>
+                <Select
+                  value={formData.exposureCeiling ?? 'private'}
+                  onChange={(_, value) =>
+                    setFormData(fd => ({ ...fd, exposureCeiling: (value as ApiKeyExposureCeiling) ?? 'private' }))
+                  }
+                  data-testid="api-key-exposure-ceiling-select"
+                >
+                  {MCP_EXPOSURE_OPTIONS.map(option => (
+                    <Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Option>
+                  ))}
+                </Select>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+                  The widest audience this key may publish or share to. It cannot be changed later.
+                </Typography>
+              </FormControl>
+            </Sheet>
+          ) : functionsOnly ? (
             <Sheet
               variant="outlined"
               sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}
@@ -507,8 +594,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                     >
                       <Option value="30">30 days</Option>
                       <Option value="90">90 days</Option>
+                      <Option value="180">180 days</Option>
                       <Option value="365">1 year</Option>
-                      <Option value="never">Never expires</Option>
+                      {!mcpKey && <Option value="never">Never expires</Option>}
                     </Select>
                   </FormControl>
 
@@ -2232,6 +2320,22 @@ export default function UserApiKeysTab() {
                       <td>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <Typography fontWeight="lg">{key.name}</Typography>
+                          {key.explicitScopeOnly && (
+                            <Tooltip
+                              title={`MCP key. Publish and share ceiling: ${key.exposureCeiling ?? 'private'}`}
+                              variant="soft"
+                              size="sm"
+                            >
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="primary"
+                                data-testid={`api-key-mcp-badge-${key.id}`}
+                              >
+                                MCP: {key.exposureCeiling ?? 'private'}
+                              </Chip>
+                            </Tooltip>
+                          )}
                           {legacyEndsAt(key) && (
                             <Tooltip
                               title="This key was created before scopes were enforced. Before this date, create a new key with the scopes it needs; rotating keeps the key legacy."

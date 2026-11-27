@@ -1,5 +1,7 @@
 import {
+  API_KEY_EXPOSURE_CEILINGS,
   API_KEY_USER_CAP_ERROR_CODE,
+  type ApiKeyExposureCeiling,
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyScopeValue,
@@ -15,6 +17,8 @@ import {
   IUserApiKeyDocument,
   isBuiltInApiKeyScope,
   isMintableConfinedScopeSet,
+  MCP_API_KEY_DEFAULT_TTL_DAYS,
+  MCP_API_KEY_SCOPES,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
   OrgApiKeyGrant,
@@ -103,6 +107,9 @@ const createUserApiKeySchema = z.object({
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
   // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
   orgOwned: z.object({ createdByUserId: z.string().min(1), grants: OrgApiKeyGrantsSchema.optional() }).optional(),
+  // MCP key (IUserApiKey.explicitScopeOnly). `literal(true)`: the flag is chosen to be set, never to be false.
+  explicitScopeOnly: z.literal(true).optional(),
+  exposureCeiling: z.enum(API_KEY_EXPOSURE_CEILINGS).optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -117,7 +124,7 @@ export type CreateUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadat
 /** Parameters for the federated AI-token exchange mint; createdFrom is fixed by the entry point. */
 export type CreateExchangeUserApiKeyParameters = Omit<
   MintUserApiKeyParameters,
-  'metadata' | 'expiresAt' | 'orgOwned'
+  'metadata' | 'expiresAt' | 'orgOwned' | 'explicitScopeOnly' | 'exposureCeiling'
 > & {
   expiresAt: Date;
   metadata: { clientIP?: string; userAgent?: string; oauthClientId: string; payerStanding?: PayerStanding };
@@ -190,6 +197,8 @@ export interface CreateUserApiKeyResult {
   spendCap?: number;
   preauthorizedLakeIds?: string[];
   orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
+  explicitScopeOnly?: boolean;
+  exposureCeiling?: ApiKeyExposureCeiling;
   createdAt: Date;
 }
 
@@ -229,6 +238,8 @@ export const createExchangeUserApiKey = async (
     adapters
   );
 
+const mcpDefaultExpiry = () => new Date(Date.now() + MCP_API_KEY_DEFAULT_TTL_DAYS * 24 * 60 * 60 * 1000);
+
 const mintUserApiKey = async (
   userId: string,
   parameters: MintUserApiKeyParameters,
@@ -255,6 +266,37 @@ const mintUserApiKey = async (
     throw new ForbiddenError('Cannot create a key that outlives the calling key');
   }
 
+  // An MCP key is confined to routes naming a scope it holds, so what it may hold is an allowlist. Only a human
+  // session sets the ceiling or the flag (a key minting a key would widen its own reach), and a key that
+  // never expires would outlive every review, so one is given the default lifetime.
+  const explicitScopeOnly = params.explicitScopeOnly === true;
+  if (!explicitScopeOnly && params.exposureCeiling !== undefined) {
+    throw new BadRequestError('exposureCeiling requires an MCP key (explicitScopeOnly)');
+  }
+  if (explicitScopeOnly) {
+    if (adapters.callerScopes) {
+      throw new ForbiddenError('An MCP key can only be created from a signed-in session');
+    }
+    if (params.metadata.createdFrom === 'oauth-exchange') {
+      throw new BadRequestError('An oauth-exchange key cannot be an MCP key');
+    }
+    if (params.orgOwned || params.productId !== undefined || params.agentId !== undefined) {
+      throw new BadRequestError('An MCP key cannot be org-owned, product-bound or agent-bound');
+    }
+    if (params.scopes.length === 0) {
+      throw new BadRequestError('An MCP key needs at least one scope');
+    }
+    const allowed = MCP_API_KEY_SCOPES as readonly string[];
+    const disallowed = params.scopes.filter(scope => !allowed.includes(scope));
+    if (disallowed.length > 0) {
+      throw new BadRequestError(
+        `An MCP key cannot hold ${disallowed.join(', ')}; it may hold only ${MCP_API_KEY_SCOPES.join(', ')}`
+      );
+    }
+  }
+  const exposureCeiling = explicitScopeOnly ? (params.exposureCeiling ?? 'private') : undefined;
+  const expiresAt = params.expiresAt ?? (explicitScopeOnly ? mcpDefaultExpiry() : undefined);
+
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
@@ -269,7 +311,7 @@ const mintUserApiKey = async (
   // The one exception is a family of confined scopes that serve one flow (CONFINED_API_KEY_SCOPE_FAMILIES), and
   // on an exchange key, which the gate confines whatever it holds, the functions scopes beside the chat ones.
   const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
-  if (!isMintableConfinedScopeSet(params.scopes, { exchangeKey: isExchangeKey })) {
+  if (!isMintableConfinedScopeSet(params.scopes, { exchangeKey: isExchangeKey, explicitScopeOnly })) {
     throw new BadRequestError(
       `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key, except ${CONFINED_API_KEY_SCOPE_FAMILIES.map(family => family.join(' with ')).join('; ')}`
     );
@@ -383,7 +425,7 @@ const mintUserApiKey = async (
     callbackSigningSecretCreatedAt: new Date(),
     scopes: params.scopes,
     status: ApiKeyStatus.ACTIVE,
-    expiresAt: params.expiresAt,
+    expiresAt,
     rateLimit,
     usage: {
       totalRequests: 0,
@@ -403,6 +445,7 @@ const mintUserApiKey = async (
     spendCap: params.spendCap,
     preauthorizedLakeIds: params.preauthorizedLakeIds,
     orgOwned: params.orgOwned,
+    ...(explicitScopeOnly ? { explicitScopeOnly, exposureCeiling } : {}),
   };
 
   let apiKeyDocument: IUserApiKeyDocument;
@@ -452,6 +495,8 @@ const mintUserApiKey = async (
     spendCap: apiKeyDocument.spendCap,
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
     orgOwned: apiKeyDocument.orgOwned,
+    explicitScopeOnly: apiKeyDocument.explicitScopeOnly,
+    exposureCeiling: apiKeyDocument.exposureCeiling,
     createdAt: apiKeyDocument.createdAt,
   };
 };

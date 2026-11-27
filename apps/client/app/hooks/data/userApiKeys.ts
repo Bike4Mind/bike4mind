@@ -7,6 +7,7 @@ import {
   IEmbedBranding,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   type ApiKeyRateLimitUsage,
+  type ApiKeyExposureCeiling,
   type AdminApiKeyAccess,
   type AdminApiKeyModerationException,
   type AdminApiKeyRequestCounts,
@@ -74,6 +75,9 @@ export interface CreateUserApiKeyRequest {
   agentId?: string;
   allowedOrigins?: string[];
   branding?: IEmbedBranding;
+  /** MCP key: admitted only on routes naming a scope it holds. The ceiling is the widest audience it may publish or share to. */
+  explicitScopeOnly?: boolean;
+  exposureCeiling?: ApiKeyExposureCeiling;
 }
 
 /**

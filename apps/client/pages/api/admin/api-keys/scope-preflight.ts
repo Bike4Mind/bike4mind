@@ -177,11 +177,11 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
     // unprojected find hydrates the whole UserApiKey document - `keyHash` included, since that
     // schema's `toObject` has no strip transform (only `toJSON` deletes it).
     const keyDocs = lookupIds.length
-      ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1, metadata: 1 })
+      ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1, metadata: 1, explicitScopeOnly: 1 })
       : [];
     const scopesByKeyId = new Map<string, ApiKeyScopeValue[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
-    const exchangeKeyIds = new Set<string>(
-      keyDocs.filter(doc => isExchangeKeyMetadata(doc.metadata)).map(doc => String(doc.id))
+    const confinedKeyIds = new Set<string>(
+      keyDocs.filter(doc => isExchangeKeyMetadata(doc.metadata) || doc.explicitScopeOnly).map(doc => String(doc.id))
     );
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
@@ -194,7 +194,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         const heldScopes = scopesByKeyId.get(entry.keyId) ?? [];
         // No grandfathering here: the preflight lists who breaks once the legacy key window ends.
         const { outcome } = decideScopeGate(requiredScopes, heldScopes, staged, undefined, {
-          exchangeKey: exchangeKeyIds.has(entry.keyId),
+          explicitScopeOnly: confinedKeyIds.has(entry.keyId),
         });
         return { ...entry, heldScopes, outcome };
       })
