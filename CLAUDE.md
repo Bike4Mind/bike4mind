@@ -27,7 +27,7 @@ GitHub only links a commit to your account when the email is verified there, and
 | Task | Command (cached) | Uncached fallback |
 |------|------------------|-------------------|
 | **Verify a branch (default)** | `pnpm verify` | see below |
-| Type check all (what CI gates: tsgo) | `pnpm turbo:typecheck` | `pnpm -w typecheck && pnpm -r typecheck` |
+| Type check all (what CI gates: TypeScript 7 as `tsgo`) | `pnpm turbo:typecheck` | `pnpm -w typecheck && pnpm -r typecheck` |
 | Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck:tsc` | `pnpm -w typecheck:tsc && pnpm -r typecheck:tsc` |
 | Test all | `pnpm turbo:test` | `pnpm -r test` |
 | Lint (CI parity) | `pnpm lint:check` | — |
