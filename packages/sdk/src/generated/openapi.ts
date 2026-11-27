@@ -10538,6 +10538,13 @@ export interface components {
           };
           /** @description When the approval was requested, in Unix milliseconds. It lapses after 15 minutes. */
           ts: number;
+          /** @description Set when the tool belongs to a custom connector. Show it, so the call target is visible before approval. */
+          customConnector?: {
+            /** @description The connection the call goes to, as named in the product. */
+            displayName: string;
+            /** @description The host the connection sends the call to. */
+            urlHost: string;
+          };
         };
       }[];
       next_cursor: string | null;
