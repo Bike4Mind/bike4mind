@@ -1505,6 +1505,35 @@ describe('imported message images', () => {
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/not owned/), { dropped: 1 });
   });
 
+  it('resolves ownership before an overwrite deletes the messages that may prove it', async () => {
+    const order: string[] = [];
+    const existing = [{ id: 'existing-id', userId: 'user-1', name: NOTEBOOK.name }];
+    const { adapters, bulkCreate } = makeAdapters(existing);
+    adapters.findOwnedMediaKeys = vi.fn(async () => {
+      order.push('lookup');
+      return new Set(['mine.png']);
+    });
+    adapters.chatHistoryRepository.deleteMany = vi.fn(async () => {
+      order.push('delete');
+    });
+    const payload = {
+      ...PAYLOAD,
+      notebooks: [{ ...NOTEBOOK, chatHistory: [{ ...MESSAGE, images: ['mine.png'] }] }],
+    };
+
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      {
+        ...OPTIONS,
+        conflictResolution: 'overwrite',
+      } as never
+    );
+
+    expect(order).toEqual(['lookup', 'delete']);
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual(['mine.png']);
+  });
+
   it('skips the ownership lookup when no message carries images', async () => {
     const { adapters, bulkCreate } = makeAdapters();
     await new NotebookImportService(adapters).importNotebooks('user-1', PAYLOAD as never, OPTIONS);

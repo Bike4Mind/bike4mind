@@ -598,9 +598,17 @@ export class NotebookImportService {
         return null;
 
       case 'overwrite': {
+        // Resolved before the delete: the messages it removes may be what proves the user's keys.
+        const ownedImages = await this.ownedImageKeys(notebook.chatHistory, existingSession.userId);
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
+        await this.importChatHistory(
+          notebook.chatHistory,
+          existingSession.id,
+          existingSession.userId,
+          options,
+          ownedImages
+        );
 
         const imported = await this.importAttachments(notebook, existingSession.userId, existingSession.id, options);
 
@@ -667,9 +675,10 @@ export class NotebookImportService {
     chatHistory: ExportedChatMessage[],
     sessionId: string,
     ownerUserId: string,
-    options: NotebookImportOptions
+    options: NotebookImportOptions,
+    ownedImages?: Set<string>
   ): Promise<void> {
-    const ownedImages = await this.ownedImageKeys(chatHistory, ownerUserId);
+    ownedImages ??= await this.ownedImageKeys(chatHistory, ownerUserId);
     const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
       // A generated id is not a valid key for the message store; omit the field so it assigns one.
       ...(options.preserveIds && message.id && { id: message.id }),
