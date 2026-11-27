@@ -108,12 +108,25 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
   },
   'model/list': { params: { force: 'local' }, badParams: { force: 'remote' }, result: { models: { models: [] } } },
   'draft/defaults': { params: {}, badParams: 'nope', result: { defaults: { model: 'm', approvalMode: 'ask' } } },
+  'taskDecision/list': {
+    params: {},
+    badParams: 'nope',
+    result: { decisions: [{ sessionId: 's1', rootId: 'r1', title: 't', decision: { kind: 'stopped' } }] },
+  },
 };
 
 const notificationSamples: Record<HostNotificationName, { params: unknown; badParams: unknown }> = {
   'session/event': {
-    params: { sessionId: 's1', seq: 1, event: { type: 'start', sessionId: 's1' } },
+    params: { sessionId: 's1', seq: 1, epoch: 'e1', event: { type: 'start', sessionId: 's1' } },
     badParams: { sessionId: 's1', seq: -1, event: {} },
+  },
+  'session/spawnFailed': {
+    params: { sessionId: 's1', title: 'Fix the build', message: 'No model' },
+    badParams: { sessionId: 's1', title: 'Fix the build' },
+  },
+  'session/contextNotice': {
+    params: { event: { type: 'context-notice', sessionId: 's1', message: 'Budget at 80%', kind: 'run-budget' } },
+    badParams: { event: { type: 'context-notice-cleared', sessionId: 's1' } },
   },
   'session/summaryChanged': { params: { summary }, badParams: { summary: null } },
   'session/statusChanged': { params: { event: sessionStatus }, badParams: { event: {} } },
@@ -182,6 +195,13 @@ describe('hostMethods', () => {
     expect(
       hostMethods['project/inspect'].result.safeParse({ inspection: { directory: '/w', isRepository: true } }).success
     ).toBe(false);
+  });
+
+  it('accepts the session/event of a 1.2 host, which sends no epoch, and rejects an empty epoch', () => {
+    const { params } = hostNotifications['session/event'];
+    const event = { type: 'start', sessionId: 's1' };
+    expect(params.safeParse({ sessionId: 's1', seq: 1, event }).success).toBe(true);
+    expect(params.safeParse({ sessionId: 's1', seq: 1, epoch: '', event }).success).toBe(false);
   });
 
   it('discriminates request/respond on kind', () => {

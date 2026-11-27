@@ -20,6 +20,7 @@ import { TAVERN_SCENE } from './orchestrator/tavern/tavernScene';
 
 const DOOR_POINT = TAVERN_SCENE.map.door;
 import { reloadReplyStatsPrefs } from './replyStatsPrefs';
+import type { HostBridgeApi } from '@shared/hostBridge';
 import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -571,10 +572,12 @@ describe('orchestrate mode in the chat shell', () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
     const mountsBefore = threadMounts.count;
-    const chatSubscriptions = onStreamEvent.mock.calls.length;
+    const request = vi.spyOn((window as unknown as { b4m: { host: HostBridgeApi } }).b4m.host, 'request');
+    const subscribed = () =>
+      request.mock.calls.filter(([, method]) => method === 'session/subscribe').map(([, , params]) => params);
     await enterOrchestrate();
     // Agent activity is subscribed to only while orchestrating.
-    expect(onStreamEvent).toHaveBeenCalledTimes(chatSubscriptions + 1);
+    expect(subscribed().length).toBeGreaterThan(0);
     expect(query('orchestrator-stage')).not.toBeNull();
     expect(el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
 
@@ -590,9 +593,11 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-dock')).toBeNull();
     expect(document.activeElement).toBe(el('orchestrator-dock-toggle-btn'));
 
-    const unsubscribedBefore = streamUnsubscribe.mock.calls.length;
-    act(() => el('chat-surface-toggle-chat').click());
-    expect(streamUnsubscribe).toHaveBeenCalledTimes(unsubscribedBefore + 1);
+    const unsubscribed = () => request.mock.calls.filter(([, method]) => method === 'session/unsubscribe').length;
+    const unsubscribedBefore = unsubscribed();
+    // Leaving orchestrate releases the agents' activity subscriptions.
+    await act(async () => el('chat-surface-toggle-chat').click());
+    expect(unsubscribed()).toBeGreaterThan(unsubscribedBefore);
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
     await enterOrchestrate();

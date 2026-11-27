@@ -498,6 +498,16 @@ jobs:
             fi
           fi
 
+          # The aggregate job and the QA ingest read statuses, stats and error text only.
+          SUMMARY="apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
+          if [ -f "$SUMMARY" ]; then
+            if jq 'walk(if type == "object" then del(.steps, .attachments, .stdout, .stderr) else . end)' "$SUMMARY" > "$SUMMARY.tmp"; then
+              mv "$SUMMARY.tmp" "$SUMMARY"
+            else
+              rm -f "$SUMMARY" "$SUMMARY.tmp"
+            fi
+          fi
+
           echo "=== pw-results debug ==="
           echo "Spec file: $SPEC_FILE"
           echo "Copied summary exists? $(test -f "apps/client/playwright-report/${SPEC_FILE}-pw-results.json" && echo yes || echo no)"
@@ -524,8 +534,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
+          # The full report only from a private repository, where artifact readers are repo
+          # members; otherwise just the two JSON sets the aggregate job reads.
           path: |
-            apps/client/playwright-report/
+            ${{ github.repository_visibility == 'private' && 'apps/client/playwright-report/' || 'apps/client/playwright-report/*-pw-results.json' }}
             apps/client/e2e/test-results/ai-latency/
           retention-days: 7
 

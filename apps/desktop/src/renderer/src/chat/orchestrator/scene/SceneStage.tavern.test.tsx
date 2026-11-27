@@ -13,6 +13,7 @@ import { SceneStage } from './SceneStage';
 import { TAVERN_SCENE } from '../tavern/tavernScene';
 
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 
 // The Tavern is the reference scene: these are the framework's behaviours as the Tavern shows them.
 const { map } = TAVERN_SCENE;
@@ -84,6 +85,7 @@ const themed = createThemedMount();
 // The answerable "needs you" bubble reads the waiting agent's session for its parked request.
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       onStreamEvent: vi.fn(() => () => undefined),
