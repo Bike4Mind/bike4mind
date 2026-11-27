@@ -135,7 +135,10 @@ export class HostLink {
       this.current.status === 'reconnecting' ||
       (this.current.status === 'offline' &&
         (this.current.reason === 'noNetwork' || this.current.reason === 'unreachable'));
-    if (!waiting || this.attempting) return;
+    if (!waiting && !this.attempting) return;
+    // A sleep can strand an attempt mid-connect: a fresh one replaces it, and run's stale checks
+    // discard whatever the old one opens.
+    this.attempting = false;
     this.clearRetry();
     void this.run();
   }

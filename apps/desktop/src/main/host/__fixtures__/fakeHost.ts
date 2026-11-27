@@ -109,8 +109,12 @@ export class FakeConnection implements HostTransport {
     for (const entry of this.pending) entry.reject(this.closedError('a pending request'));
     this.pending.clear();
     this.listeners.clear();
-    for (const listener of [...this.closeListeners]) listener(reason);
-    this.closeListeners.clear();
+    const notify = () => {
+      for (const listener of [...this.closeListeners]) listener(reason);
+      this.closeListeners.clear();
+    };
+    if (this.host.closeListenersLate) setTimeout(notify, 0);
+    else notify();
   }
 
   private closedError(method: string): HostConnectError {
@@ -135,6 +139,8 @@ export class FakeHost {
   connectDelayMs = 0;
   /** When set, subscribe answers before it replays (a transport that reorders the two). */
   answerBeforeReplay = false;
+  /** When set, a close reaches onClose listeners a tick after pending requests reject. */
+  closeListenersLate = false;
   /** Methods that are never answered, so a cut can land while they are in flight. */
   readonly unanswered = new Set<string>();
   /** Answers methods the fake does not serve itself. */

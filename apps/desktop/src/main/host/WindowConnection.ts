@@ -142,8 +142,10 @@ export class WindowConnection {
       });
       const parsed = subscribeResult.safeParse(answer);
       if (parsed.success && this.sessions.get(sessionId) === track) track.epoch = parsed.data.cursor.epoch;
-    } catch {
-      // Cut again before the host answered: the session waits for the next resume as it is.
+    } catch (error) {
+      // Cut again before the host answered: the session waits for the next resume as it is. Checked
+      // by error type too, since a transport may reject its pending requests before onClose runs.
+      if (error instanceof HostConnectError) return;
       if (this.transport !== transport || this.sessions.get(sessionId) !== track) return;
       // snapshotRequired, or anything else that stops a resume: the window starts over from session/get.
       this.resync(sessionId);

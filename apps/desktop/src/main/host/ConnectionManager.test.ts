@@ -308,6 +308,24 @@ describe('ConnectionManager: connection states', () => {
     expect(state()).toMatchObject({ status: 'connected' });
   });
 
+  it('abandons a connect stranded by sleep and starts a fresh one on wake', async () => {
+    const { host, manager, state, wake } = setUp({ connect: false });
+    host.connectDelayMs = 30_000;
+    manager.connect('devbox');
+    await settle();
+    expect(state()).toMatchObject({ status: 'connecting' });
+
+    host.connectDelayMs = 0;
+    wake();
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(host.connections).toHaveLength(2);
+    expect(host.open).toHaveLength(1);
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
   it('notices a host that stops answering its heartbeat, and one that closes the link', async () => {
     const { state, host } = setUp();
     await settle();
@@ -718,6 +736,28 @@ describe('ConnectionManager: resuming across a cut', () => {
     expect(manager.subscriptions(1, 'devbox').size).toBe(0);
     host.emit('s1');
     expect(window.seqs('s1')).toEqual([1, 2]);
+  });
+
+  it('keeps a session to resume when a cut rejects its resubscribe before the close is reported', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    host.unanswered.add('session/subscribe');
+    host.open[1].cut();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.open[1].requests.at(-1)?.method).toBe('session/subscribe');
+
+    host.closeListenersLate = true;
+    host.open[1].cut();
+    await settle();
+    expect(window.resyncs()).toEqual([]);
+
+    host.closeListenersLate = false;
+    host.unanswered.clear();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(host.open[1].requests.at(-1)).toEqual({
+      method: 'session/subscribe',
+      params: { sessionId: 's1', after: { epoch: 'epoch-1', seq: 2 } },
+    });
+    expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
   });
 
   it('treats a window connection the host cuts as a lost link, reopening only after the backoff', async () => {
