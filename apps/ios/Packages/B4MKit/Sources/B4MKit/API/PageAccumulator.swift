@@ -27,4 +27,20 @@ public struct PageAccumulator<Item: Identifiable & Sendable>: Sendable where Ite
     nextCursor = page.nextCursor
     hasLoadedFirstPage = true
   }
+
+  /// Swaps the row with this id in place; a row that is no longer loaded stays absent.
+  public mutating func replaceItem(id: Item.ID, with item: Item) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    items[index] = item
+  }
+
+  public mutating func removeItem(id: Item.ID) {
+    items.removeAll { $0.id == id }
+  }
+
+  /// Puts a row back at `index` (clamped), unless a row with its id is already loaded.
+  public mutating func insertItem(_ item: Item, at index: Int) {
+    guard !items.contains(where: { $0.id == item.id }) else { return }
+    items.insert(item, at: min(max(index, 0), items.count))
+  }
 }

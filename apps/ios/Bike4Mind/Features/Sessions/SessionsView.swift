@@ -1,24 +1,24 @@
 import B4MKit
 import SwiftUI
 
-/// The notebook history, pushed on the home screen (`AppShellView` registers the destinations). Owns the
-/// view model so it survives pushes onto the stack.
+/// The notebook history, pushed on the home screen (`AppShellView` registers the destinations). The view
+/// model is the app-wide one in `AppServices.sessionsModel`, shared with the drawer.
 struct SessionsView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
-    SessionsListScreen(api: services.api, cache: services.sessionListCache, captureJobs: services.capture.jobs)
+    SessionsListScreen(model: services.sessionsModel, captureJobs: services.capture.jobs)
   }
 }
 
 private struct SessionsListScreen: View {
-  @State private var model: SessionsViewModel
+  let model: SessionsViewModel
   @State private var captureJobs: CaptureJobsViewModel
   @Environment(AppServices.self) private var services
   @Environment(\.scenePhase) private var scenePhase
 
-  init(api: any B4MAPI, cache: any SessionListCache, captureJobs: any CaptureJobTracking) {
-    _model = State(initialValue: SessionsViewModel(api: api, cache: cache))
+  init(model: SessionsViewModel, captureJobs: any CaptureJobTracking) {
+    self.model = model
     _captureJobs = State(initialValue: CaptureJobsViewModel(tracker: captureJobs))
   }
 
