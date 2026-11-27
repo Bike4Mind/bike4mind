@@ -142,7 +142,7 @@ export async function createDocumentInvite(
     );
     if (type === InviteType.Organization) {
       await recordOrganizationAuditEvent({
-        organizationId: id,
+        organizationId: invite.documentId,
         actorUserId: user.id,
         action: 'invite.created',
         targetId: invite.id,
