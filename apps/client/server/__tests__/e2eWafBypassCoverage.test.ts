@@ -84,7 +84,7 @@ describe('e2e WAF bypass coverage', () => {
       .filter(
         f =>
           count(f.source, /^(?!\s*\/\/).*\bbrowser\.newPage\(/gm) > 0 ||
-          count(f.source, /^(?!\s*\/\/).*\bbrowser\.newContext\(/gm) > count(f.source, /\binstallWafBypass\(\w+\)/g)
+          count(f.source, /^(?!\s*\/\/).*\bbrowser\.newContext\(/gm) > count(f.source, /\binstallWafBypass\(\w+[,)]/g)
       )
       .map(f => f.rel);
     expect(offenders).toEqual([]);

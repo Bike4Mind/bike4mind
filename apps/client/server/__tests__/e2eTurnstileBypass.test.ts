@@ -8,7 +8,7 @@ vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: resourceSecret } }));
 
 type UrlMatcher = Parameters<Page['route']>[0];
 type RouteHandler = Parameters<Page['route']>[1];
-type Reply = { status: number; location?: string };
+type Reply = { status: number; location?: string; bytes?: number };
 type Sent = {
   url: string;
   method: string;
@@ -68,6 +68,7 @@ function createRoutingHarness(replies: Record<string, Reply> = {}) {
             status: () => reply.status,
             headers: () => (reply.location ? { location: reply.location } : {}),
             dispose: async () => {},
+            body: async () => Buffer.alloc(reply.bytes ?? 0),
             reply,
           };
         },
@@ -239,6 +240,18 @@ describe('E2E Turnstile request bypass', () => {
         `${A}/a`
       );
       expect(result.sent.map(s => s.timeout)).toEqual([0, 0, 0]);
+    });
+
+    it('holds each hop back by latency plus transfer time when given a slow link', async () => {
+      const harness = createRoutingHarness({
+        [`${A}/a`]: { status: 307, location: '/b' },
+        [`${A}/b`]: { status: 200, bytes: 500 },
+      });
+      await installWafBypass(harness.context, { slowLink: { latency: 40, downloadThroughput: 10_000 } });
+      const started = Date.now();
+      const result = await harness.send(`${A}/a`);
+      expect(result.fulfilled).toEqual({ status: 200, bytes: 500 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(125);
     });
 
     it('keeps the header on a same-origin hop of a subresource', async () => {

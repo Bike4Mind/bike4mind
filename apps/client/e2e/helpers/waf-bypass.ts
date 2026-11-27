@@ -8,6 +8,9 @@ const DEFAULT_MAX_REDIRECTS = 20;
 
 type FetchOptions = NonNullable<Parameters<APIRequestContext['fetch']>[1]>;
 
+/** CDP Network.emulateNetworkConditions units: latency in ms, throughput in bytes per second. */
+export type SlowLink = { latency: number; downloadThroughput: number };
+
 function apiOrigin(): string {
   return new URL(process.env.API_URL || 'http://localhost:3000').origin;
 }
@@ -23,15 +26,16 @@ export function wafBypassHeaders(): Record<string, string> {
  * and nowhere else. A context-wide extraHTTPHeaders would also reach third-party origins and
  * break their CORS preflights. Traces record it, so e2e-run.yml scrubs the token from test
  * output before upload. It is a context route, so page routes (turnstile.ts) run first and must
- * route.fallback() to reach it.
+ * route.fallback() to reach it. Chromium's CDP throttle skips fulfilled responses, so a throttled
+ * page passes `slowLink` and each hop is held back here instead.
  */
-export async function installWafBypass(context: BrowserContext): Promise<void> {
+export async function installWafBypass(context: BrowserContext, options: { slowLink?: SlowLink } = {}): Promise<void> {
   const headers = wafBypassHeaders();
   if (!headers[WAF_BYPASS_HEADER]) return;
   const origin = apiOrigin();
   await context.route(
     url => url.origin === origin,
-    route => continueWithBypass(route, origin, headers)
+    route => continueWithBypass(route, origin, headers, options.slowLink)
   );
 }
 
@@ -61,9 +65,15 @@ const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding'];
  * off-origin hop is fetched here without the header, since Chromium fails both a fulfilled
  * redirect and a cross-origin route.continue url on one. timeout 0 leaves timing to the browser;
  * route.fetch would otherwise abort anything slower than 30s. Bodies are buffered, so a stream
- * reaches the page only once it ends.
+ * reaches the page only once it ends. The page applies no CORS check to an off-origin hop and
+ * sees the original URL, so e2e cannot catch a missing CORS header on a redirect target.
  */
-async function continueWithBypass(route: Route, origin: string, bypass: Record<string, string>): Promise<void> {
+async function continueWithBypass(
+  route: Route,
+  origin: string,
+  bypass: Record<string, string>,
+  slowLink?: SlowLink
+): Promise<void> {
   const request = route.request();
   let url = request.url();
   let method = request.method();
@@ -71,7 +81,10 @@ async function continueWithBypass(route: Route, origin: string, bypass: Record<s
   let postData: Buffer | undefined = request.postDataBuffer() ?? undefined;
   try {
     for (let followed = 0; ; followed++) {
-      const response = await route.fetch({ url, method, headers, postData, maxRedirects: 0, timeout: 0 });
+      const response = await paced(
+        route.fetch({ url, method, headers, postData, maxRedirects: 0, timeout: 0 }),
+        slowLink
+      );
       const status = response.status();
       const location = response.headers()['location'];
       if (
@@ -97,7 +110,10 @@ async function continueWithBypass(route: Route, origin: string, bypass: Record<s
           string
         >;
         return await route.fulfill({
-          response: await route.fetch({ url: next.href, method, postData, headers: offOrigin, timeout: 0 }),
+          response: await paced(
+            route.fetch({ url: next.href, method, postData, headers: offOrigin, timeout: 0 }),
+            slowLink
+          ),
         });
       }
       url = next.href;
@@ -106,6 +122,15 @@ async function continueWithBypass(route: Route, origin: string, bypass: Record<s
     // The page closed or the network failed mid-request; fail the request, never send it bare.
     await route.abort().catch(() => {});
   }
+}
+
+async function paced(pending: Promise<APIResponse>, slowLink?: SlowLink): Promise<APIResponse> {
+  const response = await pending;
+  if (!slowLink) return response;
+  const bytes = (await response.body()).length;
+  const ms = slowLink.latency + (bytes / slowLink.downloadThroughput) * 1000;
+  await new Promise(resolve => setTimeout(resolve, ms));
+  return response;
 }
 
 function withoutHeaders(headers: FetchOptions['headers'], names: string[]): FetchOptions['headers'] {
