@@ -34,10 +34,12 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
       users: {
         findById: vi.fn(async (id: string) => asUser(id)),
         findByIds: vi.fn(async (ids: string[]) => ids.map(id => asUser(id))),
+        findUserIdsByGroupIds: vi.fn(async () => ({})),
       },
       projects: {
         shareable: { findAccessibleById: vi.fn(async () => project) },
         update: vi.fn(async () => project),
+        findParticipatingReferencing: vi.fn(async () => []),
       },
       fabFiles: {
         shareable: {
@@ -46,6 +48,11 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
         },
         findExistingIdsByIds: vi.fn(async () => []),
         findExistingIdsIncludingDeletedByIds: vi.fn(async () => []),
+        findAllByIds: vi.fn(async (ids: string[]) => (ids.includes(file.id) ? [structuredClone(file)] : [])),
+        updateGuarded: vi.fn(async (write: { id: string; users: unknown[] }) => {
+          Object.assign(file, write);
+          return file;
+        }),
         update: vi.fn(),
       },
       invites: {
@@ -81,18 +88,15 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     // request that worked before the set comparison landed.
     const UPPER = FILE_ID_HEX.toUpperCase();
     project.fileIds = [FILE_ID_HEX];
-    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => [
-      { id: FILE_ID_HEX, userId: OWNER_ID, users: [] },
-    ]);
+    file.id = FILE_ID_HEX;
+    file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UPPER] }, { db });
 
     // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
     // answered 200 having removed nothing, which a status-only assertion happily accepts.
     expect(project.fileIds).toEqual([]);
-    expect(db.fabFiles.shareable.updateUserShares.mock.calls).toStrictEqual([
-      [FILE_ID_HEX, { remove: { projectId: PROJECT_ID } }],
-    ]);
+    expect(file.users).toEqual([]);
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
@@ -220,17 +224,18 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
   it('revokes the project grants on a soft-deleted held file as well as clearing its id', async () => {
     project.fileIds = [FILE_ID_HEX];
+    file.id = FILE_ID_HEX;
+    file.deletedAt = new Date('2025-12-01');
+    file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
     db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
     db.fabFiles.findExistingIdsIncludingDeletedByIds = vi.fn(async () => [FILE_ID_HEX]);
 
     const { removedIds } = await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
 
     expect(removedIds).toEqual([FILE_ID_HEX]);
-    expect(db.fabFiles.shareable.updateUserShares).toHaveBeenCalledWith(FILE_ID_HEX, {
-      remove: { projectId: PROJECT_ID },
-      add: [],
-      includeDeleted: true,
-    });
+    expect(file.users).toEqual([]);
+    expect(file.deletedAt).toEqual(new Date('2025-12-01'));
+    expect(db.fabFiles.updateGuarded).toHaveBeenCalledWith({ id: FILE_ID_HEX, users: [] }, { includeDeleted: true });
     expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
   });
 

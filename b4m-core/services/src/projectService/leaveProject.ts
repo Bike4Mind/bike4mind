@@ -1,4 +1,5 @@
 import { revokeFromProject } from '../sharingService';
+import { projectAccessRecipients } from '../sharingService/projectGrantor';
 import {
   IFabFileRepository,
   IProjectRepository,
@@ -23,6 +24,7 @@ interface LeaveProjectAdapters {
     fabFiles: IFabFileRepository;
     users: IUserRepository;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const leaveProject = async (
@@ -73,6 +75,11 @@ export const leaveProject = async (
     sessionIds: project.sessionIds,
     systemPrompts: project.systemPrompts,
   });
+
+  adapters.onAccessRemoved?.([
+    userIdToRemove ?? user.id,
+    ...(await projectAccessRecipients(project, adapters.db.users)),
+  ]);
 
   return project;
 };

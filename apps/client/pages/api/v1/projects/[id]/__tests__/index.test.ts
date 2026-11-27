@@ -70,6 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockFindUser },
   sessionRepository: {},
   fabFileRepository: {},
+  withTransaction: async (operation: () => Promise<unknown>) => operation(),
 }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<{ projectService: object }>();
@@ -253,14 +254,23 @@ describe('DELETE /api/v1/projects/{id}', () => {
 
   it("rebuilds the affected members' live subscriptions after the delete", async () => {
     mockRescope.mockClear();
-    mockDeleteProject.mockImplementationOnce(async () => {
-      expect(mockRescope).not.toHaveBeenCalled();
-      return OWNED_PROJECT;
-    });
+    mockDeleteProject.mockImplementationOnce(
+      async (
+        _user: unknown,
+        _params: unknown,
+        adapters: {
+          onAccessRemoved: (ids: string[]) => void;
+        }
+      ) => {
+        expect(mockRescope).not.toHaveBeenCalled();
+        adapters.onAccessRemoved(['actual-recipient']);
+        return OWNED_PROJECT;
+      }
+    );
 
     await call('DELETE', PROJECT_ID);
 
-    expect(mockRescope).toHaveBeenCalledWith(['member-1'], expect.anything());
+    expect(mockRescope).toHaveBeenCalledWith(['actual-recipient'], expect.anything());
   });
 
   it('answers 404 for a project only shared with the caller', async () => {

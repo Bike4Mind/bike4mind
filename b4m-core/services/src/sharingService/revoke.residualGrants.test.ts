@@ -35,6 +35,13 @@ const store = <T extends Doc>(docs: T[]) => {
           .filter(d => d.users.some(u => u.userId === userId && u.sessionId === sessionId))
           .map(d => structuredClone(d));
       }),
+      findSharingGrantFilesBySession: vi.fn(async (sessionId: string, userId?: string) =>
+        [...byId.values()]
+          .filter(document =>
+            document.users.some(row => row.sessionId === sessionId && (!userId || row.userId === userId))
+          )
+          .map(document => structuredClone(document))
+      ),
       shareable: {
         findAccessibleById: vi.fn(async (user: { id: string }, id: string) => {
           const doc = byId.get(id);
@@ -43,6 +50,7 @@ const store = <T extends Doc>(docs: T[]) => {
       },
       updateGuarded: vi.fn(async (write: Partial<T> & { id: string }) => {
         byId.set(write.id, { ...byId.get(write.id)!, ...write });
+        return structuredClone(byId.get(write.id));
       }),
     },
   };
@@ -53,7 +61,7 @@ const projectStore = (projects: Project[]) => {
   return {
     byId,
     repo: {
-      findAccessibleReferencing: vi.fn(async (user: { id: string }, ref: { fileId?: string; sessionId?: string }) =>
+      findParticipatingReferencing: vi.fn(async (user: { id: string }, ref: { fileId?: string; sessionId?: string }) =>
         [...byId.values()]
           .filter(p => readable(p, user.id))
           .filter(p =>
@@ -67,6 +75,10 @@ const projectStore = (projects: Project[]) => {
         const p = byId.get(scope.projectId)!;
         p.fileIds = p.fileIds.filter(id => !fileIds.includes(id));
         p.systemPrompts = p.systemPrompts.filter(prompt => !fileIds.includes(prompt.fileId));
+      }),
+      pullSessionReferences: vi.fn(async (sessionIds: string[], scope: { projectId: string }) => {
+        const project = byId.get(scope.projectId)!;
+        project.sessionIds = project.sessionIds.filter(id => !sessionIds.includes(id));
       }),
       update: vi.fn(async (write: Partial<Project> & { id: string }) => {
         byId.set(write.id, { ...byId.get(write.id)!, ...write });
@@ -89,7 +101,7 @@ const adaptersFor = (
     files: f.byId,
     sessions: s.byId,
     projects: p.byId,
-    findReferencing: p.repo.findAccessibleReferencing,
+    findReferencing: p.repo.findParticipatingReferencing,
     onAccessRemoved,
     adapters: {
       db: {
@@ -258,6 +270,18 @@ describe('revoke - residual grants', () => {
       expect(env.projects.get('project-1')!.fileIds).toEqual(['file-1']);
     });
 
+    it('keeps the item when the revoked project owner retains independent group share', async () => {
+      const file = { ...sharedFile(), groups: [{ groupId: 'g1', permissions: ['read', 'share'] }] };
+      const env = adaptersFor([file], [], [project({ users: [memberRow], fileIds: ['file-1'] })], { sharee: ['g1'] });
+
+      await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
+
+      expect(env.projects.get('project-1')!.fileIds).toEqual(['file-1']);
+      expect(env.files.get('file-1')!.users).toEqual([
+        { userId: 'member', permissions: ['read'], projectId: 'project-1' },
+      ]);
+    });
+
     it('does not count share minted by the project itself as a grantor', async () => {
       const env = adaptersFor(
         [sharedFile([{ userId: 'member', permissions: ['read', 'share'], projectId: 'project-1' }])],
@@ -380,6 +404,58 @@ describe('revoke - residual grants', () => {
       });
     });
   });
+});
+
+describe('revoke - dependent project closure', () => {
+  it.each([false, true])(
+    'follows every lost file recipient after removing a session source (session attached: %s)',
+    async sessionAttached => {
+      const env = adaptersFor(
+        [
+          {
+            id: 'file-1',
+            userId: 'owner',
+            users: [
+              { userId: 'sharee', permissions: ['read', 'share'], sessionId: 'session-1' },
+              { userId: 'member', permissions: ['read', 'share'], projectId: 'project-1' },
+              { userId: 'downstream', permissions: ['read'], projectId: 'project-2' },
+            ],
+          },
+        ],
+        [
+          {
+            id: 'session-1',
+            userId: 'owner',
+            knowledgeIds: ['file-1'],
+            users: [
+              { userId: 'sharee', permissions: ['read', 'share'] },
+              ...(sessionAttached ? [{ userId: 'member', permissions: ['read'], projectId: 'project-1' }] : []),
+            ],
+          },
+        ],
+        [
+          project({
+            users: [{ userId: 'member', permissions: ['read'] }],
+            fileIds: ['file-1'],
+            sessionIds: sessionAttached ? ['session-1'] : [],
+          }),
+          project({
+            id: 'project-2',
+            userId: 'member',
+            users: [{ userId: 'downstream', permissions: ['read'] }],
+            fileIds: ['file-1'],
+          }),
+        ]
+      );
+
+      await revoke('owner', { id: 'session-1', type: 'sessions', userId: 'sharee' }, env.adapters);
+
+      expect(env.files.get('file-1')!.users).toEqual([]);
+      expect(env.projects.get('project-1')!.fileIds).toEqual([]);
+      expect(env.projects.get('project-2')!.fileIds).toEqual([]);
+      expect(env.onAccessRemoved.mock.calls.flatMap(([ids]) => ids)).toContain('downstream');
+    }
+  );
 });
 
 describe('revokeFromProject - system-prompt files', () => {

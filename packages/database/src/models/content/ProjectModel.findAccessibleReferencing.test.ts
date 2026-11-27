@@ -64,4 +64,59 @@ describe('ProjectRepository.findAccessibleReferencing', () => {
 
     expect(names(found)).toEqual(['session']);
   });
+
+  it('finds and removes stored hexadecimal spellings in each reference field', async () => {
+    const id = '0123456789abcdef01234567';
+    const stored = id.toUpperCase();
+    const project = await makeProject('legacy');
+    await Project.collection.updateOne(
+      { _id: project._id },
+      {
+        $set: {
+          fileIds: [stored, 'Doc-A', 'doc-a'],
+          systemPrompts: [{ fileId: stored, enabled: true }],
+          sessionIds: [stored, 'Session-A', 'session-a'],
+        },
+      }
+    );
+
+    expect(names(await projectRepository.findAccessibleReferencing(MEMBER, { fileId: id }))).toEqual(['legacy']);
+    expect(names(await projectRepository.findAccessibleReferencing(MEMBER, { sessionId: id }))).toEqual(['legacy']);
+    await projectRepository.pullFileReferences([id], { projectId: String(project._id) });
+    await projectRepository.pullSessionReferences([id], { projectId: String(project._id) });
+
+    const remaining = await Project.collection.findOne({ _id: project._id });
+    expect(remaining?.fileIds).toEqual(['Doc-A', 'doc-a']);
+    expect(remaining?.systemPrompts).toEqual([]);
+    expect(remaining?.sessionIds).toEqual(['Session-A', 'session-a']);
+    await projectRepository.pullFileReferences(['Doc-A'], { projectId: String(project._id) });
+    await projectRepository.pullSessionReferences(['Session-A'], { projectId: String(project._id) });
+    const exact = await Project.collection.findOne({ _id: project._id });
+    expect(exact?.fileIds).toEqual(['doc-a']);
+    expect(exact?.sessionIds).toEqual(['session-a']);
+  });
+
+  it('keeps nonhexadecimal discovery case-sensitive', async () => {
+    await makeProject('upper', { fileIds: ['Doc-A'], sessionIds: ['Session-A'] });
+    await makeProject('lower', { fileIds: ['doc-a'], sessionIds: ['session-a'] });
+
+    expect(names(await projectRepository.findAccessibleReferencing(MEMBER, { fileId: 'Doc-A' }))).toEqual(['upper']);
+    expect(names(await projectRepository.findAccessibleReferencing(MEMBER, { sessionId: 'Session-A' }))).toEqual([
+      'upper',
+    ]);
+    await projectRepository.removeSession('Session-A');
+    expect(names(await projectRepository.findAccessibleReferencing(MEMBER, { sessionId: 'session-a' }))).toEqual([
+      'lower',
+    ]);
+  });
+
+  it('includes an update-only participant only in internal grant cleanup discovery', async () => {
+    await makeProject('update-only', { fileIds: ['file-1'], users: [{ userId: MEMBER.id, permissions: ['update'] }] });
+    await makeProject('unrelated', { fileIds: ['file-1'], users: [] });
+
+    expect(await projectRepository.findAccessibleReferencing(MEMBER, { fileId: 'file-1' })).toEqual([]);
+    expect(names(await projectRepository.findParticipatingReferencing(MEMBER, { fileId: 'file-1' }))).toEqual([
+      'update-only',
+    ]);
+  });
 });

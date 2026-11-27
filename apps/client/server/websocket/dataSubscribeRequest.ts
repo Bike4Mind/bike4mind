@@ -288,6 +288,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   };
 
   const registerSubscriber = async () => {
+    await assertConnectionStillRegistered();
     // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
     // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
     // old subscription is never mutated in place with the new exclusion; a client that reconnects
@@ -319,15 +320,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
       throw error;
     }
+    await assertConnectionStillRegistered();
     if (initialDataAfterSubscribe) {
-      // A close during FIND must not create a new registration or deliver a snapshot.
-      await assertConnectionStillRegistered();
       await registerSubscriber();
     }
     const limit = limitConcurrency(50);
     const sendingOutcomes = await Promise.allSettled(
       results.map(r =>
-        limit(() => {
+        limit(async () => {
+          await assertConnectionStillRegistered();
           const payload = r.deletedAt
             ? { operationType: 'delete', data: { _id: r._id.toString(), id: r.id } }
             : { operationType: 'insert', data: r.toJSON() };

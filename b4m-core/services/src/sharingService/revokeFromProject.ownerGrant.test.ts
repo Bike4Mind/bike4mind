@@ -42,7 +42,7 @@ const setup = () => {
     db: {
       fabFiles: files.repo,
       sessions: sessions.repo,
-      projects: {},
+      projects: { findParticipatingReferencing: vi.fn(async () => []) },
       users: { findById: vi.fn(async (id: string) => ({ id, groups: [] })) },
     },
   };

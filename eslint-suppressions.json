@@ -2639,7 +2639,7 @@
   },
   "apps/client/pages/api/projects/[id]/index.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 2
     }
   },
   "apps/client/pages/api/projects/[id]/invites.ts": {

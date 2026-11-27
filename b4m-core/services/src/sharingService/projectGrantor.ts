@@ -12,6 +12,17 @@ const READ_PERMISSIONS: readonly string[] = [Permission.read, 'write'];
 
 export type GrantorUsers = Pick<IUserRepository, 'findById' | 'findUserIdsByGroupIds'>;
 
+export const projectAccessRecipients = async (
+  project: Pick<IProjectDocument, 'userId' | 'users' | 'groups'>,
+  users: Pick<IUserRepository, 'findUserIdsByGroupIds'>
+) => {
+  const groupIds = (project.groups ?? [])
+    .filter(group => group.permissions?.some(permission => READ_PERMISSIONS.includes(permission)))
+    .map(group => group.groupId);
+  const members = groupIds.length ? Object.values(await users.findUserIdsByGroupIds(groupIds)).flat() : [];
+  return [...new Set([...projectParticipants(project).map(String), ...members])];
+};
+
 /**
  * Builds a check for whether some participant of `project` can still grant an item there: the
  * item's owner takes part, or a participant holds share on it through an untagged row or a group.
@@ -22,8 +33,7 @@ export type GrantorUsers = Pick<IUserRepository, 'findById' | 'findUserIdsByGrou
  */
 export const projectGrantorCheck = (
   project: Pick<IProjectDocument, 'userId' | 'users' | 'groups'>,
-  db: { users: GrantorUsers },
-  options: { exclude?: string } = {}
+  db: { users: GrantorUsers }
 ) => {
   let participantIds: Promise<string[]> | undefined;
   let participantUsers: Promise<{ id: string; groups: string[] }[]> | undefined;
@@ -38,7 +48,6 @@ export const projectGrantorCheck = (
         const membersByGroup = await db.users.findUserIdsByGroupIds(groupIds);
         for (const members of Object.values(membersByGroup)) members.forEach(id => ids.add(id));
       }
-      if (options.exclude) ids.delete(options.exclude);
       return [...ids];
     })());
   const loadUsers = () =>

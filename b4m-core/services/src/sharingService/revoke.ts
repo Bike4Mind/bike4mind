@@ -11,7 +11,9 @@ import {
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { grantWrite } from './grantWrite';
-import { projectGrantorCheck, projectParticipants, SharedItem } from './projectGrantor';
+import type { SharedItem } from './projectGrantor';
+import { canonicalId } from '../utils/objectIds';
+import { createGrantLossCleanup, type GrantLossCleanup } from './grantLoss';
 
 const revokeSharingSchema = z.object({
   id: z.string(),
@@ -32,68 +34,6 @@ interface RevokeSharingAdapters {
   /** Told which users may have lost access, so live subscriptions can be rebuilt after the commit. */
   onAccessRemoved?: (userIds: string[]) => void;
 }
-
-/**
- * Project grants on an item are passed on from whoever attached it. Once `userIdToRevoke` loses the
- * item, every project they take part in that holds it is left without a grantor unless the item's
- * owner takes part in that project or another participant still holds share on it outside the
- * project. Such projects lose the item and every row they minted on it. A detached session also
- * takes along the knowledge files addSessions copied in with it, under the same rule. Mutates
- * `document.users`; returns the projects the item was detached from.
- */
-const detachFromProjectsWithoutGrantor = async (
-  parameters: {
-    document: SharedItem;
-    type: 'files' | 'sessions';
-    member: NonNullable<Awaited<ReturnType<IUserRepository['findById']>>>;
-    userIdToRevoke: string;
-  },
-  adapters: RevokeSharingAdapters
-): Promise<IProjectDocument[]> => {
-  const { document, type, member, userIdToRevoke } = parameters;
-  const { db } = adapters;
-  const projects = await db.projects.findAccessibleReferencing(
-    member,
-    type === 'files' ? { fileId: document.id } : { sessionId: document.id }
-  );
-  const detached: IProjectDocument[] = [];
-  for (const project of projects) {
-    if (await projectGrantorCheck(project, db, { exclude: userIdToRevoke })(document)) continue;
-    const outsideProject = document.users.filter(u => u.projectId !== project.id);
-
-    if (type === 'files') {
-      await db.projects.pullFileReferences([document.id], { projectId: project.id });
-    } else {
-      await db.projects.update({ id: project.id, sessionIds: project.sessionIds.filter(id => id !== document.id) });
-      await detachSessionKnowledgeWithoutGrantor({ session: document as ISessionDocument, project }, adapters);
-    }
-    document.users = outsideProject;
-    detached.push(project);
-  }
-  return detached;
-};
-
-const detachSessionKnowledgeWithoutGrantor = async (
-  parameters: { session: ISessionDocument; project: IProjectDocument },
-  adapters: RevokeSharingAdapters
-) => {
-  const { session, project } = parameters;
-  const { db } = adapters;
-  const knowledgeIds = new Set((session.knowledgeIds ?? []).map(String));
-  const inProject = [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)].map(String);
-  const ids = [...new Set(inProject.filter(id => knowledgeIds.has(id)))];
-  if (ids.length === 0) return;
-  // The revokee keeps the project and still counts as a grantor of the file through their own rows.
-  const hasGrantor = projectGrantorCheck(project, db);
-  for (const file of uniqueById(await db.fabFiles.findAllByIds(ids))) {
-    if (await hasGrantor(file as SharedItem)) continue;
-    await db.projects.pullFileReferences([file.id], { projectId: project.id });
-    const remaining = file.users.filter(u => u.projectId !== project.id);
-    if (remaining.length === file.users.length) continue;
-    file.users = remaining;
-    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
-  }
-};
 
 /**
  * Revokes sharing for a user on a document.
@@ -160,93 +100,56 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // land here; revoking without a projectId still clears every entry.
   if (!document.users.some(isRevoked)) throw new NotFoundError(`User not found in document`);
 
+  const removed = document.users.filter(isRevoked);
   document.users = document.users.filter(user => !isRevoked(user));
+  const cleanup = createGrantLossCleanup(adapters);
 
+  if (type === 'projects') {
+    await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters, cleanup);
+  } else {
+    const item = cleanup.track(type, document as SharedItem, false);
+    cleanup.enqueue(
+      item,
+      removed.map(row => String(row.userId))
+    );
+    if (!projectId && type === 'sessions') {
+      const session = document as ISessionDocument;
+      const files = [
+        ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [], { includeDeleted: true })),
+        ...(await db.fabFiles.findSharingGrantFilesBySession(session.id, userIdToRevoke)),
+      ];
+      for (const file of files) {
+        cleanup.removeRows(
+          cleanup.track('files', file as SharedItem),
+          row =>
+            canonicalId(String(row.userId)) === canonicalId(userIdToRevoke) &&
+            !!row.sessionId &&
+            canonicalId(row.sessionId) === canonicalId(session.id)
+        );
+      }
+    }
+  }
+
+  await cleanup.drain();
+  await cleanup.flush();
   let write: Partial<typeof document> = grantWrite(document);
   if (type === 'projects') {
+    const current = cleanup.trackProject(document as IProjectDocument, false).document;
     const project = document as IProjectDocument;
-    const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
-    project.fileIds = pruned.fileIds;
-    project.sessionIds = pruned.sessionIds;
-    project.systemPrompts = pruned.systemPrompts;
+    project.fileIds = current.fileIds;
+    project.sessionIds = current.sessionIds;
+    project.systemPrompts = current.systemPrompts;
     write = {
       ...write,
-      fileIds: pruned.fileIds,
-      sessionIds: pruned.sessionIds,
-      systemPrompts: pruned.systemPrompts,
+      fileIds: current.fileIds,
+      sessionIds: current.sessionIds,
+      systemPrompts: current.systemPrompts,
     };
-  } else if (!projectId) {
-    // Self-revokes included: a user who drops their own share can no longer back the item in a
-    // project they attached it to, so it leaves that project too unless another grantor remains.
-    const detachedFrom = await detachFromProjectsWithoutGrantor(
-      { document: document as SharedItem, type, member, userIdToRevoke },
-      adapters
-    );
-    if (detachedFrom.length > 0) write = grantWrite(document);
-    adapters.onAccessRemoved?.(detachedFrom.flatMap(projectParticipants));
   }
-  adapters.onAccessRemoved?.([userIdToRevoke]);
-
-  if (!projectId && type === 'sessions') {
-    // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
-    // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
-    // grants live. A projectId-tagged entry is independently governed by that project, so it is
-    // left alone here exactly as the scoped branch leaves other grants alone.
-    await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
-  }
-
-  // This filters `document.users` in memory and writes it back (see grantWrite) - a lost-update-sensitive
-  // grant path, so it opts in to the version guard (`updateGuarded`). Because the write carries `__v`, a
-  // racing write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
-  // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
-  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Grants
-  // and removals through `shareable.updateUserShares` bump `__v` when they change `users`, so they
-  // also make this write conflict rather than be overwritten. (Access *widening* via updateDocumentSharing is a targeted `$set` of
-  // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
-  // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
-  // in-repo repo is a concrete BaseRepository that provides it.
-  // Typed as one repository: a union of the three repos' overloaded `updateGuarded`s is not callable.
   const guarded: { updateGuarded?: RepositoryUpdate<typeof document> } = dbModel;
   await guarded.updateGuarded!(write, { includeDeleted: true });
-
+  adapters.onAccessRemoved?.([userIdToRevoke]);
   return document;
-};
-
-const revokeSessionKnowledgeFileGrants = async (
-  parameters: { session: ISessionDocument; userIdToRevoke: string },
-  adapters: RevokeSharingAdapters
-) => {
-  const { session, userIdToRevoke } = parameters;
-  const { db } = adapters;
-
-  // knowledgeIds as of now misses a file detached before this revoke, so rows are also found by tag.
-  const files = uniqueById([
-    ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
-    ...(await db.fabFiles.find({ users: { $elemMatch: { userId: userIdToRevoke, sessionId: session.id } } })),
-  ]);
-  for (const file of files) {
-    // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
-    // written by accept.ts's propagation, which already required the inviter to hold share on the
-    // file, so matching on it cannot reach a grant this session did not create. knowledgeIds is
-    // client-writable (update.ts checks only additions; removals, legacy rows and notebook import
-    // are not gated), and that is exactly why the filter keys on the tag rather than on the session
-    // owner's present authority - pointing your session at a stranger's file gives you nothing,
-    // because no row on it carries your session id.
-    //
-    // Untagged rows are left alone: a direct share of the same file to the same user is a separate
-    // row, and deleting it here destroyed a grant a third party had made and the revoker had no say
-    // over. Tagging also retires the old owner-holds-share gate, which read the session owner while
-    // the mint read the inviter - not the same principal whenever a sharee minted the invite, so a
-    // grant could be stranded un-revokable through the very path that created it.
-    const remaining = file.users.filter(
-      user => !(user.userId.toString() === userIdToRevoke && user.sessionId === session.id)
-    );
-    if (remaining.length === file.users.length) continue;
-    file.users = remaining;
-    // Grant write on the revocation path, same reason the main revoke above takes the guard: a
-    // racing guarded write must conflict rather than silently resurrect this grant.
-    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
-  }
 };
 
 /**
@@ -260,79 +163,54 @@ const revokeSessionKnowledgeFileGrants = async (
  */
 export const revokeFromProject = async (
   parameters: { project: IProjectDocument; userIdToRevoke: string },
-  adapters: RevokeSharingAdapters
+  adapters: RevokeSharingAdapters,
+  sharedCleanup?: GrantLossCleanup
 ): Promise<{ fileIds: string[]; sessionIds: string[]; systemPrompts: IProjectDocument['systemPrompts'] }> => {
   const { project, userIdToRevoke } = parameters;
   const { db } = adapters;
-
-  const files = uniqueById(
-    await db.fabFiles.findAllByIds([...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)])
+  const cleanup = sharedCleanup ?? createGrantLossCleanup(adapters);
+  const current = cleanup.trackProject(
+    {
+      ...project,
+      fileIds: [...project.fileIds],
+      sessionIds: [...project.sessionIds],
+      systemPrompts: [...(project.systemPrompts ?? [])],
+    },
+    false
   );
-  const sessions = await db.sessions.findAllByIds(project.sessionIds);
-
-  let fileIds = project.fileIds;
-  let sessionIds = project.sessionIds;
-  let systemPrompts = project.systemPrompts ?? [];
-
-  // Everyone else holding a grant this project minted on the leaver's documents. The owner is never in
-  // project.users, but addFiles/addSessions grant the owner every document a member contributes.
-  const othersInProject = Array.from(
-    new Set([project.userId, ...project.users.map(u => u.userId)].filter(id => id !== userIdToRevoke))
+  const files = await db.fabFiles.findAllByIds(
+    [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)],
+    { includeDeleted: true }
   );
-  // One row the cascade cannot reach must not keep the others: same NotFoundError tolerance as below.
-  const revokeFromOthers = async (id: string, type: 'files' | 'sessions') => {
-    for (const userId of othersInProject) {
-      try {
-        await revoke(userIdToRevoke, { id, type, userId, projectId: project.id }, adapters);
-      } catch (e) {
-        if (!(e instanceof NotFoundError)) throw e;
-      }
-    }
-  };
+  const sessions = await db.sessions.findAllByIds(project.sessionIds, { includeDeleted: true });
+  const isProjectRow = (row: IUserShare) => !!row.projectId && canonicalId(row.projectId) === canonicalId(project.id);
+  const isTargetRow = (row: IUserShare) =>
+    isProjectRow(row) && canonicalId(String(row.userId)) === canonicalId(userIdToRevoke);
 
   for (const file of files) {
-    try {
-      // The leaver's own file leaves the project, so everyone else loses this project's grant on it.
-      if (file.userId === userIdToRevoke) {
-        await revokeFromOthers(file.id, 'files');
-
-        fileIds = fileIds.filter(id => id !== file.id);
-        systemPrompts = systemPrompts.filter(prompt => prompt.fileId !== file.id);
-      } else {
-        await revoke(
-          file.userId,
-          { id: file.id, type: 'files', userId: userIdToRevoke, projectId: project.id },
-          adapters
-        );
-      }
-    } catch (e) {
-      // Best-effort: a row it cannot reach is a row with nothing to revoke, never a reason to abort.
-      if (!(e instanceof NotFoundError)) throw e;
+    const item = cleanup.track('files', file as SharedItem);
+    if (canonicalId(file.userId) === canonicalId(userIdToRevoke)) {
+      await cleanup.removeReference(current, item);
+    } else {
+      cleanup.removeRows(item, isTargetRow);
     }
   }
-
   for (const session of sessions) {
-    try {
-      // The leaver's own session leaves the project, so everyone else loses this project's grant on it.
-      if (session.userId === userIdToRevoke) {
-        await revokeFromOthers(session.id, 'sessions');
-
-        sessionIds = sessionIds.filter(id => id !== session.id);
-      } else {
-        await revoke(
-          session.userId,
-          { id: session.id, type: 'sessions', userId: userIdToRevoke, projectId: project.id },
-          adapters
-        );
-      }
-    } catch (e) {
-      // Best-effort: a row it cannot reach is a row with nothing to revoke, never a reason to abort.
-      if (!(e instanceof NotFoundError)) throw e;
+    const item = cleanup.track('sessions', session as SharedItem);
+    if (canonicalId(session.userId) === canonicalId(userIdToRevoke)) {
+      await cleanup.removeReference(current, item);
+      await cleanup.detachSessionKnowledge(item.document, current);
+    } else {
+      cleanup.removeRows(item, isTargetRow);
     }
   }
-
-  return { fileIds, sessionIds, systemPrompts };
+  if (!sharedCleanup) {
+    await cleanup.drain();
+    await cleanup.flush();
+  }
+  return {
+    fileIds: current.document.fileIds,
+    sessionIds: current.document.sessionIds,
+    systemPrompts: current.document.systemPrompts,
+  };
 };
-
-const uniqueById = <T extends { id: string }>(docs: T[]): T[] =>
-  docs.filter((doc, index) => docs.findIndex(other => other.id === doc.id) === index);

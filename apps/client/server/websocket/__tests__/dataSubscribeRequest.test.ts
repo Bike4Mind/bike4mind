@@ -245,19 +245,48 @@ describe('catalog signal initial delivery ordering', () => {
     );
   });
 
-  it('does not register or deliver when the connection ends during the initial read', async () => {
-    let resolve: ((value: Array<typeof row>) => void) | undefined;
-    rows = new Promise(resolveRows => {
-      resolve = resolveRows;
+  it.each([false, true])(
+    'does not deliver after the connection ends during the initial read (signal order: %s)',
+    async flag => {
+      let resolve: ((value: Array<typeof row>) => void) | undefined;
+      rows = new Promise(resolveRows => {
+        resolve = resolveRows;
+      });
+      const pending = invoke({ initialDataAfterSubscribe: flag });
+      await vi.waitFor(() => expect(trace).toContain('find'));
+      connectionRow = null;
+      resolve?.([row]);
+      await expect(pending).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+      expect(sendToConnection).not.toHaveBeenCalled();
+      expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+    }
+  );
+
+  it('checks a queued initial send before it enters the transport', async () => {
+    rows = Promise.resolve(
+      Array.from({ length: 51 }, (_, index) => {
+        const id = index.toString(16).padStart(24, '0');
+        return { _id: id, id, toJSON: () => ({ _id: id, id, modelPolicy: null }) };
+      })
+    );
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
     });
-    const pending = invoke();
-    await vi.waitFor(() => expect(trace).toContain('find'));
-    connectionRow = null;
-    resolve?.([row]);
+    vi.mocked(sendToConnection).mockImplementation(async () => {
+      await held;
+    });
+    const pending = invoke({ collectionName: 'projects', query: {}, initialDataAfterSubscribe: false });
+    try {
+      await vi.waitFor(() => expect(sendToConnection).toHaveBeenCalledTimes(50));
+      connectionRow = null;
+    } finally {
+      release();
+    }
     await expect(pending).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(sendToConnection).toHaveBeenCalledTimes(50);
     expect(mockUpsertSubscriber).not.toHaveBeenCalled();
-    expect(sendToConnection).not.toHaveBeenCalled();
-    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
   });
 
   it('removes a registration that raced revocation before sending the initial signal', async () => {
@@ -701,10 +730,9 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
   });
 
   it('backs out the entry it wrote and closes the socket when the row was ended after the write', async () => {
-    // First read (registration check) sees the live row; the re-read after the write does not.
-    mockConnectionFindOne
-      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
-      .mockImplementationOnce(() => ({ lean: async () => null }));
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
 
     await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
 
@@ -714,9 +742,9 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
   });
 
   const endAfterWrite = () =>
-    mockConnectionFindOne
-      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
-      .mockImplementationOnce(() => ({ lean: async () => null }));
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
 
   it('still refuses with UnauthorizedError when the close fails', async () => {
     endAfterWrite();

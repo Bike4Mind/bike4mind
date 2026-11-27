@@ -432,9 +432,8 @@ describe('sessionService - delete', () => {
     };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
-    (mockFabFileRepo.find as Mock).mockImplementation(async (filter: Record<string, unknown>) =>
-      filter['users.sessionId'] === sessionId ? [detachedFile] : []
-    );
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findSharingGrantFilesBySession as Mock).mockResolvedValue([detachedFile]);
     (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
 
     await deleteSession(ownerId, { id: sessionId }, adapters);

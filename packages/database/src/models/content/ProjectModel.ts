@@ -21,6 +21,7 @@ import {
 } from './SharableDocumentModel';
 
 const ModelName = 'Project';
+const referenceMatch = (id: string) => (/^[0-9a-f]{24}$/i.test(id) ? new RegExp(`^${id}$`, 'i') : id);
 
 export interface IProjectModel extends Model<IProjectDocument, {}, IProjectMethods> {}
 
@@ -87,13 +88,25 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
   }
 
   async removeSession(sessionId: string) {
-    await this.projectModel.updateMany({ sessionIds: sessionId }, { $pull: { sessionIds: sessionId } });
+    const reference = referenceMatch(sessionId);
+    await this.projectModel.updateMany({ sessionIds: reference }, { $pull: { sessionIds: reference } });
+  }
+
+  async pullSessionReferences(sessionIds: string[], scope: { projectId: string }) {
+    if (sessionIds.length === 0 || !mongoose.isObjectIdOrHexString(scope.projectId)) return;
+    const references = sessionIds.map(referenceMatch);
+    await this.projectModel.updateOne(
+      { _id: scope.projectId },
+      { $pull: { sessionIds: { $in: references } } },
+      { runValidators: true }
+    );
   }
 
   async pullFileReferences(fileIds: string[], scope: { projectId: string } | { userIds: string[] }) {
     if (fileIds.length === 0) return;
-    const holdsAny = { $or: [{ fileIds: { $in: fileIds } }, { 'systemPrompts.fileId': { $in: fileIds } }] };
-    const pull = { $pull: { fileIds: { $in: fileIds }, systemPrompts: { fileId: { $in: fileIds } } } };
+    const references = fileIds.map(referenceMatch);
+    const holdsAny = { $or: [{ fileIds: { $in: references } }, { 'systemPrompts.fileId': { $in: references } }] };
+    const pull = { $pull: { fileIds: { $in: references }, systemPrompts: { fileId: { $in: references } } } };
     if ('projectId' in scope) {
       if (!mongoose.isObjectIdOrHexString(scope.projectId)) return;
       await this.projectModel.updateOne({ _id: scope.projectId, ...holdsAny }, pull);
@@ -201,16 +214,32 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     user: Pick<IUserDocument, 'id' | 'groups'>,
     ref: { fileId: string } | { sessionId: string }
   ) {
+    return this.findReferencing(user, ref, false);
+  }
+
+  async findParticipatingReferencing(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string }
+  ) {
+    return this.findReferencing(user, ref, true);
+  }
+
+  private async findReferencing(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string },
+    includeParticipants: boolean
+  ) {
     const references =
       'fileId' in ref
-        ? { $or: [{ fileIds: ref.fileId }, { 'systemPrompts.fileId': ref.fileId }] }
-        : { sessionIds: ref.sessionId };
-    const result = await this.projectModel.find({ $and: [{ $or: readAccessArms(user) }, references], deletedAt: null });
+        ? { $or: [{ fileIds: referenceMatch(ref.fileId) }, { 'systemPrompts.fileId': referenceMatch(ref.fileId) }] }
+        : { sessionIds: referenceMatch(ref.sessionId) };
+    const participants = [...readAccessArms(user), ...(includeParticipants ? [{ 'users.userId': user.id }] : [])];
+    const result = await this.projectModel.find({ $and: [{ $or: participants }, references], deletedAt: null });
     return result.map(doc => doc.toJSON());
   }
 
   async findAllBySessionId(sessionId: string) {
-    return this.projectModel.find({ sessionIds: { $in: [sessionId] } });
+    return this.projectModel.find({ sessionIds: referenceMatch(sessionId) });
   }
 }
 

@@ -44,7 +44,19 @@ vi.mock('@bike4mind/utils', () => ({
 
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'p1', name: 'updated' }));
 const mockGet = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'p1', name: 'project' }));
-const mockDeleteProject = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockDeleteProject = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _user: unknown,
+      _params: unknown,
+      adapters: {
+        onAccessRemoved: (ids: string[]) => void;
+      }
+    ) => {
+      adapters.onAccessRemoved(['actual-recipient']);
+    }
+  )
+);
 vi.mock('@bike4mind/services', () => ({
   projectService: {
     update: (...a: unknown[]) => mockUpdate(...a),
@@ -58,6 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
+  withTransaction: async (operation: () => Promise<unknown>) => operation(),
 }));
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -163,10 +176,11 @@ describe('GET and DELETE /api/projects/[id] scope asserts', () => {
     expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(refCleanup.cleanUp.mock.invocationCallOrder[0]);
   });
 
-  it('DELETE rescopes the subscriptions of every cleanup target after the delete', async () => {
+  it('DELETE rescopes actual recipients after commit even when the planner is empty', async () => {
+    refCleanup.targets.mockResolvedValueOnce([]);
     const { req, res } = request('DELETE', { id: 'p1' });
     await mockRefs.deleteHandler!(req, res);
-    expect(mockRescope).toHaveBeenCalledExactlyOnceWith(['planned'], req.logger);
+    expect(mockRescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient'], req.logger);
     expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(mockRescope.mock.invocationCallOrder[0]);
   });
 });

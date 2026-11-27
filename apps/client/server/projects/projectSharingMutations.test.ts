@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   Group: {},
   Project: { findById: vi.fn().mockResolvedValue(null) },
-  withTransaction: async (operation: () => Promise<unknown>) => operation(),
+  withTransaction: vi.fn(async (operation: () => Promise<unknown>) => operation()),
 }));
 vi.mock('@bike4mind/services', () => ({ projectService: { leaveProject }, sharingService: { createInvite } }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
@@ -43,7 +43,7 @@ vi.mock('@server/utils/inviteSendLimits', () => ({
 }));
 
 import { toSharerInviteViews } from '@server/managers/inviteManager';
-import { Project } from '@bike4mind/database';
+import { Project, withTransaction } from '@bike4mind/database';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { createProjectInvite, removeProjectMember } from './projectSharingMutations';
 
@@ -53,6 +53,7 @@ const input = { permissions: [Permission.read], recipients: ['teammate@example.c
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(withTransaction).mockImplementation(async operation => operation());
 });
 
 describe('createProjectInvite project access', () => {
@@ -107,25 +108,64 @@ describe('removeProjectMember subscription rescoping', () => {
 
   beforeEach(() => {
     vi.mocked(projectRevokeCleanupTargets).mockResolvedValue(targets);
-    leaveProject.mockResolvedValue({ id: projectId, name: 'project' });
-  });
-
-  it('rescopes every cleanup target after the commit when the owner removes a member', async () => {
-    await removeProjectMember({ user, logger }, projectId, 'member-1');
-
-    expect(projectRevokeCleanupTargets).toHaveBeenCalledWith(projectId, 'member-1', logger);
-    expect(rescope).toHaveBeenCalledExactlyOnceWith(['owner', 'member-1'], logger);
-    expect(leaveProject.mock.invocationCallOrder[0]).toBeLessThan(rescope.mock.invocationCallOrder[0]);
-    expect(vi.mocked(cleanUpRevokedFileReferences).mock.invocationCallOrder[0]).toBeLessThan(
-      rescope.mock.invocationCallOrder[0]
+    leaveProject.mockImplementation(
+      async (
+        _user: unknown,
+        _params: unknown,
+        adapters: {
+          onAccessRemoved: (ids: string[]) => void;
+        }
+      ) => {
+        adapters.onAccessRemoved(['actual-recipient', 'actual-descendant']);
+        return { id: projectId, name: 'project' };
+      }
     );
   });
 
-  it('rescopes the same targets when the caller leaves', async () => {
+  it('fences actual mutation recipients before optional reference cleanup', async () => {
+    await removeProjectMember({ user, logger }, projectId, 'member-1');
+
+    expect(projectRevokeCleanupTargets).toHaveBeenCalledWith(projectId, 'member-1', logger);
+    expect(rescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient', 'actual-descendant'], logger);
+    expect(leaveProject.mock.invocationCallOrder[0]).toBeLessThan(rescope.mock.invocationCallOrder[0]);
+    expect(rescope.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(cleanUpRevokedFileReferences).mock.invocationCallOrder[0]
+    );
+  });
+
+  it('rescopes actual recipients when the caller leaves', async () => {
     await removeProjectMember({ user, logger }, projectId);
 
     expect(projectRevokeCleanupTargets).toHaveBeenCalledWith(projectId, user.id, logger);
-    expect(rescope).toHaveBeenCalledExactlyOnceWith(['owner', 'member-1'], logger);
+    expect(rescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient', 'actual-descendant'], logger);
+  });
+
+  it('still fences actual recipients when the optional planner returns no targets', async () => {
+    vi.mocked(projectRevokeCleanupTargets).mockResolvedValue([]);
+    await removeProjectMember({ user, logger }, projectId, 'member-1');
+    expect(rescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient', 'actual-descendant'], logger);
+  });
+
+  it('publishes only the committed attempt after a transaction retry', async () => {
+    leaveProject.mockImplementationOnce(
+      async (
+        _user: unknown,
+        _params: unknown,
+        adapters: {
+          onAccessRemoved: (ids: string[]) => void;
+        }
+      ) => {
+        adapters.onAccessRemoved(['aborted-recipient']);
+        return { id: projectId, name: 'project' };
+      }
+    );
+    vi.mocked(withTransaction).mockImplementationOnce(async operation => {
+      await operation();
+      expect(rescope).not.toHaveBeenCalled();
+      return operation();
+    });
+    await removeProjectMember({ user, logger }, projectId, 'member-1');
+    expect(rescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient', 'actual-descendant'], logger);
   });
 
   it('does not rescope when the leave fails', async () => {

@@ -23,6 +23,8 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
 );
 
 const mockPurgeMedia = vi.hoisted(() => vi.fn());
+const mockRescope = vi.hoisted(() => vi.fn());
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
 vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
@@ -185,6 +187,55 @@ function withScopes(scopes: string[]) {
 }
 
 describe('DELETE /api/sessions/bulk', () => {
+  it('fences only committed recipients after a retry and a rolled-back session', async () => {
+    mockWithTransaction.mockImplementationOnce(async (operation: () => Promise<unknown>) => {
+      await operation();
+      expect(mockRescope).not.toHaveBeenCalled();
+      return operation();
+    });
+    mockDeleteSession
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['aborted-attempt']);
+          return { id: 'other-session' };
+        }
+      )
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['committed-recipient']);
+          return { id: 'other-session' };
+        }
+      )
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['rolled-back-session']);
+          throw new Error('rollback');
+        }
+      );
+    const { req, res } = fire(['s1', 's2']);
+    await handler(req, res);
+    expect(mockRescope).toHaveBeenCalledTimes(1);
+    expect(mockRescope.mock.calls[0][0]).toEqual(['committed-recipient']);
+    expect(res._getJSONData().deletedCount).toBe(1);
+  });
   it('runs each delete inside its own transaction', async () => {
     // Asserting the call count alone would pass on a route that opened a transaction and then ran
     // the cascade outside it, which is the shape that leaves files half-rewritten, so the service

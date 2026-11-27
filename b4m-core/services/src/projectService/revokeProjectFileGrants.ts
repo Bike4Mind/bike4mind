@@ -1,30 +1,57 @@
-import { IFabFileDocument, IFabFileRepository } from '@bike4mind/common';
+import type { IFabFileDocument, IFabFileRepository, IProjectDocument, IProjectRepository } from '@bike4mind/common';
+import { createGrantLossCleanup, requireGrantorUsers } from '../sharingService/grantLoss';
+import type { GrantorUsers, SharedItem } from '../sharingService/projectGrantor';
+import { canonicalId } from '../utils/objectIds';
 
-export interface RevokeProjectFileGrantsAdapters {
+export type RevokeProjectFileGrantsAdapters = {
   db: {
     fabFiles: IFabFileRepository;
+    projects?: IProjectRepository;
+    users?: Partial<GrantorUsers>;
   };
-}
+  onAccessRemoved?: (userIds: string[]) => void;
+};
 
-/**
- * Drops the grants `projectId` pushed onto each file when it was attached. Shared by removeFiles and
- * removeSystemPrompts, which must revoke identically. `softDeletedIds` are files hidden from normal
- * reads that still hold project-tagged grants a restore would bring back.
- */
+/** Removes only this project's rows, including tombstones, then follows their dependent grants. */
 export const revokeProjectFileGrants = async (
   projectId: string,
-  params: { files: IFabFileDocument[]; softDeletedIds?: string[] },
+  params: { files: IFabFileDocument[]; softDeletedIds?: string[]; project?: IProjectDocument },
   adapters: RevokeProjectFileGrantsAdapters
 ) => {
-  const { files, softDeletedIds = [] } = params;
   const { db } = adapters;
-
-  // Only the rows this project minted. A direct share is its own untagged row and survives untouched.
-  for (const file of files) {
-    await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId } });
+  const files = [
+    ...params.files,
+    ...(params.softDeletedIds?.length
+      ? await db.fabFiles.findAllByIds(params.softDeletedIds, { includeDeleted: true })
+      : []),
+  ];
+  const changing = files.filter(file =>
+    file.users.some(row => !!row.projectId && canonicalId(row.projectId) === canonicalId(projectId))
+  );
+  if (changing.length === 0) return;
+  if (!db.projects) throw new Error('Project grant cleanup requires the project repository');
+  const users = requireGrantorUsers(db.users);
+  const cleanup = createGrantLossCleanup({
+    db: { fabFiles: db.fabFiles, projects: db.projects, users },
+    onAccessRemoved: adapters.onAccessRemoved,
+  });
+  if (params.project) {
+    cleanup.trackProject(
+      {
+        ...params.project,
+        fileIds: [...params.project.fileIds],
+        sessionIds: [...(params.project.sessionIds ?? [])],
+        systemPrompts: [...(params.project.systemPrompts ?? [])],
+      },
+      false
+    );
   }
-
-  for (const id of softDeletedIds) {
-    await db.fabFiles.shareable.updateUserShares(id, { remove: { projectId }, add: [], includeDeleted: true });
+  for (const file of changing) {
+    cleanup.removeRows(
+      cleanup.track('files', file as SharedItem),
+      row => !!row.projectId && canonicalId(row.projectId) === canonicalId(projectId)
+    );
   }
+  await cleanup.drain();
+  await cleanup.flush();
 };
