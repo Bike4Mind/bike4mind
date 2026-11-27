@@ -870,9 +870,7 @@ export default function OAuthClientsTab() {
             component="button"
             type="button"
             level="body-sm"
-            onClick={() =>
-              navigate({ to: '/admin', search: usersTabLinkSearch({ signupClient: client.clientId }) })
-            }
+            onClick={() => navigate({ to: '/admin', search: usersTabLinkSearch({ signupClient: client.clientId }) })}
             data-testid={`oauth-client-signups-link-${client.clientId}`}
           >
             {`${counts.signups7d} / ${counts.signups30d}`}

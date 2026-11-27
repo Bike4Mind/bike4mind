@@ -92,7 +92,14 @@ const pickReason = (dialog: 'rotate' | 'deactivate') =>
 
 beforeEach(() => {
   // Not resetAllMocks: that also wipes global setup mocks (matchMedia) the theme provider needs.
-  for (const fn of [...Object.values(api).filter(v => typeof v === 'function'), copy, navigate, toast.success, toast.error]) vi.mocked(fn).mockReset();
+  for (const fn of [
+    ...Object.values(api).filter(v => typeof v === 'function'),
+    copy,
+    navigate,
+    toast.success,
+    toast.error,
+  ])
+    vi.mocked(fn).mockReset();
   api.fetchOAuthClients.mockResolvedValue([client]);
   api.fetchOAuthClientStats.mockResolvedValue({
     [client.clientId]: { signups7d: 2, signups30d: 5, activeUsers7d: 3, activeUsers30d: 9 },
