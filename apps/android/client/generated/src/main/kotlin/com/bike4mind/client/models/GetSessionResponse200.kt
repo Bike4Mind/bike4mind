@@ -46,6 +46,8 @@ import kotlinx.serialization.Contextual
  * @param includeLibraryFiles Whether the session grounds on your own library alongside its lakes. Absent when never set.
  * @param promptCacheTtl The chat's prompt-cache lifetime. Absent when never set, which follows your default.
  * @param lastUsedModel
+ * @param updatedAt When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+ * @param deletedAt Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
  */
 @Serializable
 
@@ -100,7 +102,15 @@ data class GetSessionResponse200 (
     val promptCacheTtl: kotlin.String? = null,
 
     @SerialName(value = "lastUsedModel")
-    val lastUsedModel: kotlin.String? = null
+    val lastUsedModel: kotlin.String? = null,
+
+    /* When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field. */
+    @SerialName(value = "updatedAt")
+    val updatedAt: kotlin.String? = null,
+
+    /* Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns. */
+    @SerialName(value = "deletedAt")
+    val deletedAt: kotlin.String? = null
 
 ) {
 
