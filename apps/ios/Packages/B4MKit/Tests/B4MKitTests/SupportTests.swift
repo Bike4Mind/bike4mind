@@ -137,7 +137,7 @@ final class SessionRejectedTests: XCTestCase {
   func testSessionRejectedEndsTheSessionAndWipesTheToken() async throws {
     let store = InMemoryTokenStore(refreshToken: "sid.0")
     let auth = AuthController(
-      environment: .production, tokenStore: store, transport: FakeTransport(),
+      environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: FakeTransport(),
       biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults())
     auth.restore()
     XCTAssertEqual(auth.state, .signedIn)

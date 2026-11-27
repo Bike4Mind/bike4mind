@@ -13,7 +13,7 @@ import os
 /// `accessToken()` is the only way any other code obtains a bearer token.
 @MainActor
 @Observable
-public final class AuthController: AccessTokenProviding {
+public final class AuthController: SharedSessionAdmissionProviding {
   public enum State: Equatable, Sendable {
     /// The Keychain has not been read yet.
     case restoring
@@ -23,12 +23,12 @@ public final class AuthController: AccessTokenProviding {
     case locked
   }
 
-  public enum SignOutReason: Equatable, Sendable {
-    case userInitiated
-    /// The server ended the session (revoked, expired, or a refresh token replayed past the grace window).
-    case sessionEnded
-    /// The user asked to delete the account; the server revoked every session and holds the account for a grace period.
-    case accountDeletionRequested
+  public typealias SignOutReason = SessionTermination.Reason
+
+  public struct SessionEndScope: Sendable {
+    fileprivate let generation: Int
+    fileprivate let baseURL: URL
+    fileprivate let incarnation: UUID?
   }
 
   public private(set) var state: State = .restoring
@@ -39,6 +39,8 @@ public final class AuthController: AccessTokenProviding {
     didSet { preferences.set(isAppLockEnabled, forKey: Self.appLockKey) }
   }
 
+  public private(set) var completedTermination: SessionTermination?
+  @ObservationIgnored private let sessionEndCleanup: (@Sendable (SessionTermination) throws -> Void)?
   @ObservationIgnored private let tokenStore: any TokenStore
   @ObservationIgnored private let transport: any HTTPTransport
   /// Picked per server at sign-in time, so a server switch also switches the OAuth client.
@@ -55,6 +57,8 @@ public final class AuthController: AccessTokenProviding {
   /// Bumped whenever the session changes hands, so a refresh that lands after sign-out is discarded
   /// instead of writing a dead session's token back to the Keychain.
   @ObservationIgnored private var sessionGeneration = 0
+  @ObservationIgnored private var pendingLocalTermination: SessionTermination?
+  @ObservationIgnored private var sharedSnapshot: SharedSessionSnapshot?
   @ObservationIgnored private var isRetryingRevocations = false
   @ObservationIgnored private var rotationContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
   @ObservationIgnored private var protectedDataObservers: [any NSObjectProtocol] = []
@@ -64,6 +68,7 @@ public final class AuthController: AccessTokenProviding {
   public init(
     environment: ServerEnvironment,
     tokenStore: any TokenStore,
+    sessionEndCleanup: (@Sendable (SessionTermination) throws -> Void)? = nil,
     transport: any HTTPTransport = URLSessionTransport(),
     oauthConfiguration: @escaping @Sendable (ServerEnvironment) -> OAuthConfiguration = { _ in .iosApp },
     biometricGate: any BiometricGate = LocalAuthenticationGate(),
@@ -73,6 +78,7 @@ public final class AuthController: AccessTokenProviding {
   ) {
     self.environment = environment
     self.tokenStore = tokenStore
+    self.sessionEndCleanup = sessionEndCleanup
     self.transport = transport
     self.oauthConfiguration = oauthConfiguration
     self.biometricGate = biometricGate
@@ -86,6 +92,10 @@ public final class AuthController: AccessTokenProviding {
     AuthAPI(baseURL: environment.baseURL, transport: transport)
   }
 
+  private var sharedSession: SharedSessionCoordinator? {
+    SharedSessionCoordinator(tokenStore: tokenStore, baseURL: environment.baseURL)
+  }
+
   // MARK: - Session lifecycle
 
   /// Reads the Keychain at launch. A stored refresh token means signed in; the access token is minted
@@ -95,14 +105,45 @@ public final class AuthController: AccessTokenProviding {
   public func restore() {
     guard state == .restoring else { return }
     do {
-      let hasSession = try tokenStore.refreshToken() != nil
+      if let pendingLocalTermination {
+        guard endSession(pendingLocalTermination.reason) else { return }
+        return
+      }
+      let hasSession: Bool
+      if let sharedSession {
+        if let termination = try recoverPendingTermination(sharedSession) {
+          completedTermination = termination
+          sharedSnapshot = nil
+          state = .signedOut(termination.reason)
+          return
+        }
+        sharedSnapshot = try sharedSession.restore()
+        hasSession = sharedSnapshot != nil
+      } else {
+        hasSession = try tokenStore.refreshToken() != nil
+      }
       state = hasSession ? (isAppLockEnabled ? .locked : .signedIn) : .signedOut(nil)
+    } catch SharedSessionError.unavailable {
+      logger.notice("Shared session storage not readable yet; restore deferred")
+      observeProtectedDataIfNeeded()
     } catch let error as KeychainError where error.isTransient {
       logger.notice("Keychain not readable yet (status \(error.status, privacy: .public)); restore deferred")
       observeProtectedDataIfNeeded()
     } catch {
       logger.error("Keychain read failed during restore: \(error, privacy: .public)")
-      state = .signedOut(nil)
+      if sharedSession != nil {
+        state = .restoring
+        observeProtectedDataIfNeeded()
+      } else {
+        state = .signedOut(nil)
+      }
+    }
+  }
+
+  private func recoverPendingTermination(_ coordinator: SharedSessionCoordinator) throws -> SessionTermination? {
+    try coordinator.recoverPendingTermination { [sessionEndCleanup] termination in
+      guard let sessionEndCleanup else { throw SharedSessionError.cleanupPending }
+      try sessionEndCleanup(termination)
     }
   }
 
@@ -134,6 +175,15 @@ public final class AuthController: AccessTokenProviding {
 
   /// Runs the PKCE authorization-code flow through the system web sheet and stores the resulting session.
   public func signIn(using authenticator: any WebAuthenticating) async throws {
+    if state == .restoring { restore() }
+    guard state != .restoring else { throw SharedSessionError.unavailable }
+    if let sharedSession, let termination = try recoverPendingTermination(sharedSession) {
+      completedTermination = termination
+      sharedSnapshot = nil
+      state = .signedOut(termination.reason)
+    }
+    let generation = sessionGeneration
+    let expected = try sharedSession?.restore()
     let configuration = oauthConfiguration(environment)
     let request = AuthorizationRequest(baseURL: environment.baseURL, configuration: configuration)
     let callbackURL = try await authenticator.authenticate(url: request.url, callbackURL: configuration.redirectURI)
@@ -145,20 +195,68 @@ public final class AuthController: AccessTokenProviding {
       deviceName: deviceName()
     )
 
-    try tokenStore.setRefreshToken(grant.refreshToken)
+    guard generation == sessionGeneration else { throw AuthError.signedOut }
+    if let sharedSession {
+      sharedSnapshot = try sharedSession.establish(
+        token: grant.refreshToken, userID: AccountProfile.userID(fromAccessToken: grant.accessToken), replacing: expected)
+    } else {
+      try tokenStore.setRefreshToken(grant.refreshToken)
+    }
     sessionGeneration += 1
     inFlightRefresh = nil
     cachedAccessToken = AccessToken(value: grant.accessToken, issuedAt: now())
     state = .signedIn
   }
 
+  /// Captured before a caller awaits preparatory work; it cannot be retargeted to a later login.
+  public func sessionEndScope() throws -> SessionEndScope {
+    if state == .restoring { restore() }
+    guard state != .restoring else { throw SharedSessionError.unavailable }
+    let incarnation: UUID?
+    if let sharedSession {
+      if case .signedOut = state {
+        guard try sharedSession.restore() == nil else { throw SharedSessionError.changed }
+        incarnation = nil
+      } else {
+        incarnation = try currentSharedSnapshot()?.record.incarnation
+      }
+    } else {
+      incarnation = nil
+    }
+    return SessionEndScope(generation: sessionGeneration, baseURL: environment.baseURL, incarnation: incarnation)
+  }
+
+  public func isCurrentSession(_ scope: SessionEndScope) -> Bool {
+    guard scope.generation == sessionGeneration, scope.baseURL == environment.baseURL else { return false }
+    guard let sharedSession else { return true }
+    do { return try sharedSession.restore()?.record.incarnation == scope.incarnation }
+    catch {
+      logger.debug("Ending session scope could not be checked: \(error, privacy: .public)")
+      return false
+    }
+  }
+
   /// Ends the session locally first, then revokes it on the server best-effort, so sign-out never
   /// hangs on (or is undone by) a flaky network.
-  public func signOut(reason: SignOutReason = .userInitiated) async {
-    let refreshToken = try? tokenStore.refreshToken()
-    let accessToken = cachedAccessToken.flatMap { $0.isUsable(at: now()) ? $0.value : nil }
-    endSession(reason)
+  @discardableResult
+  public func signOut(reason: SignOutReason = .userInitiated, scope: SessionEndScope? = nil) async -> Bool {
+    if let scope, !isCurrentSession(scope) { return false }
+    if state == .restoring { restore() }
+    guard state != .restoring else { return false }
+    let current = try? currentSharedSnapshot()
+    let refreshToken = sharedSession != nil ? current?.refreshToken : (try? tokenStore.refreshToken())
+    let accessToken = (sharedSession == nil || current != nil)
+      ? cachedAccessToken.flatMap { $0.isUsable(at: now()) ? $0.value : nil } : nil
+    guard endSession(reason) else {
+      if let refreshToken {
+        updatePendingRevocations(
+          removing: [], adding: [PendingRevocation(baseURL: environment.baseURL, refreshToken: refreshToken)])
+      }
+      return false
+    }
+    let endedGeneration = sessionGeneration
     await revokeRemoteSession(accessToken: accessToken, refreshToken: refreshToken)
+    return endedGeneration == sessionGeneration
   }
 
   /// Switching servers invalidates the session: tokens belong to the server that minted them.
@@ -166,7 +264,7 @@ public final class AuthController: AccessTokenProviding {
     guard newEnvironment != environment else { return }
     if case .signedOut = state {
     } else {
-      await signOut()
+      guard await signOut() else { return }
     }
     environment = newEnvironment
     state = .signedOut(nil)
@@ -181,6 +279,7 @@ public final class AuthController: AccessTokenProviding {
     if state == .restoring { restore() }
     if state == .restoring { throw KeychainError(status: errSecInteractionNotAllowed) }
     if case .signedOut = state { throw AuthError.signedOut }
+    let snapshot = try currentSharedSnapshot()
 
     if let token = cachedAccessToken, token.isUsable(at: now()) {
       return token.value
@@ -190,10 +289,45 @@ public final class AuthController: AccessTokenProviding {
     }
 
     // Unstructured on purpose: one caller's cancellation must not fail the refresh the others await.
-    let refresh = Task { try await self.refreshSession() }
+    let generation = sessionGeneration
+    let refresh = Task { try await self.refreshSession(expected: snapshot, generation: generation) }
     inFlightRefresh = refresh
     defer { if inFlightRefresh == refresh { inFlightRefresh = nil } }
     return try await refresh.value
+  }
+
+  /// Offline identity lookup: this never refreshes a bearer or adopts another controller's session.
+  public func captureAdmission() throws -> SharedSessionAdmission {
+    if state == .restoring { restore() }
+    if state == .restoring { throw SharedSessionError.unavailable }
+    if case .signedOut = state { throw AuthError.signedOut }
+    guard let sharedSession, let snapshot = try currentSharedSnapshot() else {
+      throw SharedSessionError.missingIdentity
+    }
+    return try sharedSession.admission(incarnation: snapshot.record.incarnation)
+  }
+
+  public func invalidateAccessToken(_ token: String, admission: SharedSessionAdmission) {
+    guard sharedSnapshot?.record.identity == admission.identity,
+      (try? admission.withCurrent { true }) == true else { return }
+    invalidateAccessToken(token)
+  }
+
+  public func sessionRejected(admission: SharedSessionAdmission) {
+    guard sharedSnapshot?.record.identity == admission.identity,
+      (try? admission.withCurrent { true }) == true else { return }
+    endSession(.sessionEnded)
+  }
+
+  private func currentSharedSnapshot() throws -> SharedSessionSnapshot? {
+    guard let sharedSession else { return nil }
+    guard let sharedSnapshot else { throw AuthError.signedOut }
+    do {
+      return try sharedSession.current(incarnation: sharedSnapshot.record.incarnation)
+    } catch SharedSessionError.changed {
+      endSession(.sessionEnded)
+      throw AuthError.signedOut
+    }
   }
 
   /// Drops the cached access token after an API call carrying `rejected` answered 401, so the next
@@ -213,22 +347,24 @@ public final class AuthController: AccessTokenProviding {
     }
   }
 
-  private func refreshSession() async throws -> String {
-    let generation = sessionGeneration
-    guard let presented = try tokenStore.refreshToken() else {
+  private func refreshSession(expected: SharedSessionSnapshot?, generation: Int) async throws -> String {
+    guard generation == sessionGeneration else { throw AuthError.signedOut }
+    guard let presented = try expected?.refreshToken ?? tokenStore.refreshToken() else {
       endSession(.sessionEnded)
       throw AuthError.signedOut
     }
 
     do {
-      return try await refresh(presenting: presented, generation: generation)
+      return try await refresh(presenting: presented, generation: generation, expected: expected)
     } catch AuthError.refreshRejected {
       // Another process sharing the Keychain item (the share extension) may have rotated the token
       // while this request was in flight. Retry exactly once with what is stored now; a second
       // rejection is final, so a replayed token can never loop.
-      if let current = try? tokenStore.refreshToken(), current != presented, generation == sessionGeneration {
+      let currentSnapshot = try? currentSharedSnapshot()
+      let currentToken = sharedSession != nil ? currentSnapshot?.refreshToken : (try? tokenStore.refreshToken())
+      if let current = currentToken, current != presented, generation == sessionGeneration {
         do {
-          return try await refresh(presenting: current, generation: generation)
+          return try await refresh(presenting: current, generation: generation, expected: currentSnapshot)
         } catch AuthError.refreshRejected {
           // Falls through to sign-out below.
         }
@@ -241,14 +377,23 @@ public final class AuthController: AccessTokenProviding {
     }
   }
 
-  private func refresh(presenting refreshToken: String, generation: Int) async throws -> String {
+  private func refresh(presenting refreshToken: String, generation: Int, expected: SharedSessionSnapshot?) async throws -> String {
     let result = try await api.refresh(refreshToken: refreshToken)
     guard generation == sessionGeneration else {
       // Signed out (or re-signed in) while the request was in flight: this result belongs to a dead session.
       throw AuthError.signedOut
     }
 
-    if let rotated = result.refreshToken {
+    if let sharedSession, let expected {
+      do {
+        sharedSnapshot = try sharedSession.refresh(
+          expected: expected, token: result.refreshToken,
+          userID: AccountProfile.userID(fromAccessToken: result.accessToken))
+      } catch SharedSessionError.changed {
+        endSession(.sessionEnded)
+        throw AuthError.signedOut
+      }
+    } else if let rotated = result.refreshToken {
       do {
         try tokenStore.setRefreshToken(rotated)
       } catch {
@@ -275,16 +420,41 @@ public final class AuthController: AccessTokenProviding {
     return stream
   }
 
-  private func endSession(_ reason: SignOutReason) {
+  @discardableResult
+  private func endSession(_ reason: SignOutReason) -> Bool {
     sessionGeneration += 1
     inFlightRefresh = nil
     cachedAccessToken = nil
     do {
-      try tokenStore.setRefreshToken(nil)
+      if let sharedSession {
+        if let sharedSnapshot {
+          let record = sharedSnapshot.record
+          pendingLocalTermination = SessionTermination(
+            incarnation: record.incarnation, baseURL: record.baseURL, userID: record.userID,
+            reason: pendingLocalTermination?.reason ?? reason)
+          if try sharedSession.end(incarnation: record.incarnation, reason: pendingLocalTermination?.reason ?? reason, cleanup: { [sessionEndCleanup] target in
+            guard let sessionEndCleanup else { throw SharedSessionError.cleanupPending }
+            try sessionEndCleanup(target)
+          }) {
+            completedTermination = SessionTermination(
+              incarnation: record.incarnation, baseURL: record.baseURL, userID: record.userID, reason: reason)
+          }
+        } else if let termination = try recoverPendingTermination(sharedSession) {
+          completedTermination = termination
+        }
+      } else {
+        try tokenStore.setRefreshToken(nil)
+      }
     } catch {
-      logger.error("Wiping refresh token failed: \(error, privacy: .public)")
+      logger.error("Session cleanup incomplete: \(error, privacy: .public)")
+      state = .restoring
+      observeProtectedDataIfNeeded()
+      return false
     }
+    pendingLocalTermination = nil
+    sharedSnapshot = nil
     state = .signedOut(reason)
+    return true
   }
 
   /// A revocation that fails (offline, server error) is kept and retried by `retryPendingRevocations()`, so the

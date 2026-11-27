@@ -22,9 +22,11 @@ public protocol TokenStore: Sendable {
   func setPendingRevocations(_ revocations: [PendingRevocation]) throws
 }
 
-public final class InMemoryTokenStore: TokenStore {
+public final class InMemoryTokenStore: SharedSessionStorage {
   private let storage: OSAllocatedUnfairLock<String?>
   private let pending = OSAllocatedUnfairLock<[PendingRevocation]>(initialState: [])
+  private let sessionRecord = OSAllocatedUnfairLock<Data?>(initialState: nil)
+  private let sessionLock = NSLock()
 
   public init(refreshToken: String? = nil) {
     storage = OSAllocatedUnfairLock(initialState: refreshToken)
@@ -44,5 +46,19 @@ public final class InMemoryTokenStore: TokenStore {
 
   public func setPendingRevocations(_ revocations: [PendingRevocation]) throws {
     pending.withLock { $0 = revocations }
+  }
+
+  public func sharedSessionRecord() throws -> Data? {
+    sessionRecord.withLock { $0 }
+  }
+
+  public func setSharedSessionRecord(_ data: Data?) throws {
+    sessionRecord.withLock { $0 = data }
+  }
+
+  public func withSharedSessionLock<Result>(_ operation: () throws -> Result) throws -> Result {
+    sessionLock.lock()
+    defer { sessionLock.unlock() }
+    return try operation()
   }
 }

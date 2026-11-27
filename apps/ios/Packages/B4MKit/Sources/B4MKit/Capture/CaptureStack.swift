@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Everything the capture UI needs, assembled once so the app and the share extension wire it identically.
 /// The extension target stays a thin shell around this.
@@ -12,11 +13,13 @@ public struct CaptureStack: Sendable {
   public let transcription: any TranscriptionService
   public let destinationStore: any DestinationStore
   public let delegator: (any DelegationSubmitting)?
+  private let makeComposer: (@MainActor @Sendable ([ShareItem]) -> ShareComposerModel)?
 
   public init(
     engine: CaptureEngine?, destinations: any DestinationSource, submitter: any CaptureSubmitting,
     transcription: any TranscriptionService, destinationStore: any DestinationStore,
-    jobs: any CaptureJobTracking, delegator: (any DelegationSubmitting)? = nil
+    jobs: any CaptureJobTracking, delegator: (any DelegationSubmitting)? = nil,
+    makeComposer: (@MainActor @Sendable ([ShareItem]) -> ShareComposerModel)? = nil
   ) {
     self.delegator = delegator
     self.engine = engine
@@ -25,32 +28,55 @@ public struct CaptureStack: Sendable {
     self.submitter = submitter
     self.transcription = transcription
     self.destinationStore = destinationStore
+    self.makeComposer = makeComposer
   }
 
   /// The real services for one server.
   /// - Parameter ownIdentifier: the background session this process owns (`BackgroundSessionIdentifier`).
   public static func live(
-    baseURL: URL, tokens: any AccessTokenProviding, ownIdentifier: String,
+    baseURL: URL, tokens: any SharedSessionAdmissionProviding, ownIdentifier: String,
     directory: URL = SharedContainer.directory(),
     destinationStore: any DestinationStore = UserDefaultsDestinationStore(),
-    didSendToSession: (@Sendable (String) async -> Void)? = nil
+    didSendToSession: (@Sendable (String) async -> Void)? = nil,
+    transport: any HTTPTransport = URLSessionTransport(),
+    makeUploader: @escaping @Sendable (String) -> any BackgroundUploading = { URLSessionBackgroundUploader(identifier: $0) }
   ) -> CaptureStack {
-    let capture = CaptureClient(baseURL: baseURL, tokens: tokens)
+    let capture = CaptureClient(baseURL: baseURL, tokens: tokens, transport: transport)
     let engine = CaptureEngine(
       store: FileUploadJobStore(directory: directory), api: capture, ownIdentifier: ownIdentifier,
-      makeUploader: { URLSessionBackgroundUploader(identifier: $0) }, didSendToSession: didSendToSession,
-      currentOwner: {
-        guard let token = try? await tokens.accessToken(),
-          let userID = AccountProfile.userID(fromAccessToken: token)
-        else { return nil }
-        return CaptureOwner(userID: userID, baseURL: baseURL)
+      makeUploader: makeUploader, didSendToSession: didSendToSession,
+      currentAdmission: {
+        let admission = try await tokens.captureAdmission()
+        guard admission.identity.baseURL == baseURL else { throw SharedSessionError.changed }
+        return admission
+      },
+      makeAdmittedAPI: { admission in
+        CaptureClient(baseURL: baseURL, tokens: AdmittedAccessTokens(tokens: tokens, admission: admission), transport: transport)
       })
     return CaptureStack(
       engine: engine,
-      destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens)),
+      destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens, transport: transport)),
       submitter: engine,
-      transcription: TranscriptionClient(baseURL: baseURL, tokens: tokens),
-      destinationStore: destinationStore, jobs: engine, delegator: capture)
+      transcription: TranscriptionClient(baseURL: baseURL, tokens: tokens, transport: transport),
+      destinationStore: destinationStore, jobs: engine, delegator: capture,
+      makeComposer: { items in
+        let result = Result {
+          let admission = try tokens.captureAdmission()
+          guard admission.identity.baseURL == baseURL else { throw SharedSessionError.changed }
+          return admission
+        }
+        let boundTokens: any AccessTokenProviding
+        switch result {
+        case .success(let admission): boundTokens = AdmittedAccessTokens(tokens: tokens, admission: admission)
+        case .failure(let error): boundTokens = UnavailableCaptureTokens(error: error)
+        }
+        let boundCapture = CaptureClient(baseURL: baseURL, tokens: boundTokens, transport: transport)
+        return ShareComposerModel(
+          items: items,
+          source: RemoteDestinationSource(capture: boundCapture, api: APIClient(baseURL: baseURL, tokens: boundTokens, transport: transport)),
+          submitter: AdmittedCaptureSubmitter(engine: engine, admission: result),
+          store: AdmittedDestinationStore(store: destinationStore, admission: result), delegator: boundCapture)
+      })
   }
 
   /// Offline stand-ins for `B4M_UI_FIXTURES=1`.
@@ -74,8 +100,81 @@ public struct CaptureStack: Sendable {
 
   @MainActor
   public func composerModel(items: [ShareItem]) -> ShareComposerModel {
-    ShareComposerModel(
+    if let makeComposer { return makeComposer(items) }
+    return ShareComposerModel(
       items: items, source: destinations, submitter: submitter, store: destinationStore, delegator: delegator)
+  }
+}
+
+/// Synchronous disk cleanup shared by the app and extension, before a replacement session is published.
+public struct CaptureSessionCleanup: Sendable {
+  private let store: FileUploadJobStore
+  private let destinations: any DestinationStore
+
+  public init(directory: URL = SharedContainer.directory(), destinations: any DestinationStore) {
+    store = FileUploadJobStore(directory: directory)
+    self.destinations = destinations
+  }
+
+  public func perform(_ termination: SessionTermination) throws {
+    if termination.reason != .sessionEnded {
+      let owner = termination.userID.map { CaptureOwner(userID: $0, baseURL: termination.baseURL) }
+      try store.removeForSessionEnd(owner: owner)
+    }
+    destinations.forget()
+  }
+}
+
+struct AdmittedDestinationStore: DestinationStore {
+  let store: any DestinationStore
+  let admission: Result<SharedSessionAdmission, any Error>
+  private let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
+
+  func lastDestination() -> CaptureDestination? {
+    withAdmission(nil) { store.lastDestination() }
+  }
+
+  func remember(_ destination: CaptureDestination) {
+    withAdmission(()) { store.remember(destination) }
+  }
+
+  func forget() {
+    withAdmission(()) { store.forget() }
+  }
+
+  private func withAdmission<Value>(_ fallback: Value, _ operation: () -> Value) -> Value {
+    do { return try admission.get().withCurrent(operation) }
+    catch {
+      logger.debug("Capture destination session is no longer available")
+      return fallback
+    }
+  }
+}
+
+private struct UnavailableCaptureTokens: AccessTokenProviding {
+  let error: any Error
+  func accessToken() async throws -> String { throw error }
+  func invalidateAccessToken(_ token: String) async {}
+  func sessionRejected() async {}
+}
+
+private struct AdmittedCaptureSubmitter: CaptureSubmitting {
+  let engine: CaptureEngine
+  let admission: Result<SharedSessionAdmission, any Error>
+  func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?) async throws -> [UploadJob] {
+    try await engine.submit(items, to: destination, note: note, admission: admission.get())
+  }
+  func retry(jobID: UUID) async {
+    guard case .success(let admission) = admission else { return }
+    await engine.retry(jobID: jobID, admission: admission)
+  }
+  func discard(jobID: UUID) async {
+    guard case .success(let admission) = admission else { return }
+    await engine.discard(jobID: jobID, admission: admission)
+  }
+  func jobs() async -> [UploadJob] {
+    guard case .success(let admission) = admission else { return [] }
+    return await engine.jobs(admission: admission)
   }
 }
 

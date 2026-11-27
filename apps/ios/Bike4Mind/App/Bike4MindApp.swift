@@ -20,16 +20,18 @@ struct Bike4MindApp: App {
     #else
       let tokenStore: any TokenStore = KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved())
     #endif
+    let destinations = UserDefaultsDestinationStore()
+    let captureCleanup = CaptureSessionCleanup(destinations: destinations)
     // Release always signs in as the first-party client on the claimed universal link. DEBUG uses the
     // development client (custom scheme) on non-production servers. See README "Sign-in callback".
     #if DEBUG
       let auth = AuthController(
-        environment: environment, tokenStore: tokenStore, oauthConfiguration: OAuthConfiguration.debugBuild(for:))
+        environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform, oauthConfiguration: OAuthConfiguration.debugBuild(for:))
     #else
-      let auth = AuthController(environment: environment, tokenStore: tokenStore)
+      let auth = AuthController(environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform)
     #endif
     _auth = State(initialValue: auth)
-    let services = AppServices(auth: auth)
+    let services = AppServices(auth: auth, captureDestinations: destinations)
     AppDelegate.services = services
     _services = State(initialValue: services)
   }

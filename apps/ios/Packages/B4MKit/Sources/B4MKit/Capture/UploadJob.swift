@@ -56,6 +56,8 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
   /// Set just before `POST /api/chat` goes out. The route is not idempotent, so a job found with this set
   /// may already have its turn on the server and must be reconciled before it is sent again.
   public internal(set) var sendAttemptedAt: Date?
+  /// Distinguishes attempt writes even when their clock stamps serialize to the same second.
+  internal var sendAttemptID: UUID?
   /// Optional on disk so records written before the field existed still decode.
   private var registerFailureCount: Int?
 
@@ -115,9 +117,13 @@ extension UploadJobStore {
   }
 }
 
+protocol CaptureStagingProviding: Sendable {
+  func acquireCaptureStagingLease() throws -> SharedSessionFileLease
+}
+
 /// One JSON file per job, so the app and the extension (separate processes) never rewrite each other's
 /// records. Writes are atomic.
-public struct FileUploadJobStore: UploadJobStore {
+public struct FileUploadJobStore: UploadJobStore, CaptureStagingProviding {
   private let root: URL
 
   public init(directory: URL = SharedContainer.directory()) {
@@ -125,6 +131,14 @@ public struct FileUploadJobStore: UploadJobStore {
   }
 
   private var jobsDirectory: URL { root.appending(path: "jobs", directoryHint: .isDirectory) }
+
+  private var stagingLock: SharedSessionFileLock {
+    SharedSessionFileLock(url: root.deletingLastPathComponent().appending(path: "CaptureStaging.lock"))
+  }
+
+  func acquireCaptureStagingLease() throws -> SharedSessionFileLease {
+    try stagingLock.acquire(shared: true)
+  }
 
   private func jobURL(_ id: UUID) -> URL { jobsDirectory.appending(path: "\(id.uuidString).json") }
 
@@ -154,12 +168,11 @@ public struct FileUploadJobStore: UploadJobStore {
   }
 
   public func remove(id: UUID) throws {
-    discardPayload(jobID: id)
-    do {
-      try FileManager.default.removeItem(at: jobURL(id))
-    } catch CocoaError.fileNoSuchFile {
-      return
-    }
+    // Failed metadata removal must leave a surviving record's payload intact.
+    do { try FileManager.default.removeItem(at: jobURL(id)) }
+    catch CocoaError.fileNoSuchFile {}
+    do { try FileManager.default.removeItem(at: payloadDirectory(id)) }
+    catch CocoaError.fileNoSuchFile {}
   }
 
   public func payloadURL(jobID: UUID, fileName: String) -> URL {
@@ -191,6 +204,41 @@ public struct FileUploadJobStore: UploadJobStore {
       try FileManager.default.removeItem(at: root)
     } catch CocoaError.fileNoSuchFile {
       return
+    }
+  }
+
+  /// Called only under the shared session lock. Keep foreign owners and propagate storage failures.
+  public func removeForSessionEnd(owner: CaptureOwner?) throws {
+    try stagingLock.withLock { try removeSessionRecords(owner: owner) }
+  }
+
+  private func removeSessionRecords(owner: CaptureOwner?) throws {
+    let fileManager = FileManager.default
+    func entries(_ directory: URL) throws -> [URL] {
+      do { return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
+      catch CocoaError.fileReadNoSuchFile { return [] }
+    }
+    func remove(_ url: URL) throws {
+      do { try fileManager.removeItem(at: url) }
+      catch CocoaError.fileNoSuchFile {}
+    }
+    var preservedPayloadNames = Set<String>()
+    let records = try entries(jobsDirectory)
+    for url in records {
+      // A read error is not a corrupt record: permission and I/O errors must block completion.
+      let data = try Data(contentsOf: url)
+      let job = try? Self.decoder.decode(UploadJob.self, from: data)
+      if let job, let knownOwner = job.owner, knownOwner != owner {
+        preservedPayloadNames.insert(job.id.uuidString)
+        continue
+      }
+      // Payload first keeps the owner record available if sensitive-byte deletion fails.
+      if let job { try remove(payloadDirectory(job.id)) }
+      try remove(url)
+    }
+    let payloads = root.appending(path: "payloads", directoryHint: .isDirectory)
+    for url in try entries(payloads) where !preservedPayloadNames.contains(url.lastPathComponent) {
+      try remove(url)
     }
   }
 

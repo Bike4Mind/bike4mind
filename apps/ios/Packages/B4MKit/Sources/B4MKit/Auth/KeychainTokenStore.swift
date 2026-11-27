@@ -17,7 +17,7 @@ public struct KeychainError: Error, Equatable, Sendable {
 
 /// Generic-password Keychain item, readable after first unlock so background refreshes
 /// (and, later, the share extension via `accessGroup`) work while the device is locked.
-public struct KeychainTokenStore: TokenStore {
+public struct KeychainTokenStore: SharedSessionStorage {
   private let service: String
   private let account: String
   private let accessGroup: String?
@@ -50,6 +50,23 @@ public struct KeychainTokenStore: TokenStore {
   /// Same service and access group, separate item: never read as the live session.
   private var pendingRevocationItem: KeychainTokenStore {
     KeychainTokenStore(service: service, account: "\(account).pendingRevocations", accessGroup: accessGroup)
+  }
+
+  private var sessionIdentityItem: KeychainTokenStore {
+    KeychainTokenStore(service: service, account: "\(account).sessionIdentity", accessGroup: accessGroup)
+  }
+
+  public func sharedSessionRecord() throws -> Data? {
+    try sessionIdentityItem.refreshToken().map { Data($0.utf8) }
+  }
+
+  public func setSharedSessionRecord(_ data: Data?) throws {
+    try sessionIdentityItem.setRefreshToken(data.map { String(decoding: $0, as: UTF8.self) })
+  }
+
+  public func withSharedSessionLock<Result>(_ operation: () throws -> Result) throws -> Result {
+    try SharedSessionFileLock(url: SharedContainer.directory().appending(path: "AuthSession.lock"))
+      .withLock(operation)
   }
 
   public func pendingRevocations() throws -> [PendingRevocation] {

@@ -24,6 +24,7 @@ final class AuthControllerTests: XCTestCase {
     return AuthController(
       environment: .production,
       tokenStore: store,
+      sessionEndCleanup: { _ in },
       transport: transport,
       biometricGate: FakeBiometricGate(succeeds: appLockSucceeds),
       preferences: Fixtures.isolatedDefaults(),
@@ -368,7 +369,7 @@ final class AuthControllerTests: XCTestCase {
       )
     }
     let auth = AuthController(
-      environment: .production, tokenStore: store, transport: transport,
+      environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: transport,
       oauthConfiguration: OAuthConfiguration.debugBuild(for:),
       biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults())
     auth.restore()
@@ -615,7 +616,7 @@ final class AuthControllerTests: XCTestCase {
     try store.setRefreshToken("sid.0")
     let gate = CountingBiometricGate()
     let auth = AuthController(
-      environment: .production, tokenStore: store, transport: transport,
+      environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: transport,
       biometricGate: gate, preferences: Fixtures.isolatedDefaults())
     auth.restore()
     auth.isAppLockEnabled = true

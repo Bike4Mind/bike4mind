@@ -172,8 +172,7 @@ struct RootView: View {
     Task { await services.sessionListCache.clear() }
     let mediaFirstPages = services.mediaFirstPages
     Task { await mediaFirstPages.invalidate() }
-    let keepsCaptures = auth.state == .signedOut(.sessionEnded)
-    Task { await services.discardAccountContent(keepingCaptures: keepsCaptures) }
+    services.discardAccountContent()
     services.push.sessionDidEnd()
     services.voiceCatalog.reset()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.
