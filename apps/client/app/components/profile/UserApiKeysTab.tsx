@@ -62,6 +62,7 @@ import {
   IUserApiKeyListItem,
   ApiKeyScope,
   ApiKeyScopeValue,
+  CONFINED_API_KEY_SCOPE_FAMILIES,
   getMeContract,
   getCreditBalanceContract,
   listModelsContract,
@@ -205,7 +206,8 @@ const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
 
 // Confined, so it is an access level of its own: a functions key carries no scope but these two.
 const FUNCTIONS_SCOPE_OPTION = findApiKeyScopeOption(ApiKeyScope.FUNCTIONS_INVOKE);
-const FUNCTIONS_SCOPES: ApiKeyScopeValue[] = [ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR];
+const FUNCTIONS_SCOPES: readonly ApiKeyScopeValue[] =
+  CONFINED_API_KEY_SCOPE_FAMILIES.find(family => family.includes(ApiKeyScope.FUNCTIONS_INVOKE)) ?? [];
 
 const isFunctionsOnly = (scopes: ApiKeyScopeValue[]) =>
   scopes.includes(ApiKeyScope.FUNCTIONS_INVOKE) && scopes.every(scope => FUNCTIONS_SCOPES.includes(scope));

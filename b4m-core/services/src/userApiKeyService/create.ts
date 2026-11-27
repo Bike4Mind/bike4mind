@@ -5,6 +5,7 @@ import {
   ApiKeyScopeValue,
   ApiKeyStatus,
   CONFINED_API_KEY_SCOPES,
+  CONFINED_API_KEY_SCOPE_FAMILIES,
   CreditHolderType,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
@@ -268,7 +269,7 @@ const mintUserApiKey = async (
   // The one exception is a family of confined scopes that serve one flow (CONFINED_API_KEY_SCOPE_FAMILIES).
   if (!isMintableConfinedScopeSet(params.scopes)) {
     throw new BadRequestError(
-      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key, except functions:invoke with functions:author`
+      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key, except ${CONFINED_API_KEY_SCOPE_FAMILIES.map(family => family.join(' with ')).join('; ')}`
     );
   }
 
