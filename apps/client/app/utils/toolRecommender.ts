@@ -1,7 +1,10 @@
 import { B4MLLMTools } from '@bike4mind/common';
 
 /** Simple display name lookup - avoids importing toolMapping which has MUI icon deps */
-const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
+// Persisted sessions still name these; the enum no longer does.
+type LegacyOverlayToolId = 'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem';
+
+const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools | LegacyOverlayToolId, string>> = {
   web_search: 'Web Search',
   web_fetch: 'Web Fetch',
   weather_info: 'Weather',
@@ -196,7 +199,7 @@ const TOOL_PATTERNS: ToolPattern[] = [
     ],
   },
   {
-    tool: 'optihashi_formulate',
+    tool: 'optihashi_formulate' as B4MLLMTools,
     patterns: [
       /\b(formulate|model|structure)\s+.{0,30}(problem|scenario|situation)\b/i,
       /\b(factory|workshop|plant|warehouse|fleet|hospital|clinic|bakery|restaurant)\b/i,
@@ -206,7 +209,7 @@ const TOOL_PATTERNS: ToolPattern[] = [
     ],
   },
   {
-    tool: 'optihashi_schedule',
+    tool: 'optihashi_schedule' as B4MLLMTools,
     patterns: [
       /\b(optimi[sz]e|schedule|minimize|maximize)\b/i,
       /\b(makespan|throughput|utilization|bottleneck)\b/i,

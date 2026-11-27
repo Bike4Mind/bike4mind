@@ -64,7 +64,10 @@ export type PublicTools = Exclude<
   | SlackLlmTools
 >;
 
-export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
+// Persisted sessions still name these; the enum no longer does.
+type LegacyOverlayToolId = 'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem';
+
+export const TOOL_MAPPING: Record<PublicTools | LegacyOverlayToolId, ToolInfo> = {
   web_search: {
     name: 'web_search',
     displayName: 'Web Search',
