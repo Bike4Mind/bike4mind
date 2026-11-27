@@ -1,4 +1,4 @@
-import type { PendingTaskDecision, RolePolicy, TaskAction } from '@shared/orchestration';
+import type { RolePolicy, TaskAction } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { AppMenuAction, RendererErrorReport } from '@shared/appShell';
@@ -14,10 +14,6 @@ import type {
   ChatFilePathAction,
   ChatImageAction,
   ChatImageRef,
-  ChatQueueEvent,
-  ChatSessionStatusEvent,
-  ChatSessionSummary,
-  ChatStreamEvent,
   ReasoningEffortSetting,
   EditMessageRequest,
   StartSpawnSuggestionRequest,
@@ -26,6 +22,7 @@ import type {
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { HostNotificationDelivery } from '@shared/hostBridge';
+import type { HostEntry } from '@shared/hostConnection';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { OrchestrateMiniPayload } from '@shared/orchestrateMini';
@@ -76,6 +73,18 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.hostNotification, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.hostNotification, handler);
     },
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.hostList),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, hosts: HostEntry[]) => listener(hosts);
+      ipcRenderer.on(IPC_CHANNELS.hostStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.hostStateChanged, handler);
+    },
+    connect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostConnect, hostId),
+    disconnect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostDisconnect, hostId),
+    remove: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostRemove, hostId),
+    sshAliases: () => ipcRenderer.invoke(IPC_CHANNELS.hostSshAliases),
+    describeSshAlias: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshDescribe, alias),
+    addSshHost: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshAdd, alias),
   },
   library: {
     page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),
@@ -297,12 +306,6 @@ const api: DesktopApi = {
     setRolePolicy: (policy: RolePolicy) => ipcRenderer.invoke(IPC_CHANNELS.chatSetRolePolicy, policy),
     taskAction: (sessionId: string, action: TaskAction) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatTaskAction, sessionId, action),
-    listTaskDecisions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListTaskDecisions),
-    onTaskDecisions: (listener: (decisions: PendingTaskDecision[]) => void) => {
-      const handler = (_event: unknown, decisions: PendingTaskDecision[]) => listener(decisions);
-      ipcRenderer.on(IPC_CHANNELS.chatTaskDecisions, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatTaskDecisions, handler);
-    },
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     confirmArchive: (question: ArchiveQuestion) => ipcRenderer.invoke(IPC_CHANNELS.chatConfirmArchive, question),
@@ -349,11 +352,6 @@ const api: DesktopApi = {
     startSideChat: (request: StartSideChatRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatStartSideChat, request),
     dismissSpawnSuggestion: (sessionId: string, suggestionId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDismissSpawnSuggestion, sessionId, suggestionId),
-    onQueueChanged: listener => {
-      const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
-      ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatQueueChanged, handler);
-    },
     pickAttachments: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatPickAttachments, sessionId),
     addAttachments: (sessionId: string, inputs: ChatAttachmentInput[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAddAttachments, sessionId, inputs),
@@ -405,22 +403,6 @@ const api: DesktopApi = {
     saveVideo: (sessionId: string, jobId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSaveVideo, sessionId, jobId),
     copyVideoLink: (sessionId: string, jobId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCopyVideoLink, sessionId, jobId),
-    onStreamEvent: listener => {
-      const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
-      ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatStreamEvent, handler);
-    },
-    getSessionStatuses: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetSessionStatuses),
-    onSessionStatus: listener => {
-      const handler = (_event: unknown, event: ChatSessionStatusEvent) => listener(event);
-      ipcRenderer.on(IPC_CHANNELS.chatSessionStatus, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionStatus, handler);
-    },
-    onSessionSummary: listener => {
-      const handler = (_event: unknown, summary: ChatSessionSummary) => listener(summary);
-      ipcRenderer.on(IPC_CHANNELS.chatSessionSummary, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionSummary, handler);
-    },
     listSkills: scope => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, scope),
     setProjectSkillsTrusted: (scope, trusted, expectedProjectDirectory) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, scope, trusted, expectedProjectDirectory),

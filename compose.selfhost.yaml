@@ -110,10 +110,12 @@ services:
   # are served via a short-lived signed URL and never deleted by the app. Its data/.live/
   # prefix gets a 1-day rule too: a callable function's live source fetches are stored there
   # for one call's short-lived links (infra/callableFunctionData.ts expires them in hosted).
-  # All these rules are idempotent (skipped if a lifecycle config already exists) and
-  # best-effort (an mc build without ilm support just skips them). Hosted gets the same
-  # current-object expiry from S3 lifecycle rules; this is the MinIO equivalent (the hosted
-  # FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
+  # All these rules are idempotent and best-effort (an mc build without ilm support just
+  # skips them). The drafts/, history-import and exports/ rules are skipped when their bucket
+  # already has any lifecycle rule; the generated-audio-offload/, text-edit-backups/ and
+  # data/.live/ rules are skipped only when a rule for their own prefix is already there.
+  # Hosted gets the same current-object expiry from S3 lifecycle rules; this is the MinIO
+  # equivalent (the hosted FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
   # If you point object storage at a different S3 backend, add equivalent rules there.
   createbuckets:
     build:

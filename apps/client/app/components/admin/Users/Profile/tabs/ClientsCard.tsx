@@ -1,7 +1,7 @@
 import React from 'react';
 import { Stack, Typography } from '@mui/joy';
 import { CLIENT_SURFACES } from '@bike4mind/common';
-import { Fact, RelativeTime, SectionCard, formatUtc } from '../../../shared';
+import { Fact, RelativeTime, SectionCard, formatUtcDay } from '../../../shared';
 import { CLIENT_SURFACE_LABELS, type AdminUserProfile } from '../userProfileModel';
 
 /**
@@ -19,7 +19,7 @@ export const ClientsCard: React.FC<{ user: AdminUserProfile }> = ({ user }) => (
               {entry.version && <Typography level="body-sm">{entry.version}</Typography>}
               <RelativeTime prefix="Last used" at={entry.lastSeenAt} />
               <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-                {`First ${formatUtc(new Date(entry.firstSeenAt)).split(',')[0]}`}
+                {`First ${formatUtcDay(new Date(entry.firstSeenAt))}`}
               </Typography>
             </Stack>
           )}

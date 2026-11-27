@@ -11,6 +11,7 @@ import {
   Kbd,
   RelativeTime,
   formatUtc,
+  formatUtcDay,
   StatStrip,
   StatTile,
   SectionCard,
@@ -202,6 +203,10 @@ describe('admin layout primitives', () => {
 describe('formatUtc and RelativeTime', () => {
   it('formats an exact UTC time', () => {
     expect(formatUtc(new Date('2026-03-14T09:12:00Z'))).toBe('14 Mar 2026, 09:12 UTC');
+  });
+
+  it('formats the UTC day alone', () => {
+    expect(formatUtcDay(new Date('2026-03-14T23:59:00Z'))).toBe('14 Mar 2026');
   });
 
   it('shows a prefixed relative time with a machine-readable datetime, and nothing for an invalid date', () => {

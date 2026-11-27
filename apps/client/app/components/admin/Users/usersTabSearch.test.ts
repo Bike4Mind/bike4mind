@@ -246,6 +246,25 @@ describe('admin role filter', () => {
   });
 });
 
+describe('signup client filter', () => {
+  const CLIENT_ID = 'b4m_my_app_0011aabb';
+
+  it('accepts only a client-id shaped value, trimmed', () => {
+    expect(USERS_SEARCH_PARSERS.signupClient(` ${CLIENT_ID} `)).toBe(CLIENT_ID);
+    expect(USERS_SEARCH_PARSERS.signupClient('bad id')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.signupClient(42)).toBeUndefined();
+  });
+
+  it('round-trips through the URL and counts as one filter', () => {
+    const search = usersTabLinkSearch({ signupClient: CLIENT_ID });
+    expect(search).toMatchObject({ tab: 'users', signupClient: CLIENT_ID });
+    const view = usersViewFromSearch(search);
+    expect(view).toMatchObject({ signupClient: CLIENT_ID });
+    expect(countActiveFilters(view!)).toBe(1);
+    expect(CLEARED_FILTER_PARAMS).toHaveProperty('signupClient', undefined);
+  });
+});
+
 describe('analytics drill-down params', () => {
   const drillDown = {
     createdFrom: '2026-10-01T00:00:00.000Z',

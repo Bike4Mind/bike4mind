@@ -1,7 +1,9 @@
+import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
 import {
+  apiGetMfaCode,
   apiCloseInviteCode,
   apiCreateGrantPackage,
   apiCreateInviteCode,
@@ -10,6 +12,17 @@ import {
   apiDeleteInviteCode,
   apiDeletePartnerRuleByDomain,
 } from './helpers/api';
+
+const baseURL = process.env.API_URL || 'http://localhost:3000';
+
+// Deleting a user needs a step-up within the last few minutes; the test admin is enrolled in MFA.
+async function stepUp(request: APIRequestContext, admin: { accessToken: string; email: string }) {
+  const res = await request.post(`${baseURL}/api/auth/step-up`, {
+    headers: { Authorization: `Bearer ${admin.accessToken}` },
+    data: { method: 'totp', code: await apiGetMfaCode(request, admin.email) },
+  });
+  expect(res.ok(), `step-up failed: ${res.status()}`).toBe(true);
+}
 
 // Generate unique test data to avoid collisions across runs
 const timestamp = Date.now();
@@ -140,7 +153,7 @@ test.describe('Admin - User Search & Sort', () => {
 
 // Dependent tests - must run in order (create -> edit -> delete)
 test.describe('Admin - User CRUD', () => {
-  test('should create, edit, and delete a user', async ({ adminPage }) => {
+  test('should create, edit, and delete a user', async ({ adminPage, request }) => {
     // The slow-test budget plus the wait for the asynchronous erasure in the delete step.
     test.setTimeout(TIMEOUTS.TEST * 3 + TIMEOUTS.ACCOUNT_ERASURE);
 
@@ -200,6 +213,7 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.clickDeleteUserButton();
       await adminPage.fillDeleteReason();
       await adminPage.typeDeleteConfirmation();
+      await stepUp(request, getTestUsers().admin);
       await adminPage.confirmDeleteUser();
 
       // Verify user no longer appears in search

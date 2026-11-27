@@ -1320,7 +1320,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to an array of files.
    */
-  findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+  findAllByIds(ids: string[], options?: { includeDeleted?: boolean }): Promise<IFabFileDocument[]>;
+  /** Grant cleanup includes tombstones and files detached from the source notebook. */
+  findSharingGrantFilesBySession(sessionId: string, userId?: string): Promise<IFabFileDocument[]>;
   /**
    * One ascending-by-`_id` page of these ids (live rows only, summary fields only), resuming strictly
    * after `afterId`. `hasMore` is true when a row exists past the page.

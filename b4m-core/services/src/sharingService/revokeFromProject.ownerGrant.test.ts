@@ -42,7 +42,7 @@ const setup = () => {
     db: {
       fabFiles: files.repo,
       sessions: sessions.repo,
-      projects: {},
+      projects: { findParticipatingReferencing: vi.fn(async () => []) },
       users: { findById: vi.fn(async (id: string) => ({ id, groups: [] })) },
     },
   };
@@ -69,18 +69,17 @@ describe('revokeFromProject - the owner grant on a departing member documents', 
     expect(holders(sessions.byId.get('member-session'))).toEqual([]);
     // The leaver loses their grant on the owner's file; the remaining member keeps theirs.
     expect(holders(files.byId.get('owner-file'))).toEqual(['other']);
-    expect(pruned).toEqual({ fileIds: ['owner-file'], sessionIds: [] });
+    expect(pruned).toEqual({ fileIds: ['owner-file'], sessionIds: [], systemPrompts: [] });
   });
 
-  it('keeps going past a member it cannot reach, and still drops the file from the project', async () => {
+  it("drops a row without read on the leaver's file, resolving it on the leaver's authority", async () => {
     const { files, adapters, project } = setup();
-    // An update-only row is invisible to findAccessibleById, so revoking it 404s. That used to abort
-    // the whole file: the rows after it stayed and the file was never pruned from the project.
+    // Invisible to the grantee's own read lookup; the leaver owns the file, so the revoke runs as them.
     files.byId.get('member-file')!.users[1].permissions = ['update'];
 
     const pruned = await revokeFromProject({ project, userIdToRevoke: 'member' } as never, adapters as never);
 
-    expect(holders(files.byId.get('member-file'))).toEqual(['other']);
+    expect(holders(files.byId.get('member-file'))).toEqual([]);
     expect(pruned.fileIds).toEqual(['owner-file']);
   });
 });

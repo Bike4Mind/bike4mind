@@ -1,5 +1,6 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { isImpersonatorAuthorized } from '@bike4mind/server-utils/auth/impersonatorAccess';
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -73,6 +74,7 @@ const handler = baseApi({ auth: false })
             realtimeConnections: realtimeConnectionRepository,
           },
           signAccessToken,
+          isImpersonatorAuthorized,
           // Involuntary session outcomes -> the forensic audit log. The service's event types are
           // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
           // dropped so the service can await the write on the paths that throw immediately after

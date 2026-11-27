@@ -12,6 +12,7 @@ import {
   IShareableDocument,
   ISpaceRepository,
   IUserDocument,
+  IUserRepository,
   Permission,
   ShareableAccessShape,
   isLinkOnlyInvite,
@@ -36,6 +37,7 @@ import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
 import { grantCap } from '../projectService/addFiles';
+import { projectGrantorCheck, SharedItem } from './projectGrantor';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -60,6 +62,7 @@ interface AcceptInviteAdapters {
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
+      findUserIdsByGroupIds: IUserRepository['findUserIdsByGroupIds'];
       update: (data: Partial<IUserDocument>) => Promise<unknown>;
     };
     spaces: Pick<ISpaceRepository, 'findLiveById' | 'addMember'>;
@@ -515,18 +518,25 @@ const acceptProject = async (
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
   // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
-  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
-  const grantOn = (item: IShareableDocument & { userId: string }) => {
-    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. Passing it
+  // on needs a grantor in the project: the inviter holding share, or the same grantor rule revoke uses
+  // to keep an item attached (projectGrantor.ts).
+  const hasGrantor = projectGrantorCheck(project, db);
+  const grantOn = async (item: SharedItem) => {
+    if (!inviter) return null;
+    let granted = reshareableBy(item, inviter, permissions).granted;
+    if (granted.length === 0 && (await hasGrantor(item))) {
+      granted = grantCap(item as ShareableAccessShape, inviter)(permissions);
+    }
     return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
 
   for (const file of files) {
-    const grant = grantOn(file);
+    const grant = await grantOn(file);
     if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
   }
   for (const session of sessions) {
-    const grant = grantOn(session);
+    const grant = await grantOn(session);
     if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
   }
 };

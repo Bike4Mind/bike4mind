@@ -45,7 +45,10 @@ const OWNER = 'owner';
 const SHAREE = 'sharee';
 const SHARE = { userId: SHAREE, permissions: [Permission.read] };
 
-const users = { findById: async (id: string) => ({ id, groups: [] }) } as unknown as IUserRepository;
+const users = {
+  findById: async (id: string) => ({ id, groups: [] }),
+  findUserIdsByGroupIds: async () => ({}),
+} as unknown as IUserRepository;
 
 const oid = (id: string) => new mongoose.Types.ObjectId(id);
 const asModel = (m: unknown) => m as mongoose.Model<never>;
@@ -200,6 +203,7 @@ describe('sessionService.deleteSession racing a soft delete', () => {
           sessions: sessionRepository,
           projects: projectRepository,
           fabFiles: filesWithFindAllWindow(() => softDelete(asModel(FabFile), fileId, deletedAt)),
+          users,
         },
       }
     );

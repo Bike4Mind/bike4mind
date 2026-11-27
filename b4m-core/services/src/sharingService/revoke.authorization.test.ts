@@ -34,8 +34,19 @@ describe('sharingService - revoke (session knowledge-file cascade authority)', (
           update: vi.fn(),
           updateGuarded: vi.fn(),
         },
-        fabFiles: { findAllByIds: vi.fn(async () => files), update: vi.fn(), updateGuarded: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        fabFiles: {
+          findAllByIds: vi.fn(async () => files),
+          find: vi.fn(async () => []),
+          findSharingGrantFilesBySession: vi.fn(async () => []),
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
         users: {
           findById: vi.fn(async (id: string) =>
             id === sessionOwnerId ? { id: sessionOwnerId, groups: [] } : { id: targetId, groups: [] }

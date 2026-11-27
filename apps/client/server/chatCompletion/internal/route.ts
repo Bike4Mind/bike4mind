@@ -13,7 +13,7 @@ import {
   QUEST_DISPATCH_TIMESTAMP_HEADER,
   verifyQuestDispatch,
 } from '@server/utils/questDispatchSignature';
-import { emitProcessingFailed } from '../processingFailedMetric';
+import { emitProcessingFailed, type ProcessingFailureSurface } from '../processingFailedMetric';
 
 /**
  * Internal `/process` surface of the always-on ChatCompletion.
@@ -47,6 +47,58 @@ export function processingFailureReply(streamed: string[] | undefined): { reply:
     .filter(text => text.length > 0);
   const replies = [...visiblePartial, GENERIC_PROCESSING_FAILURE_REPLY];
   return { replies, reply: replies.join('') };
+}
+
+/**
+ * After processQuest throws: log it at the level its class deserves, then settle the quest so it
+ * does not stay 'running' forever. Shared by `/process` and the session turns route (turnsRoute.ts),
+ * which runs the quest in-process the same way.
+ */
+export async function handleQuestProcessingFailure(
+  err: unknown,
+  {
+    questId,
+    logger,
+    track,
+    surface,
+  }: { questId: string; logger: Logger; track: (p: Promise<void>) => void; surface: ProcessingFailureSurface }
+): Promise<void> {
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  if (err instanceof FlaggedContentError) {
+    // A moderation refusal is an expected user outcome, already logged once at warn by the
+    // moderation service (promptModeration in @bike4mind/utils); logging it again here would page.
+  } else if (isExpectedCompletionError(err)) {
+    logger.warn('Quest processing ended with an expected provider error', { error: errorMessage });
+  } else {
+    // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
+    // `err` carries the stack and the full cause chain into the structured log.
+    logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
+    track(emitProcessingFailed(surface, err));
+  }
+
+  // Surface the failure to the client instead of leaving the quest 'running' forever - but only
+  // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own
+  // message (`quest.reply = err.message`) and marks the quest terminal before it rethrows, so an
+  // unconditional write here replaces a specific, actionable diagnostic with this generic one.
+  try {
+    // The processor has already thrown, so nothing streams into the slots between this read
+    // and the guarded write below.
+    const streamed = (await questRepository.findById(questId))?.replies;
+    const settled = await questRepository.settleIfUnfinished(questId, {
+      status: 'stopped',
+      type: 'error',
+      ...processingFailureReply(streamed),
+    });
+    if (!settled) {
+      logger.info('Quest already settled by the processor; kept its own error reply', { questId });
+    }
+  } catch (updateErr) {
+    logger.error('Failed to mark quest stopped after processing error', {
+      error: updateErr instanceof Error ? updateErr.message : String(updateErr),
+      errorCause: describeErrorCause(updateErr),
+      err: updateErr,
+    });
+  }
 }
 
 /**
@@ -139,46 +191,9 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
     // Results stream to the client over WebSocket as processQuest runs.
     res.status(202).json({ accepted: true, questId: params.questId });
 
-    const task = processQuest(params, logger).catch(async err => {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (err instanceof FlaggedContentError) {
-        // A moderation refusal is an expected user outcome, already logged once at warn by the
-        // moderation service (promptModeration in @bike4mind/utils); logging it again here would page.
-      } else if (isExpectedCompletionError(err)) {
-        logger.warn('Quest processing ended with an expected provider error', { error: errorMessage });
-      } else {
-        // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
-        // `err` carries the stack and the full cause chain into the structured log.
-        logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
-        track(emitProcessingFailed('/process', err));
-      }
-
-      // Surface the failure to the client instead of leaving the quest 'running' forever - but only
-      // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own
-      // message (`quest.reply = err.message`) and marks the quest terminal before it rethrows, so an
-      // unconditional write here replaces a specific, actionable diagnostic with this generic one.
-      try {
-        // The processor has already thrown, so nothing streams into the slots between this read
-        // and the guarded write below.
-        const streamed = (await questRepository.findById(params.questId))?.replies;
-        const settled = await questRepository.settleIfUnfinished(params.questId, {
-          status: 'stopped',
-          type: 'error',
-          ...processingFailureReply(streamed),
-        });
-        if (!settled) {
-          logger.info('Quest already settled by the processor; kept its own error reply', {
-            questId: params.questId,
-          });
-        }
-      } catch (updateErr) {
-        logger.error('Failed to mark quest stopped after processing error', {
-          error: updateErr instanceof Error ? updateErr.message : String(updateErr),
-          errorCause: describeErrorCause(updateErr),
-          err: updateErr,
-        });
-      }
-    });
+    const task = processQuest(params, logger).catch(err =>
+      handleQuestProcessingFailure(err, { questId: params.questId, logger, track, surface: '/process' })
+    );
     track(task);
   });
 }

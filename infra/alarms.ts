@@ -13,6 +13,7 @@
 
 import {
   accountDeletionSweep,
+  dataLakeVectorIndexKeepWarmCron,
   disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
@@ -1434,6 +1435,107 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: data-lake search is falling back from vector search to the bounded scan.
+   *
+   * Sums two per-search signals: the Atlas index status check reported the primary model's index
+   * as not queryable (a status-check error counts, and the status is cached for 60s), and the
+   * primary model's $vectorSearch threw. Either way the search still answers, from a scan capped
+   * by the search budgets, so results degrade with no error.
+   *
+   * Fires on fallback in 3 of the last 4 fifteen-minute periods, i.e. about 45 minutes of an
+   * hour. A transient blip (one throw, one 60s cached not-queryable status) lasts well under 15
+   * minutes, so it can touch at most two adjacent periods and cannot fire this. An index that is
+   * rebuilding or unreachable keeps failing every search and does. The flip side: on a stage with
+   * too little search traffic to land a search in 3 of 4 periods, a real outage stays quiet here
+   * and shows only on the dashboard and in the warn logs.
+   *
+   * Metric emitted by: b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.ts ->
+   * recordDataLakeSearchMetrics (VECTOR_INDEX_NOT_QUERYABLE_METRIC, ANN_QUERY_FAILED_METRIC).
+   * Namespace: Lumina5/DataLakeRetrieval / VectorIndexNotQueryable, AnnQueryFailed
+   * Alarms on the Stage-only dimension set; the Backend set is for attribution only.
+   * AnnServedNothing is published alongside but not alarmed: its no-ready-files and
+   * ready-files-within-lag reasons are expected states during a backfill or right after ingest.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeVectorSearchFallback', {
+    name: `${$app.name}-${$app.stage}-data-lake-vector-search-fallback`,
+    alarmDescription:
+      'Data-lake searches have been falling back from vector search to the bounded scan for most of the last hour (index not queryable or $vectorSearch failing). Results still return but rank only a budgeted part of the corpus. Check the Atlas search index status and the semanticSearch warn logs',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 4,
+    datapointsToAlarm: 3,
+    threshold: 0,
+    metricQueries: [
+      {
+        id: 'notQueryable',
+        returnData: false,
+        metric: {
+          metricName: 'VectorIndexNotQueryable',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 900, // 15 minutes
+          stat: 'Sum',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'queryFailed',
+        returnData: false,
+        metric: {
+          metricName: 'AnnQueryFailed',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 900, // 15 minutes
+          stat: 'Sum',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'fallbacks',
+        returnData: true,
+        label: 'Searches that fell back to the scan',
+        // FILL so a period with only one of the two series still sums instead of going missing.
+        expression: 'FILL(notQueryable, 0) + FILL(queryFailed, 0)',
+      },
+    ],
+    // No emission means no search fell back, the healthy state.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: the vector index keep-warm cron keeps failing.
+   *
+   * The handler throws when any index fails to warm, so the Lambda's own Errors metric already
+   * covers a failed warm plus a timeout, OOM or init crash that a custom metric would miss. Runs
+   * every 5 minutes; 3 of 3 periods means 15 minutes of consecutive failures, so one failed warm
+   * (the next run is the retry) does not fire it. Only on scheduled stages, where the cron exists.
+   */
+  if (dataLakeVectorIndexKeepWarmCron) {
+    new aws.cloudwatch.MetricAlarm('dataLakeVectorIndexKeepWarmErrors', {
+      name: `${$app.name}-${$app.stage}-data-lake-vector-index-keep-warm-errors`,
+      alarmDescription:
+        'The data-lake vector index keep-warm Lambda has failed for 15 minutes straight (an index failed to warm, timeout, OOM or crash). Searches may hit a cold index and fall back to the scan',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 3,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: dataLakeVectorIndexKeepWarmCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'DataLakeRetrieval',
+        Severity: 'Medium',
+      },
+    });
+  }
+
+  /**
    * Alarm: forced retrieval answering large lakes from a by-name cut
    *
    * A turn whose candidates were cut to the 100-file cap (the lake, plus the library when the turn
@@ -1699,7 +1801,7 @@ if (isMonitoredStage) {
    * a single error class to dominate.
    *
    * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
-   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * failure path of internal /process. The CLI SSE/WS, session turns and embed chat surfaces emit the same metric
    * under their own Surface value but are deliberately not alarmed until a base rate exists: their
    * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */

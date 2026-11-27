@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSessionStatus, ChatSessionSummary, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
-import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
+import { useSessionsEvents } from '../../host/useSessionEvents';
+import { foldActivity, type AgentActivity } from './activity';
 import {
   readAmbient,
   readDockOpen,
@@ -22,63 +23,26 @@ import { singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout'
 import { buildRoster, descendantIds, type AgentView, type ParentView } from './roster';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
-// Untracked ids remembered at once; the stream carries every session, so this must stay bounded.
-const UNTRACKED_BUFFER_CAP = 16;
-
 /**
- * What the tracked sessions' agents are doing right now, folded from the shared stream. Events from
- * any other session never reach state, so unrelated work never re-renders; the latest few are kept
- * aside and applied if their id becomes tracked.
+ * What the tracked sessions' agents are doing right now, folded from each one's event stream. A
+ * session joining the roster is subscribed to and starts from its next event; one leaving it is
+ * released and dropped.
  */
 export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<string, AgentActivity> {
   const [activity, setActivity] = useState(NO_ACTIVITY);
-  // A ref, so a changing roster never resubscribes.
+
+  useSessionsEvents(trackedIds, event => setActivity(current => foldActivity(current, event)));
+
+  // Every session-list change rebuilds the set, so the prune below keys on its contents.
+  const trackedKey = useMemo(() => [...trackedIds].sort().join('\n'), [trackedIds]);
   const tracked = useRef(trackedIds);
   tracked.current = trackedIds;
 
-  // Activity for ids not tracked yet, held in a ref so it never re-renders.
-  const untracked = useRef(NO_ACTIVITY);
-
-  useEffect(() => {
-    return window.b4m.chat.onStreamEvent(event => {
-      if (!tracked.current.has(event.sessionId)) {
-        untracked.current = bufferUntrackedActivity(untracked.current, event, UNTRACKED_BUFFER_CAP);
-        return;
-      }
-      // The id can be tracked (set during render) before the effect below adopts its buffered entry,
-      // so the first live event takes that entry over and folds on top of it.
-      const buffered = untracked.current.get(event.sessionId);
-      if (buffered) {
-        const without = new Map(untracked.current);
-        without.delete(event.sessionId);
-        untracked.current = without;
-      }
-      setActivity(current => {
-        const seeded =
-          buffered && !current.has(event.sessionId) ? new Map(current).set(event.sessionId, buffered) : current;
-        return foldActivity(seeded, event);
-      });
-    });
-  }, []);
-
-  // Every session-list change rebuilds the set, so the reconcile below keys on its contents.
-  const trackedKey = useMemo(() => [...trackedIds].sort().join('\n'), [trackedIds]);
-
-  // Drops ids that left the roster and adopts any buffered for ids that joined it.
   useEffect(() => {
     const ids = tracked.current;
-    const adopted = [...untracked.current].filter(([id]) => ids.has(id));
-    if (adopted.length > 0) {
-      const remaining = new Map(untracked.current);
-      adopted.forEach(([id]) => remaining.delete(id));
-      untracked.current = remaining;
-    }
     setActivity(current => {
       const next = new Map([...current].filter(([id]) => ids.has(id)));
-      adopted.forEach(([id, buffered]) => {
-        if (!next.has(id)) next.set(id, buffered);
-      });
-      return next.size === current.size && adopted.length === 0 ? current : next;
+      return next.size === current.size ? current : next;
     });
   }, [trackedKey]);
 

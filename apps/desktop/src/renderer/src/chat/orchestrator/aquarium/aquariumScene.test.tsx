@@ -12,6 +12,7 @@ import { UNFOCUSED_PAUSE_MS } from '../scene/useScenePause';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { FISH_CAST, KEEPER_ART } from './aquariumArt';
 import { AQUARIUM_SCENE } from './aquariumScene';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 
 const mount = createThemedMount('dark');
 const { map, cast, states } = AQUARIUM_SCENE;
@@ -36,6 +37,7 @@ const render = (view: OrchestratorViewProps) => mount.render(<SceneStage {...vie
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),

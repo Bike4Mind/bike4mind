@@ -39,7 +39,7 @@ describe('SessionActivity background jobs', () => {
     activity.replyEnded('a');
 
     expect(events.at(-1)).toEqual({
-      event: { sessionId: 'a', status: 'done', background: { running: 2, label: 'pnpm build' } },
+      event: { sessionId: 'a', status: 'done', background: { running: 2, label: 'pnpm build' }, settledTurns: 1 },
       statusChanged: true,
     });
   });
@@ -77,7 +77,9 @@ describe('SessionActivity', () => {
     activity.replyEnded('a', true);
     expect(activity.statusOf('a')).toBe('needs-action');
     expect(activity.runtimeStatusOf('a')).toBe('done');
-    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action', unreadReply: true }]);
+    expect(activity.snapshot()).toEqual([
+      { sessionId: 'a', status: 'needs-action', unreadReply: true, settledTurns: 1 },
+    ]);
     activity.viewed('a');
     expect(activity.statusOf('a')).toBe('done');
     expect(activity.snapshot()).toEqual([]);
@@ -88,7 +90,7 @@ describe('SessionActivity', () => {
     activity.replyStarted('a');
     activity.replyEnded('a', true);
     activity.approvalRequested('a');
-    expect(events.at(-1)).toEqual({ sessionId: 'a', status: 'needs-action' });
+    expect(events.at(-1)).toEqual({ sessionId: 'a', status: 'needs-action', settledTurns: 1 });
     activity.heldChanged('a', true);
     activity.decisionChanged('a', true);
     activity.viewed('a');
@@ -128,8 +130,31 @@ describe('SessionActivity', () => {
     expect(activity.statusOf('a')).toBe('done');
     expect(events).toEqual([
       { sessionId: 'a', status: 'processing' },
-      { sessionId: 'a', status: 'done' },
+      { sessionId: 'a', status: 'done', settledTurns: 1 },
     ]);
+  });
+
+  it('counts each settled turn on the status, one per turn of a queued chain', () => {
+    const { activity, events } = track();
+
+    activity.replyStarted('a');
+    activity.replyEnded('a');
+    activity.replyStarted('a');
+    activity.replyEnded('a');
+
+    expect(events.map(event => event.settledTurns)).toEqual([undefined, 1, 1, 2]);
+    expect(activity.snapshot()).toEqual([]);
+  });
+
+  it('starts a deleted session counter again from zero', () => {
+    const { activity, events } = track();
+    activity.replyStarted('a');
+    activity.replyEnded('a');
+    activity.forget('a');
+    activity.replyStarted('a');
+    activity.replyEnded('a');
+
+    expect(events.at(-1)).toEqual({ sessionId: 'a', status: 'done', settledTurns: 1 });
   });
 
   // The state the sidebar exists for: the turn is still open, so the session is also
@@ -248,7 +273,7 @@ describe('SessionActivity', () => {
     expect(events).toEqual([
       { sessionId: 'a', status: 'processing', preparing: 'worktree' },
       { sessionId: 'a', status: 'processing' },
-      { sessionId: 'a', status: 'done' },
+      { sessionId: 'a', status: 'done', settledTurns: 1 },
     ]);
   });
 

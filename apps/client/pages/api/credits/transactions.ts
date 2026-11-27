@@ -6,6 +6,7 @@ import {
   CREDIT_DEDUCT_TRANSACTION_TYPES,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { toOwnerLedgerRow } from '@server/credits/ownerLedgerRow';
 import { z } from 'zod';
 
 const CreditTransactionsQuerySchema = z.object({
@@ -60,7 +61,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMI
       transactionTypes,
     });
 
-    return res.status(200).json(transactions);
+    return res.status(200).json(transactions.map(toOwnerLedgerRow));
   }
 );
 

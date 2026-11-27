@@ -43,7 +43,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
+import { QuestStartBodySchema, ChatCompletionProcess, type ClientFrameSender } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
@@ -299,7 +299,16 @@ export const getImageJobsResolver = (apiKeyId: string | undefined) =>
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
-export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
+export type ProcessQuestOptions = {
+  /** Sink for the turn's websocket frames; see IChatCompletionServiceOptions.clientMessageSender. */
+  clientMessageSender?: ClientFrameSender;
+};
+
+export async function processQuest(
+  params: z.infer<typeof QuestStartBodySchema>,
+  logger: Logger,
+  { clientMessageSender }: ProcessQuestOptions = {}
+): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
 
@@ -428,6 +437,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       user,
       audioToolJobs: buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
+      ...(clientMessageSender ? { clientMessageSender } : {}),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 
