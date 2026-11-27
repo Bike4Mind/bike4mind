@@ -9,13 +9,14 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake, resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
+import { canManageLake, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { resolveLakeTeardownScope } from './lakeTeardownScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import {
   bestEffortIndexRemove,
@@ -167,8 +168,8 @@ export const deleteDataLake = async (
   // Only the effective owner's files that no other lake holds are taken down. Every other member
   // stays live in its owner's library with its tags intact, so a restore finds the lake whole and
   // the purge (cleanupDeletedDataLake) lets it leave instead of destroying it.
-  const ownerUserIds = resolveEffectiveOwnerIds(existing, grants);
-  const swept = await db.fabFiles.softDeleteByDataLakeTag(scope, ownerUserIds, stamp);
+  const teardown = await resolveLakeTeardownScope(existing, grants, { db });
+  const swept = await db.fabFiles.softDeleteByDataLakeTag(scope, teardown, stamp);
   // After archive -> delete a kept member still carries this lake's archive stamp. Restore only
   // un-archives the rows it undeletes and the purge only pulls tags, so nothing later would clear
   // it. Stamp-bound only, so a file archived on its own or by another lake is left alone.
@@ -196,7 +197,7 @@ export const deleteDataLake = async (
   await bestEffortIndexRemove(
     retrievalIndex,
     scope,
-    () => db.fabFiles.findTeardownIdsByDataLakeTag(scope, ownerUserIds),
+    () => db.fabFiles.findTeardownIdsByDataLakeTag(scope, teardown),
     logger,
     db.fabFileChunks
   );

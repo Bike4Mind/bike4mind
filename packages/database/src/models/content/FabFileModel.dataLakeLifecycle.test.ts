@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { KnowledgeType, STORAGE_CHARGE_STAMP_CUTOFF, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  KnowledgeType,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+  type DataLakeMembershipScope,
+  type DataLakeTeardownScope,
+} from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 import { FabFile, fabFileRepository } from './FabFileModel';
@@ -30,8 +35,8 @@ const scope: DataLakeMembershipScope = {
   creatorUserId: CREATOR,
 };
 
-/** The lake's effective owners: the creator, with no owner grant superseding them. */
-const OWNERS = [CREATOR];
+/** The creator owns the lake (no owner grant supersedes them) and no other lake is in play. */
+const OWNERS: DataLakeTeardownScope = { ownerUserIds: [CREATOR], otherLakes: [] };
 
 /** The pre-fix scope: what these methods matched when they only knew the meta-tag. */
 const metaOnlyScope: DataLakeMembershipScope = { datalakeTag: DATALAKE_TAG };
@@ -1331,7 +1336,7 @@ describe('FabFile data lake lifecycle membership', () => {
     it('follows the effective owner rather than the creator', async () => {
       const ids = await seedMixedMembers();
 
-      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, [CURATOR]);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, { ownerUserIds: [CURATOR], otherLakes: [] });
 
       expect(swept.map(f => f.id)).toEqual([ids.curatorUpload]);
       expect((await readRaw(ids.ownerOnly))?.deletedAt ?? null).toBeNull();
@@ -1340,7 +1345,48 @@ describe('FabFile data lake lifecycle membership', () => {
     it('matches nothing when the lake resolves no owner', async () => {
       await seedMixedMembers();
 
-      expect(await fabFileRepository.softDeleteByDataLakeTag(scope, [])).toEqual([]);
+      expect(await fabFileRepository.softDeleteByDataLakeTag(scope, { ownerUserIds: [], otherLakes: [] })).toEqual([]);
+    });
+
+    it('keeps a file another lake holds only through its prefix arm, in both phases', async () => {
+      const ids = await seedMixedMembers();
+      // In this lake through its own prefix, and in a second lake of the same creator through
+      // that lake's prefix; no meta-tag for either.
+      const prefixOnlyInBoth = await makeFile({
+        fileName: 'both-prefixes.txt',
+        userId: CREATOR,
+        tags: [{ name: 'acme:report' }, { name: 'beta:report' }],
+      });
+      const teardown: DataLakeTeardownScope = {
+        ownerUserIds: [CREATOR],
+        otherLakes: [
+          { kind: 'owned', datalakeTag: 'datalake:org1:beta', fileTagPrefix: 'beta:', creatorUserId: CREATOR },
+        ],
+      };
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, teardown);
+
+      expect(swept.map(f => f.id)).toEqual([ids.ownerOnly]);
+      expect((await readRaw(prefixOnlyInBoth._id.toString()))?.deletedAt ?? null).toBeNull();
+      expect(await fabFileRepository.findTeardownIdsByDataLakeTag(scope, teardown)).toEqual([ids.ownerOnly]);
+    });
+
+    it("still destroys a file whose second-lake prefix tag belongs to someone else's lake", async () => {
+      const file = await makeFile({
+        fileName: 'stranger-prefix.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'beta:report' }],
+      });
+      const teardown: DataLakeTeardownScope = {
+        ownerUserIds: [CREATOR],
+        otherLakes: [
+          { kind: 'owned', datalakeTag: 'datalake:org1:beta', fileTagPrefix: 'beta:', creatorUserId: 'u-other' },
+        ],
+      };
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope, teardown);
+
+      expect(swept.map(f => f.id)).toEqual([file._id.toString()]);
     });
 
     it('names the same files for the purge, soft-deleted ones included', async () => {

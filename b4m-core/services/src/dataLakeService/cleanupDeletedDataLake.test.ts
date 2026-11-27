@@ -124,9 +124,28 @@ describe('cleanupDeletedDataLake', () => {
 
     expect(db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(
       expect.objectContaining({ datalakeTag: LAKE.datalakeTag }),
-      ['new-owner']
+      expect.objectContaining({ ownerUserIds: ['new-owner'] })
     );
     expect(db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(['owned']);
+  });
+
+  it("keeps a file another of the owner's lakes holds through its prefix arm", async () => {
+    const db = makeDb(['owned']);
+    db.dataLakes.find = vi.fn(async () => [
+      { ...LAKE },
+      { ...LAKE, id: 'lake-2', datalakeTag: 'datalake:beta', fileTagPrefix: 'beta:' },
+    ]) as never;
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    const teardown = db.fabFiles.findTeardownIdsByDataLakeTag.mock.calls[0][1];
+    expect(teardown.otherLakes).toContainEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:beta',
+      fileTagPrefix: 'beta:',
+      creatorUserId: 'owner-1',
+    });
+    expect(teardown.otherLakes.map((l: { datalakeTag: string }) => l.datalakeTag)).not.toContain(LAKE.datalakeTag);
   });
 
   it("lets another user's member leave the lake instead of destroying it", async () => {

@@ -1,4 +1,9 @@
-import { DATALAKE_TAG_PREFIX, effectiveTagPrefixArm, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_PREFIX,
+  effectiveTagPrefixArm,
+  type DataLakeMembershipScope,
+  type DataLakeTeardownScope,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
@@ -217,22 +222,24 @@ export function buildNoOtherLakeMetaTagFilter(datalakeTag: string): Record<strin
 }
 
 /**
- * The members a whole-lake teardown may destroy: owned by one of the lake's effective owners and
- * carrying no other lake's meta-tag. Every other member outlives the teardown in its owner's
- * library. Shared by the phase-1 soft delete and the phase-2 purge so the purge can never reach a
- * file phase 1 would have left alone.
+ * The members a whole-lake teardown may destroy: owned by one of the lake's effective owners,
+ * carrying no other lake's meta-tag, and matching no other lake's membership rule (which is how a
+ * prefix-arm-only member of a second lake is kept). Every other member outlives the teardown in
+ * its owner's library. Shared by the phase-1 soft delete and the phase-2 purge so the purge can
+ * never reach a file phase 1 would have left alone.
  *
  * An empty `ownerUserIds` matches nothing, the safe direction.
  */
 export function buildDataLakeTeardownFilter(
   scope: DataLakeMembershipScope,
-  ownerUserIds: readonly string[]
+  { ownerUserIds, otherLakes }: DataLakeTeardownScope
 ): Record<string, unknown> {
   return {
     $and: [
       buildDataLakeMembershipFilter(scope),
       { userId: { $in: [...ownerUserIds] } },
       buildNoOtherLakeMetaTagFilter(scope.datalakeTag),
+      ...(otherLakes.length > 0 ? [{ $nor: otherLakes.map(buildDataLakeMembershipFilter) }] : []),
     ],
   };
 }

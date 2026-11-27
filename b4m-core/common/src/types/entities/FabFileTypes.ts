@@ -1032,6 +1032,14 @@ export type DataLakeMembershipScope =
       fileTagPrefix?: string | null;
     };
 
+/** Which members a whole-lake teardown may destroy; see `softDeleteByDataLakeTag`. */
+export interface DataLakeTeardownScope {
+  /** The lake's effective owners: only their files are destroyed. */
+  ownerUserIds: readonly string[];
+  /** Every other lake whose membership rule could hold an owner's file. A file any of them holds is kept. */
+  otherLakes: readonly DataLakeMembershipScope[];
+}
+
 /**
  * A file a delete/restore lifecycle sweep flipped in or out of the counted set, carrying just
  * enough to attribute the storage-quota delta to its own owner: lake membership has no ownership
@@ -2238,8 +2246,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<DataLakeSweptFile[]>;
   /**
    * Soft-delete (phase 1) the member files a whole-lake teardown may destroy, stamped `at`: those
-   * owned by one of `ownerUserIds` (the lake's effective owners) and in no other lake. Every other
-   * member is left live and keeps its tags, so a restore finds the lake whole.
+   * owned by one of `teardown.ownerUserIds` (the lake's effective owners) that carry no other
+   * lake's meta-tag and match none of `teardown.otherLakes`. Every other member is left live and
+   * keeps its tags, so a restore finds the lake whole.
    *
    * Returns the files this call itself stamped, matched back by stamp equality - not the ids it
    * selected. A row another delete door claimed in between carries a different stamp and is left
@@ -2249,7 +2258,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   softDeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
-    ownerUserIds: readonly string[],
+    teardown: DataLakeTeardownScope,
     at?: Date
   ): Promise<DataLakeSweptFile[]>;
   /**
@@ -2284,11 +2293,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
   /**
-   * Member ids (including soft-deleted) under the same owner-and-no-other-lake rule as
-   * `softDeleteByDataLakeTag`: the only files a whole-lake teardown removes from the retrieval
-   * index or purges.
+   * Member ids (including soft-deleted) under the same rule as `softDeleteByDataLakeTag`: the only
+   * files a whole-lake teardown removes from the retrieval index or purges.
    */
-  findTeardownIdsByDataLakeTag(scope: DataLakeMembershipScope, ownerUserIds: readonly string[]): Promise<string[]>;
+  findTeardownIdsByDataLakeTag(scope: DataLakeMembershipScope, teardown: DataLakeTeardownScope): Promise<string[]>;
   /**
    * Members that are CURRENTLY live - the lake's membership as of now, which is what a reader
    * reconstructing membership over time has to start from. Distinct from `findIdsByDataLakeTag`

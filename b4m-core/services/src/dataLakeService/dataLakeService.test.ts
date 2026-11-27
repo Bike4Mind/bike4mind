@@ -4191,7 +4191,11 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     const adapters = makeAdapters();
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner'], expect.any(Date));
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] }),
+      expect.any(Date)
+    );
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -4283,8 +4287,15 @@ describe('deleteDataLake - only the effective owner files no other lake holds', 
 
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex } as never);
 
-    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner'], expect.any(Date));
-    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner']);
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] }),
+      expect.any(Date)
+    );
+    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] })
+    );
     expect(removalInput(retrievalIndex).fabFileIds).toEqual(['owned-file']);
   });
 
@@ -4311,6 +4322,32 @@ describe('deleteDataLake - only the effective owner files no other lake holds', 
     expect(adapters.db.fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
   });
 
+  it("keeps files another of the owner's lakes holds through its prefix, and registry prefixes", async () => {
+    const adapters = makeAdapters([]);
+    adapters.db.dataLakes.find = vi
+      .fn()
+      .mockResolvedValue([
+        lake(),
+        lake({ id: 'lake2', datalakeTag: 'datalake:beta', fileTagPrefix: 'beta:' }),
+        lake({ id: 'lake3', datalakeTag: 'datalake:no-prefix', fileTagPrefix: undefined }),
+      ]);
+    const retrievalIndex = indexPort();
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex } as never);
+
+    const teardown = adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1];
+    expect(teardown.otherLakes).toContainEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:beta',
+      fileTagPrefix: 'beta:',
+      creatorUserId: 'owner',
+    });
+    expect(teardown.otherLakes).toContainEqual(expect.objectContaining({ kind: 'registry', fileTagPrefix: 'opti:' }));
+    expect(teardown.otherLakes.map((l: { datalakeTag: string }) => l.datalakeTag)).not.toContain('datalake:lake');
+    expect(teardown.otherLakes.map((l: { datalakeTag: string }) => l.datalakeTag)).not.toContain('datalake:no-prefix');
+    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(lakeScope, teardown);
+  });
+
   it('sweeps under the transferred owner, not the creator or the curator who asked', async () => {
     const adapters = makeAdapters([
       { principalType: 'user', principalId: 'new-owner', role: 'owner' },
@@ -4321,7 +4358,7 @@ describe('deleteDataLake - only the effective owner files no other lake holds', 
 
     expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
       lakeScope,
-      ['new-owner'],
+      expect.objectContaining({ ownerUserIds: ['new-owner'] }),
       expect.any(Date)
     );
   });
@@ -4688,7 +4725,11 @@ describe('teardown stamp bookkeeping', () => {
       await deleteDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner'], undefined);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        expect.objectContaining({ ownerUserIds: ['owner'] }),
+        undefined
+      );
     });
 
     it('warns when no stamp comes back, since that lake restores unbounded', async () => {
@@ -4701,7 +4742,11 @@ describe('teardown stamp bookkeeping', () => {
 
       await deleteDataLake(owner, 'lake1', { ...adapters, logger });
 
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner'], undefined);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        expect.objectContaining({ ownerUserIds: ['owner'] }),
+        undefined
+      );
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('restore unbounded'), {
         dataLakeId: 'lake1',
       });
@@ -5125,6 +5170,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
       dataLakes: {
         findById: vi.fn().mockResolvedValue(lake({ status })),
         delete: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockResolvedValue([]),
       },
       dataLakeAccessGrants: {
         listByLake: vi.fn().mockResolvedValue([]),

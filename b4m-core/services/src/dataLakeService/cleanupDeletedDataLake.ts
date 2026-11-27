@@ -16,9 +16,10 @@ import type {
 } from '@bike4mind/common';
 import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
+import { type ManageActor } from './manageRule';
 import { loadActiveLakeGrants, resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { resolveLakeTeardownScope } from './lakeTeardownScope';
 import { lakeMembershipSignals } from './lakeMembership';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
@@ -210,8 +211,8 @@ export const cleanupDeletedDataLake = async (
   // never destroys a file phase 1 would have left live; every other member is let go in step 2b.
   // Not bounded by restore's stamp: an owner's member they deleted on their own does not outlive
   // the lake.
-  const ownerUserIds = resolveEffectiveOwnerIds(existing, await loadActiveLakeGrants(existing, { db }));
-  const fileIds = await db.fabFiles.findTeardownIdsByDataLakeTag(scope, ownerUserIds);
+  const teardown = await resolveLakeTeardownScope(existing, await loadActiveLakeGrants(existing, { db }), { db });
+  const fileIds = await db.fabFiles.findTeardownIdsByDataLakeTag(scope, teardown);
 
   // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds }, db.fabFileChunks, logger);

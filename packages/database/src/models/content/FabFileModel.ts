@@ -6,6 +6,7 @@ import {
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  DataLakeTeardownScope,
   type DataLakeMembershipFileCounts,
   type DataLakeLiveMember,
   type DataLakeSweptFile,
@@ -3533,11 +3534,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async softDeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
-    ownerUserIds: readonly string[],
+    teardown: DataLakeTeardownScope,
     at: Date = new Date()
   ): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
-      { ...buildDataLakeTeardownFilter(scope, ownerUserIds), deletedAt: null },
+      { ...buildDataLakeTeardownFilter(scope, teardown), deletedAt: null },
       { _id: 1, userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
@@ -3669,10 +3670,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async findTeardownIdsByDataLakeTag(
     scope: DataLakeMembershipScope,
-    ownerUserIds: readonly string[]
+    teardown: DataLakeTeardownScope
   ): Promise<string[]> {
     const docs = await this.fabFileModel
-      .find(buildDataLakeTeardownFilter(scope, ownerUserIds), { _id: 1 })
+      .find(buildDataLakeTeardownFilter(scope, teardown), { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }
