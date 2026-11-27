@@ -176,7 +176,10 @@ export class HostLink {
     return this.control.request(method, params);
   }
 
-  /** Opens a further connection for a window and checks its protocol; rejects with HostConnectError. */
+  /**
+   * Opens a further connection for a window and checks its protocol; rejects with HostConnectError,
+   * or HostNeedsUserError when the connector finds the host needs an install or update first.
+   */
   async openClient(): Promise<HostTransport> {
     const transport = await this.openTransport();
     const handshake = await initializeHost(transport, this.options.client, this.options.tuning.requestTimeoutMs);

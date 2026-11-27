@@ -25,7 +25,8 @@ export default defineConfig(({ mode }) => {
       'process.env.B4M_DEFAULT_API_URL': JSON.stringify(
         baked(mode, 'B4M_DEFAULT_API_URL') || (mode === 'development' ? '' : PRODUCTION_API_URL)
       ),
-      __B4M_HOST_VERSION__: JSON.stringify(devVersionInfo().version || packageVersion),
+      // Packaging passes the app's own version (scripts/host-artifact.cjs), so host and Desktop always match.
+      __B4M_HOST_VERSION__: JSON.stringify(process.env.B4M_HOST_VERSION || devVersionInfo().version || packageVersion),
     },
     ssr: { noExternal: true, target: 'node' },
     build: {

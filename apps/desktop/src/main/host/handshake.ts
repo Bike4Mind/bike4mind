@@ -27,6 +27,20 @@ const tooOldDesktop = (detail: string): ConnectOutcome => ({
   state: { status: 'failed', failure: { kind: 'protocolMismatch', detail, stderrTail: '' } },
 });
 
+/** A state that waits for the user to install or update the host program. */
+export type HostNeedsUserState = Extract<HostConnectionState, { status: 'needsInstall' | 'needsUpdate' }>;
+
+/**
+ * A connector's rejection when the machine needs the user first: the host program is missing, or
+ * is another version and updating it is the user's call (see HostProvisioner). Never retried.
+ */
+export class HostNeedsUserError extends Error {
+  constructor(readonly state: HostNeedsUserState) {
+    super(`Host is ${state.status}`);
+    this.name = 'HostNeedsUserError';
+  }
+}
+
 /** Maps a connector's failure to what happens next. Transient failures retry; the rest need the user. */
 export function outcomeForFailure(failure: HostConnectFailure): ConnectOutcome {
   switch (failure.kind) {
@@ -50,6 +64,7 @@ export function outcomeForFailure(failure: HostConnectFailure): ConnectOutcome {
 /** Anything a connector or a handshake throws, as an outcome. An unexpected error is a lost link, so it retries. */
 export function outcomeForError(error: unknown): ConnectOutcome {
   if (error instanceof HostConnectError) return outcomeForFailure(error.failure);
+  if (error instanceof HostNeedsUserError) return { retry: false, state: error.state };
   if (error instanceof HostRequestError && error.code === HOST_ERROR_CODES.protocolMismatch) {
     const data = protocolMismatchData.safeParse(error.data);
     if (data.success && data.data.reason === 'client-too-old') {
