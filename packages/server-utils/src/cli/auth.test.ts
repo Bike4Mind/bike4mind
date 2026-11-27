@@ -748,6 +748,30 @@ describe('verifyApiKey scope gate', () => {
   });
 });
 
+describe('verifyApiKey MCP keys', () => {
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('refuses an MCP key with a 403', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      isValid: true,
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.ME_READ],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+      explicitScopeOnly: true,
+    });
+    const rejection = verifyApiKey({});
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 403 });
+    expect(vi.mocked(userApiKeyService.validateUserApiKey).mock.calls[0][2]).toMatchObject({ recordUse: false });
+  });
+});
+
 describe('verifyApiKey exchange keys', () => {
   const exchangeKey = {
     isValid: true,

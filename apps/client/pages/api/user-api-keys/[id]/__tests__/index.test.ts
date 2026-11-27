@@ -203,6 +203,12 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     expect(updateEmbedKey).not.toHaveBeenCalled();
   });
 
+  it('does not update an MCP key flag or ceiling: a body carrying only them is nothing to update', async () => {
+    const { req, res } = patch('key-1', { exposureCeiling: 'public', explicitScopeOnly: false });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Nothing to update/i);
+    expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing key id with 400', async () => {
     const { req, res } = patch(undefined, { agentId: 'agent-2' });
     await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid key ID/i);

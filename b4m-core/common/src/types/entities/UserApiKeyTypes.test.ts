@@ -8,6 +8,8 @@ import {
   isBuiltInApiKeyScope,
   isMintableConfinedScopeSet,
   isWellFormedApiKeyScope,
+  MCP_API_KEY_SCOPES,
+  MCP_FORBIDDEN_API_KEY_SCOPES,
 } from './UserApiKeyTypes';
 
 /**
@@ -214,5 +216,18 @@ describe('public API reference scope classification', () => {
     for (const scope of CONFINED_API_KEY_SCOPES.filter(s => !customerMinted.includes(s))) {
       expect(PUBLIC_DOC_API_KEY_SCOPES).not.toContain(scope);
     }
+  });
+});
+
+describe('MCP key scopes', () => {
+  it('forbids nothing the allowlist grants', () => {
+    const allowed = MCP_API_KEY_SCOPES as readonly string[];
+    expect(MCP_FORBIDDEN_API_KEY_SCOPES.filter(scope => allowed.includes(scope))).toEqual([]);
+  });
+
+  it('lets an MCP key hold functions scopes beside ordinary ones, which a dashboard key cannot', () => {
+    const scopes = [ApiKeyScope.ME_READ, ApiKeyScope.FUNCTIONS_INVOKE];
+    expect(isMintableConfinedScopeSet(scopes, { explicitScopeOnly: true })).toBe(true);
+    expect(isMintableConfinedScopeSet(scopes)).toBe(false);
   });
 });

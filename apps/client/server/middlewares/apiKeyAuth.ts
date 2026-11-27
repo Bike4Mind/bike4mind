@@ -157,7 +157,7 @@ export const apiKeyAuth = (
       const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
       const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
         grandfathered,
-        exchangeKey: !!validation.oauthExchangeClientId,
+        explicitScopeOnly: !!validation.oauthExchangeClientId || !!validation.explicitScopeOnly,
       });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
@@ -294,6 +294,7 @@ export const apiKeyAuth = (
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
         createdAt: validation.createdAt,
         oauthExchangeClientId: validation.oauthExchangeClientId,
+        explicitScopeOnly: validation.explicitScopeOnly,
         payerStanding: validation.payerStanding,
       };
 

@@ -617,3 +617,18 @@ describe('validateUserApiKey - exchange key marker', () => {
     expect(result.oauthExchangeClientId).toBeUndefined();
   });
 });
+
+describe('validateUserApiKey - MCP key flag', () => {
+  async function validateWithFlag(explicitScopeOnly: boolean | undefined) {
+    const { repo, getStored } = makeSyncedRepo();
+    const adapters = { db: { userApiKeys: repo as unknown as IUserApiKeyRepository } };
+    const { key } = await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    getStored()!.explicitScopeOnly = explicitScopeOnly;
+    return validateUserApiKey(key, adapters);
+  }
+
+  it('carries the flag for an MCP key and nothing for an ordinary one', async () => {
+    expect((await validateWithFlag(true)).explicitScopeOnly).toBe(true);
+    expect((await validateWithFlag(undefined)).explicitScopeOnly).toBeUndefined();
+  });
+});
