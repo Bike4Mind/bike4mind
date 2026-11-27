@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import type { HostEntry } from '@shared/hostConnection';
 import { fakeHostInfo } from '../__fixtures__/chatBackedHostBridge';
-import { createHostRegistry, hostCapabilities, isServingHost, servingHostIds } from './hostRegistry';
+import { createHostRegistry, hostCapabilities, servingHostIds } from './hostRegistry';
 
 const local: HostEntry = {
   hostId: LOCAL_HOST_ID,
@@ -21,9 +21,7 @@ const devbox = (connected: boolean): HostEntry => ({
 
 describe('host helpers', () => {
   it('always serves the local host, and a remote one only while connected', () => {
-    expect(isServingHost(LOCAL_HOST_ID, [])).toBe(true);
-    expect(isServingHost('devbox', [local, devbox(true)])).toBe(true);
-    expect(isServingHost('devbox', [local, devbox(false)])).toBe(false);
+    expect(servingHostIds([])).toEqual([LOCAL_HOST_ID]);
     expect(servingHostIds([local, devbox(true)])).toEqual([LOCAL_HOST_ID, 'devbox']);
     expect(servingHostIds([local, devbox(false)])).toEqual([LOCAL_HOST_ID]);
   });

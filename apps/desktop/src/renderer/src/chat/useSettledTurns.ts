@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChatSessionStatusEvent } from '@shared/chat';
 import { hostClient } from '../host/HostClient';
 import { useServingHostIds } from '../host/hostRegistry';
@@ -12,35 +12,45 @@ import { useHostResync } from '../host/useSessionEvents';
 export function useSettledTurns(): number {
   const servingHosts = useServingHostIds();
   const [settled, setSettled] = useState(0);
-  // Bumped by a resync. A turn may have settled unheard, and an idle session is not in
-  // session/statuses, so a resync counts as one; the counters are then read again.
-  const [reads, setReads] = useState(0);
-  useHostResync(() => {
-    setReads(count => count + 1);
-    setSettled(count => count + 1);
-  });
   const counters = useRef(new SettledTurnCounters());
 
+  useEffect(
+    () =>
+      hostClient.onNotification('session/statusChanged', ({ event }, hostId) => {
+        if (counters.current.observe(hostId, event)) setSettled(count => count + 1);
+      }),
+    []
+  );
+
+  // Each host's counters are read when it joins and after its own resync, never because another
+  // host joined or left. A read overtaken by a newer one for its host is dropped.
+  const reads = useRef(new Map<string, number>());
+  const readHost = useCallback((hostId: string) => {
+    const ticket = (reads.current.get(hostId) ?? 0) + 1;
+    reads.current.set(hostId, ticket);
+    void hostClient
+      .request(hostId, 'session/statuses')
+      .then(({ statuses }) => {
+        if (reads.current.get(hostId) !== ticket) return;
+        for (const event of statuses) counters.current.observe(hostId, event);
+      })
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
-    let live = true;
-    const seen = counters.current;
-    const off = hostClient.onNotification('session/statusChanged', ({ event }, hostId) => {
-      if (seen.observe(hostId, event)) setSettled(count => count + 1);
-    });
-    for (const hostId of servingHosts) {
-      void hostClient
-        .request(hostId, 'session/statuses')
-        .then(({ statuses }) => {
-          if (!live) return;
-          for (const event of statuses) seen.observe(hostId, event);
-        })
-        .catch(() => undefined);
-    }
-    return () => {
-      live = false;
-      off();
-    };
-  }, [reads, servingHosts]);
+    const wanted = new Set(servingHosts);
+    for (const hostId of [...reads.current.keys()]) if (!wanted.has(hostId)) reads.current.delete(hostId);
+    for (const hostId of servingHosts) if (!reads.current.has(hostId)) readHost(hostId);
+  }, [servingHosts, readHost]);
+
+  // A turn may have settled unheard, and an idle session is not in session/statuses, so a resync
+  // counts as one; that host's counters are then read again.
+  useHostResync(hostId => {
+    setSettled(count => count + 1);
+    if (reads.current.has(hostId)) readHost(hostId);
+  });
+
+  useEffect(() => () => reads.current.clear(), []);
 
   return settled;
 }

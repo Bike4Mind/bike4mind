@@ -7,6 +7,11 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { chatBackedHostBridge, type FakeRemoteHostOptions } from '../__fixtures__/chatBackedHostBridge';
 import { sessionDirectory, summaryHostId } from '../host/sessionDirectory';
 import { sessionListCache } from '../host/sessionListCache';
+import { sessionHostMemory } from '../host/sessionHostMemory';
+import { useSessionCapabilities } from '../host/sessionCapabilities';
+import { SESSION_PAGE_SIZE } from '@shared/sessionPage';
+import { useTaskDecisions } from './TaskDecisionCards';
+import { useSettledTurns } from './useSettledTurns';
 import { groupSessions } from './grouping';
 import { useConversation, useSessions, type ConversationController, type SessionsController } from './useChat';
 
@@ -25,6 +30,14 @@ const summary = (id: string, directory: string, updatedAt = '2026-10-01T00:00:00
     project: { directory, name: directory.split('/').pop() ?? directory, branch: 'main' },
   }) as ChatSessionSummary;
 
+const HOUR_MS = 3_600_000;
+const T0 = Date.UTC(2026, 9, 10);
+/** `count` rows on `directory`, newest first, `stepMs` apart from T0 back. */
+const rowsEvery = (prefix: string, directory: string, count: number, stepMs: number): ChatSessionSummary[] =>
+  Array.from({ length: count }, (_, index) =>
+    summary(`${prefix}-${index}`, directory, new Date(T0 - index * stepMs).toISOString())
+  );
+
 const remoteSession = (id: string): ChatSession =>
   ({
     id,
@@ -38,7 +51,12 @@ const remoteSession = (id: string): ChatSession =>
   }) as ChatSession;
 
 /** Both hosts list a session in /work/repo; ids are unique per test, as the directory is shared. */
-function stubTwoHosts(prefix: string, remote: Partial<FakeRemoteHostOptions> = {}) {
+function stubTwoHosts(
+  prefix: string,
+  remote: Partial<FakeRemoteHostOptions> = {},
+  chat: Record<string, unknown> = {},
+  localRows?: ChatSessionSummary[]
+) {
   const localRow = summary(`${prefix}-local`, '/work/repo', '2026-10-02T00:00:00.000Z');
   const remoteRow = summary(`${prefix}-remote`, '/work/repo');
   const bridge = chatBackedHostBridge({
@@ -58,10 +76,11 @@ function stubTwoHosts(prefix: string, remote: Partial<FakeRemoteHostOptions> = {
   vi.stubGlobal('b4m', {
     host: bridge,
     chat: {
-      listSessions: async () => [localRow],
+      listSessions: async () => localRows ?? [localRow],
       getSession: vi.fn(async () => null),
       getQueuedMessages: async () => [],
       onStreamEvent: () => () => undefined,
+      ...chat,
     },
     claudeImport: { onSessionsChanged: () => () => undefined },
   });
@@ -180,5 +199,122 @@ describe('sessions on a second host', () => {
       remote.emitStreamEvent(event(2, { type: 'phase', phase: { kind: 'responding' } }));
     });
     expect(JSON.stringify(conversation().messages)).toContain('from the devbox');
+  });
+
+  it('asks a remembered remote session of its own host, past that host first page', async () => {
+    const deep = rowsEvery('remembered', '/srv/api', SESSION_PAGE_SIZE + 1, HOUR_MS);
+    const target = deep[SESSION_PAGE_SIZE];
+    sessionHostMemory.remember(target.id, DEVBOX);
+    const { remote } = stubTwoHosts('remembered', { sessions: deep });
+    const sessions = await render<SessionsController>(() => useSessions([target.id]));
+
+    expect(sessions().sessions.find(row => row.id === target.id)?.hostId).toBe(DEVBOX);
+    const firstListing = remote.requests.find(request => request.method === 'session/page');
+    expect(firstListing?.params.include).toEqual([target.id]);
+  });
+
+  it('asks a host that connects later for a kept session no host has listed', async () => {
+    const deep = rowsEvery('late', '/srv/api', SESSION_PAGE_SIZE + 1, HOUR_MS);
+    const target = deep[SESSION_PAGE_SIZE];
+    const { remote } = stubTwoHosts('late', { sessions: deep, connected: false });
+    const sessions = await render<SessionsController>(() => useSessions([target.id]));
+    expect(sessions().sessions.some(row => row.id === target.id)).toBe(false);
+
+    await act(async () => remote.setConnected(true));
+    await act(async () => undefined);
+    expect(sessions().sessions.find(row => row.id === target.id)?.hostId).toBe(DEVBOX);
+  });
+
+  it('marks a host still connecting at launch as pending, not stale, until it lists or fails', async () => {
+    const { remote, remoteRow } = stubTwoHosts('pending', { connected: 'connecting' });
+    const sessions = await render<SessionsController>(() => useSessions());
+    expect(sessions().hostListings.get(DEVBOX)).toBe('pending');
+
+    await act(async () => remote.setConnected(true));
+    await act(async () => undefined);
+    expect(sessions().hostListings.get(DEVBOX)).toBe('live');
+    expect(sessions().sessions.some(row => row.id === remoteRow.id)).toBe(true);
+
+    await act(async () => remote.setConnected(false));
+    await act(async () => remote.setConnected('connecting'));
+    expect(sessions().hostListings.get(DEVBOX)).toBe('stale');
+  });
+
+  it('marks a host that fails to connect at launch as stale', async () => {
+    const { remote } = stubTwoHosts('nolink', { connected: 'connecting' });
+    const sessions = await render<SessionsController>(() => useSessions());
+    await act(async () => remote.setConnected(false));
+    expect(sessions().hostListings.get(DEVBOX)).toBe('stale');
+  });
+
+  it('pages two hosts of different density without a hole in the merged list', async () => {
+    // A busy local host: a session a minute. A quiet remote one: a session an hour.
+    const local = rowsEvery('dense', '/work/repo', SESSION_PAGE_SIZE + 50, 60_000);
+    const quiet = rowsEvery('sparse', '/srv/api', SESSION_PAGE_SIZE + 50, HOUR_MS);
+    const { remote } = stubTwoHosts('density', { sessions: quiet }, {}, local);
+    const sessions = await render<SessionsController>(() => useSessions());
+    const everything = [...local, ...quiet];
+    const gapFree = () => {
+      const shown = sessions().sessions;
+      const oldest = shown.at(-1)?.updatedAt ?? '';
+      const expected = everything.filter(row => row.updatedAt >= oldest).map(row => row.id);
+      expect(new Set(shown.map(row => row.id))).toEqual(new Set(expected));
+    };
+
+    gapFree();
+    expect(sessions().sessions.filter(row => row.hostId === DEVBOX)).toHaveLength(2);
+
+    const remotePages = () => remote.requests.filter(request => request.method === 'session/page').length;
+    const before = remotePages();
+    await act(async () => sessions().loadMore());
+    await act(async () => undefined);
+    gapFree();
+    expect(remotePages()).toBe(before);
+    expect(sessions().sessions.filter(row => !row.hostId)).toHaveLength(local.length);
+
+    await act(async () => sessions().loadMore());
+    await act(async () => undefined);
+    gapFree();
+    expect(sessions().sessions).toHaveLength(everything.length);
+  });
+
+  it('moves the capability gate once the directory learns a session is remote', async () => {
+    stubTwoHosts('gate');
+    const capabilities = await render(() => useSessionCapabilities('gate-learned-later'));
+    expect(capabilities().desktopChat).toBe(true);
+
+    await act(async () => {
+      sessionDirectory.record(DEVBOX, ['gate-learned-later']);
+    });
+    expect(capabilities().desktopChat).toBe(false);
+  });
+
+  it('reads statuses and task decisions only from a host that joins, not again from the others', async () => {
+    const getSessionStatuses = vi.fn(async () => []);
+    const listTaskDecisions = vi.fn(async () => []);
+    const { remote } = stubTwoHosts(
+      'feeds',
+      { connected: false },
+      { getSessionStatuses, listTaskDecisions, onTaskDecisions: () => () => undefined }
+    );
+    await render(() => [useSettledTurns(), useTaskDecisions()]);
+    expect(getSessionStatuses).toHaveBeenCalledTimes(1);
+    expect(listTaskDecisions).toHaveBeenCalledTimes(1);
+
+    await act(async () => remote.setConnected(true));
+    await act(async () => remote.setConnected(false));
+    await act(async () => remote.setConnected(true));
+    await act(async () => undefined);
+    expect(getSessionStatuses).toHaveBeenCalledTimes(1);
+    expect(listTaskDecisions).toHaveBeenCalledTimes(1);
+    const remoteReads = remote.requests.filter(
+      request => request.method === 'session/statuses' || request.method === 'taskDecision/list'
+    );
+    expect(remoteReads.map(request => request.method).sort()).toEqual([
+      'session/statuses',
+      'session/statuses',
+      'taskDecision/list',
+      'taskDecision/list',
+    ]);
   });
 });

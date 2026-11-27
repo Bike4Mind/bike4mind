@@ -9,6 +9,10 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
  */
 export class SessionDirectory {
   private readonly hosts = new Map<string, string>();
+  // Where a session was last seen, from before any host listed it this run (see expect).
+  private readonly expected = new Map<string, string>();
+  private readonly listeners = new Set<() => void>();
+  private notifyScheduled = false;
 
   constructor(
     private readonly reportClash: (sessionId: string, kept: string, refused: string) => void = (
@@ -21,28 +25,75 @@ export class SessionDirectory {
   /** Records that `hostId` lists these sessions; returns the ids it refused because another host holds them. */
   record(hostId: string, sessionIds: Iterable<string>): Set<string> {
     const refused = new Set<string>();
+    let changed = false;
     for (const sessionId of sessionIds) {
       const known = this.hosts.get(sessionId);
-      if (known === undefined) this.hosts.set(sessionId, hostId);
-      else if (known !== hostId) {
+      if (known === undefined) {
+        changed ||= this.expected.get(sessionId) !== hostId;
+        this.hosts.set(sessionId, hostId);
+        this.expected.delete(sessionId);
+      } else if (known !== hostId) {
         refused.add(sessionId);
         this.reportClash(sessionId, known, hostId);
       }
     }
+    if (changed) this.notify();
     return refused;
   }
 
+  /**
+   * Notes where a session is expected to be before any host has listed it (a session remembered
+   * from the last run), so its requests go there. A listing that finds it elsewhere overrides this
+   * without a clash.
+   */
+  expect(hostId: string, sessionIds: Iterable<string>): void {
+    let changed = false;
+    for (const sessionId of sessionIds) {
+      if (this.hosts.has(sessionId) || this.expected.get(sessionId) === hostId) continue;
+      this.expected.set(sessionId, hostId);
+      changed = true;
+    }
+    if (changed) this.notify();
+  }
+
+  /** The host a session is on, or expected on; undefined for one no host has listed or been expected to. */
   hostOf(sessionId: string): string | undefined {
-    return this.hosts.get(sessionId);
+    return this.hosts.get(sessionId) ?? this.expected.get(sessionId);
   }
 
   forget(sessionIds: Iterable<string>): void {
-    for (const sessionId of sessionIds) this.hosts.delete(sessionId);
+    let changed = false;
+    for (const sessionId of sessionIds) {
+      changed = this.hosts.delete(sessionId) || changed;
+      changed = this.expected.delete(sessionId) || changed;
+    }
+    if (changed) this.notify();
   }
 
   /** Drops every session of a host that was removed. */
   forgetHost(hostId: string): void {
+    const before = this.hosts.size + this.expected.size;
     for (const [sessionId, owner] of this.hosts) if (owner === hostId) this.hosts.delete(sessionId);
+    for (const [sessionId, owner] of this.expected) if (owner === hostId) this.expected.delete(sessionId);
+    if (this.hosts.size + this.expected.size !== before) this.notify();
+  }
+
+  /**
+   * Called after the directory learns or loses a session's host. Batched to a microtask: rows are
+   * recorded inside state updaters, where re-rendering a subscriber synchronously is not allowed.
+   */
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  private notify(): void {
+    if (this.notifyScheduled) return;
+    this.notifyScheduled = true;
+    queueMicrotask(() => {
+      this.notifyScheduled = false;
+      for (const listener of this.listeners) listener();
+    });
   }
 }
 

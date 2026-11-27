@@ -69,16 +69,6 @@ export function createHostRegistry(
 
 export const hostRegistry: HostRegistry = createHostRegistry(() => window.b4m.host);
 
-/**
- * Whether session requests go to `hostId` now. The local host always serves: its calls go out
- * before main's first host list answers, exactly as they did before hosts were listed. A remote
- * host serves only while `connected`; any other state answers capabilityUnavailable.
- */
-export function isServingHost(hostId: string, entries: readonly HostEntry[]): boolean {
-  if (hostId === LOCAL_HOST_ID) return true;
-  return entries.some(entry => entry.hostId === hostId && entry.state.status === 'connected');
-}
-
 /** The local host first, then each connected remote host in main's order. */
 export function servingHostIds(entries: readonly HostEntry[]): string[] {
   const remote = entries

@@ -11,6 +11,7 @@ import {
   parentHints,
   projectForGroup,
   projectGroupDirectory,
+  projectKeyOf,
   QUICK_SWITCH_LIMIT,
 } from './grouping';
 import { capRows, GROUP_ROW_CAP, GROUP_ROW_STEP, groupLimit, setGroupLimit } from './groupCap';
@@ -605,5 +606,15 @@ describe('nestedSessionsOf', () => {
   it('terminates on a corrupt origin cycle', () => {
     const sessions = [session({ id: 'a', origin: origin('b') }), session({ id: 'b', origin: origin('a') })];
     expect(nestedSessionsOf(sessions, 'a').map(found => found.id)).toEqual(['b']);
+  });
+});
+
+describe('projectKeyOf', () => {
+  const repo = project('/work/repo', 'repo');
+
+  it('keys a local project by its bare directory, as saved prefs were, and a remote one by host too', () => {
+    expect(projectKeyOf(LOCAL_HOST_ID, repo)).toBe('/work/repo');
+    expect(projectKeyOf('devbox', repo)).toBe('devbox\n/work/repo');
+    expect(projectKeyOf('devbox', repo)).not.toBe(projectKeyOf('nas', repo));
   });
 });

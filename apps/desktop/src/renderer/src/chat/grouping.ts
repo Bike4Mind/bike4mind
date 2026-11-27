@@ -282,6 +282,11 @@ export function projectGroupKey(hostId: string, directory: string): string {
   return hostId === LOCAL_HOST_ID ? directory : `${hostId}\n${directory}`;
 }
 
+/** The key of the sidebar group a project on `hostId` falls in; see projectGroupKey. */
+export function projectKeyOf(hostId: string, project: ChatProject): string {
+  return projectGroupKey(hostId, projectGroupDirectory(project));
+}
+
 /** The most recent session's project for a sidebar group on `hostId`, including grouped Claude worktrees. */
 export function projectForGroup(
   sessions: readonly ChatSessionSummary[],

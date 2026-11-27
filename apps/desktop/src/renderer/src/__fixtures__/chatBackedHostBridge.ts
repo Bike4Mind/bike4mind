@@ -204,8 +204,8 @@ export type FakeRemoteHostOptions = {
   /** What its `session/page` lists. */
   sessions?: readonly ChatSessionSummary[];
   statuses?: readonly ChatSessionStatusEvent[];
-  /** Starts connected unless false. */
-  connected?: boolean;
+  /** Starts connected unless false; 'connecting' is a host main is still reaching. */
+  connected?: boolean | 'connecting';
   /** Methods it fails with an internal error while connected. */
   failing?: readonly string[];
   /** Answers any other method; undefined fails it as one the host does not serve. */
@@ -218,7 +218,9 @@ export type FakeRemoteHost = {
   /** Every request sent to it, in order. */
   readonly requests: { method: string; params: Record<string, unknown> }[];
   sessions: ChatSessionSummary[];
-  setConnected(connected: boolean): void;
+  setConnected(connected: boolean | 'connecting'): void;
+  /** Holds every `method` request until the returned release is called. */
+  hold(method: string): () => void;
   /** A notification from this host, delivered as its bridge would. */
   notify(method: string, params: unknown): void;
   /** A live event on one of its sessions, numbered per session and sent only while subscribed. */
@@ -396,7 +398,8 @@ function createFakeRemote(
   announce: () => void
 ) {
   const { hostId } = options;
-  let connected = options.connected !== false;
+  let state: boolean | 'connecting' = options.connected ?? true;
+  const held = new Map<string, Promise<void>>();
   const seqs = new Map<string, number>();
   const subscribed = new Set<string>();
   const controls: FakeRemoteHost = {
@@ -404,10 +407,18 @@ function createFakeRemote(
     requests: [],
     sessions: [...(options.sessions ?? [])],
     setConnected(next) {
-      if (next === connected) return;
-      connected = next;
-      if (!next) subscribed.clear();
+      if (next === state) return;
+      state = next;
+      if (next !== true) subscribed.clear();
       announce();
+    },
+    hold(method) {
+      let release = () => {};
+      held.set(method, new Promise<void>(resolve => (release = resolve)));
+      return () => {
+        held.delete(method);
+        release();
+      };
     },
     notify(method, params) {
       deliver({ hostId, notification: hostNotification(method, params) });
@@ -425,13 +436,18 @@ function createFakeRemote(
     hostId,
     label: options.label ?? hostId,
     kind: 'remote',
-    state: connected
-      ? { status: 'connected', info: fakeHostInfo(hostId, options.capabilities), latencyMs: 1 }
-      : { status: 'offline', reason: 'unreachable', lastSeenAt: null },
+    state:
+      state === true
+        ? { status: 'connected', info: fakeHostInfo(hostId, options.capabilities), latencyMs: 1 }
+        : state === 'connecting'
+          ? { status: 'connecting' }
+          : { status: 'offline', reason: 'unreachable', lastSeenAt: null },
   });
   const request = async (method: string, params: Record<string, unknown>): Promise<HostBridgeResponse> => {
     controls.requests.push({ method, params });
-    if (!connected) {
+    const gate = held.get(method);
+    if (gate) await gate;
+    if (state !== true) {
       return { ok: false, error: { code: HOST_ERROR_CODES.capabilityUnavailable, message: `${hostId} is offline` } };
     }
     if (options.failing?.includes(method)) {

@@ -3,7 +3,7 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import type { HostEntry } from '@shared/hostConnection';
 import { hasHostCapability } from '@shared/hostProtocol';
 import { hostCapabilities, hostRegistry, type HostRegistry } from './hostRegistry';
-import { hostForSession } from './sessionHost';
+import { useSessionHost } from './sessionHost';
 
 /**
  * Which session controls can work for a session, by the path their calls take. The one place that
@@ -78,7 +78,10 @@ export function useHostSessionCapabilities(hostId: string, registry: HostRegistr
   return useMemo(() => capabilitiesOn(hostId, advertised ? advertised.split('\n') : []), [hostId, advertised]);
 }
 
-/** useHostSessionCapabilities for a session known by id (a listed session or a draft); with none, the local host's. */
+/**
+ * useHostSessionCapabilities for a session known by id (a listed session or a draft); with none, the
+ * local host's. Follows the session directory, so the gate moves once a session's host is learned.
+ */
 export function useSessionCapabilities(sessionId: string | null | undefined): SessionCapabilities {
-  return useHostSessionCapabilities(hostForSession(sessionId ?? undefined));
+  return useHostSessionCapabilities(useSessionHost(sessionId));
 }

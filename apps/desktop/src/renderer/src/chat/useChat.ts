@@ -34,13 +34,24 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { hostClient } from '../host/HostClient';
 import { sessionEvents } from '../host/sessionEvents';
 import { hostForSession } from '../host/sessionHost';
-import { useRemoteHostIds, useServingHostIds } from '../host/hostRegistry';
+import { useHostEntries, useRemoteHostIds, useServingHostIds } from '../host/hostRegistry';
 import { receiveRows, sessionDirectory, summaryHostId, withHostStamp } from '../host/sessionDirectory';
 import { sessionListCache } from '../host/sessionListCache';
+import { sessionHostMemory } from '../host/sessionHostMemory';
 import { useHostResync } from '../host/useSessionEvents';
 import { useSettledTurns } from './useSettledTurns';
 import { SESSION_PAGE_MAX_LIMIT, SESSION_PAGE_SIZE, SESSION_SEARCH_LIMIT } from '@shared/sessionPage';
-import { byUpdatedDesc, keepRequest, sessionsFromPage, withRows, type SessionPaging } from './sessionPages';
+import {
+  byUpdatedDesc,
+  keepRequest,
+  laggingHosts,
+  mergeHostRows,
+  NO_PAGING,
+  pagedThrough,
+  sessionsFromPage,
+  withRows,
+  type SessionPaging,
+} from './sessionPages';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
@@ -166,24 +177,14 @@ const noticeText = (notices: ContextNotice[]): string | null =>
 export type HostListingState =
   /** Asked for and not answered yet; a remote host may show cached rows meanwhile. */
   | 'loading'
+  /** A remote host still connecting that has not been listed since launch; its cached rows show. */
+  | 'pending'
   /** Answered by the host, and kept current by its pushes. */
   | 'live'
   /** The host is not connected: its rows are the last list it served, cached. */
   | 'stale';
 
-const NO_SESSIONS: ChatSessionSummary[] = [];
-
-/**
- * Every host's rows as one list. One host's rows are returned as they are, so with only the local
- * host the list is exactly the one it serves; several are merged newest first, which is the order
- * each host lists its own in.
- */
-function mergeHostRows(byHost: ReadonlyMap<string, ChatSessionSummary[]>): ChatSessionSummary[] {
-  const lists = [...byHost.values()].filter(rows => rows.length > 0);
-  if (lists.length === 0) return NO_SESSIONS;
-  if (lists.length === 1) return lists[0];
-  return lists.flat().sort(byUpdatedDesc);
-}
+const askKey = (hostId: string, sessionId: string): string => `${hostId}\n${sessionId}`;
 
 /** A summary a host just returned, stamped with the host its session lives on. */
 const stamped = (summary: ChatSessionSummary): ChatSessionSummary => withHostStamp(summary, hostForSession(summary.id));
@@ -200,8 +201,19 @@ const stamped = (summary: ChatSessionSummary): ChatSessionSummary => withHostSta
  * is how every per-session call finds its host.
  */
 export function useSessions(keepIds: readonly string[] = []): SessionsController {
+  // Sessions remembered from the last run are asked of the host they were on, before any listing.
+  const seededHosts = useRef(false);
+  if (!seededHosts.current) {
+    seededHosts.current = true;
+    for (const [sessionId, hostId] of sessionHostMemory.read()) sessionDirectory.expect(hostId, [sessionId]);
+  }
   const servingHosts = useServingHostIds();
   const remoteHosts = useRemoteHostIds();
+  const hostEntries = useHostEntries();
+  const connectingKey = hostEntries
+    .filter(entry => entry.kind === 'remote' && entry.state.status === 'connecting')
+    .map(entry => entry.hostId)
+    .join('\n');
   const servingRef = useRef(servingHosts);
   servingRef.current = servingHosts;
   const [rowsByHost, setRowsByHost] = useState<ReadonlyMap<string, ChatSessionSummary[]>>(() => new Map());
@@ -220,7 +232,11 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   const [renameError, setRenameError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const sessions = useMemo(() => mergeHostRows(rowsByHost), [rowsByHost]);
+  const keepKey = keepIds.join('\n');
+  const sessions = useMemo(
+    () => mergeHostRows(rowsByHost, pagingByHost, servingHosts, new Set(keepKey ? keepKey.split('\n') : [])),
+    [rowsByHost, pagingByHost, servingHosts, keepKey]
+  );
   const loading = listings.get(LOCAL_HOST_ID) === 'loading';
 
   const setHostRows = useCallback((hostId: string, rows: ChatSessionSummary[]) => {
@@ -237,6 +253,10 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   }, []);
 
   const latestReload = useRef(new Map<string, number>());
+  // Kept ids each host has been asked for, as `${hostId}\n${id}`; see the keepIds effect below.
+  const askedFor = useRef(new Set<string>());
+  // Remote hosts that have answered a listing since launch; one that has not is 'pending' while it connects.
+  const answeredRemote = useRef(new Set<string>());
   // A listing or page still in flight when its host is removed must not bring the host back.
   const removedHosts = useRef(new Set<string>());
   const latestListing = useRef(new Map<string, Promise<void>>());
@@ -254,7 +274,13 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
     // request cap the list is cut back to it, so a very deep scroll resets on the next reload.
     const loaded = pagingRef.current.get(hostId)?.loaded ?? 0;
     const limit = Math.min(Math.max(SESSION_PAGE_SIZE, loaded), SESSION_PAGE_MAX_LIMIT);
-    const include = keepRequest(keep.current.filter(id => hostForSession(id) === hostId));
+    // An id no host has listed yet is asked of every host; the one that holds it lists it.
+    const include = keepRequest(
+      keep.current.filter(id => {
+        const owner = sessionDirectory.hostOf(id);
+        return owner === undefined || owner === hostId;
+      })
+    );
     const listing = (async (): Promise<void> => {
       const page = await hostClient.request(hostId, 'session/page', { limit, cursor: null, include });
       if (ticket !== latestReload.current.get(hostId)) return latestListing.current.get(hostId);
@@ -262,7 +288,9 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       if (removedHosts.current.has(hostId)) return;
       const rows = receiveRows(hostId, sessionsFromPage(page));
       setHostRows(hostId, rows);
-      setHostPaging(hostId, { loaded: page.sessions.length, nextCursor: page.nextCursor, total: page.total });
+      setHostPaging(hostId, pagedThrough(NO_PAGING, page));
+      for (const id of include) askedFor.current.add(askKey(hostId, id));
+      if (hostId !== LOCAL_HOST_ID) answeredRemote.current.add(hostId);
       setListing(hostId, 'live');
       if (hostId !== LOCAL_HOST_ID) sessionListCache.write(hostId, rows);
     })();
@@ -321,11 +349,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
         if (removedHosts.current.has(hostId)) return;
         const rows = receiveRows(hostId, [...page.sessions, ...page.related]);
         setRowsByHost(current => new Map(current).set(hostId, withRows(current.get(hostId) ?? [], rows)));
-        setHostPaging(hostId, {
-          loaded: paging.loaded + page.sessions.length,
-          nextCursor: page.nextCursor,
-          total: page.total,
-        });
+        setHostPaging(hostId, pagedThrough(paging, page));
       } catch (err) {
         // Left for the next scroll to retry; the list it already shows stays.
         console.warn('Loading more sessions failed', err);
@@ -336,44 +360,44 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
     })();
   }, []);
 
+  // Only the hosts holding the merged list back are paged: a page from one ahead of them would
+  // only add rows held back below the watermark (see mergeHostRows).
   const loadMore = useCallback(() => {
-    for (const hostId of servingRef.current) loadMoreFrom(hostId);
+    for (const hostId of laggingHosts(pagingRef.current, servingRef.current)) loadMoreFrom(hostId);
   }, [loadMoreFrom]);
 
   // A kept id outside the loaded pages (a session restored at launch, or opened from a search
-  // hit) is fetched on its own, from the host it lives on. Each id is asked for once, and never
-  // once it has been listed: a listed row that leaves the list was deleted, and must not be
-  // fetched back.
-  const keepKey = keepIds.join('\n');
-  const askedFor = useRef(new Set<string>());
-  const remoteListing = [...listings.values()].includes('loading');
+  // hit) is fetched on its own. Each host is asked once its listing has answered, so the local
+  // host never waits on a remote one: the host the directory names, or every serving host for an
+  // id none has listed (whichever holds it lists it). Each (host, id) is asked once, and never
+  // once listed: a listed row that leaves the list was deleted, and must not be fetched back.
   useEffect(() => {
-    if (loading) return;
     const listed = new Set(sessions.map(session => session.id));
     const missing = new Map<string, string[]>();
-    for (const id of keepIds) {
-      // An id no host has listed yet may still arrive with a remote host's first listing; only
-      // once none is pending does an unknown id fall back to the local host.
-      if (remoteListing && sessionDirectory.hostOf(id) === undefined) continue;
-      if (!askedFor.current.has(id) && !listed.has(id)) {
-        const hostId = hostForSession(id);
-        missing.set(hostId, [...(missing.get(hostId) ?? []), id]);
+    for (const hostId of servingHosts) {
+      if (listings.get(hostId) !== 'live') continue;
+      for (const id of keepIds) {
+        const owner = sessionDirectory.hostOf(id);
+        if (owner !== undefined && owner !== hostId) continue;
+        const key = askKey(hostId, id);
+        if (askedFor.current.has(key)) continue;
+        askedFor.current.add(key);
+        if (!listed.has(id)) missing.set(hostId, [...(missing.get(hostId) ?? []), id]);
       }
-      askedFor.current.add(id);
     }
     for (const [hostId, ids] of missing) {
-      if (!servingRef.current.includes(hostId)) continue;
       void (async () => {
         const page = await hostClient.request(hostId, 'session/page', {
           limit: 0,
           cursor: null,
           include: keepRequest(ids),
         });
+        if (removedHosts.current.has(hostId)) return;
         const rows = receiveRows(hostId, page.related);
         setRowsByHost(current => new Map(current).set(hostId, withRows(current.get(hostId) ?? [], rows)));
       })().catch(err => console.warn('Loading a session outside the loaded pages failed', err));
     }
-  }, [keepKey, loading, remoteListing, sessions]);
+  }, [keepKey, listings, sessions, servingHosts]);
 
   // Title matches across every serving host, newest first. A host that fails to answer is left
   // out of the result; only when none answers does the search fail.
@@ -406,10 +430,12 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   }, [reloadHost]);
 
   // A remote host is listed each time it (re)connects. While it is not connected its rows stay,
-  // marked stale; before its first answer since launch they come from the cache.
+  // marked stale; before its first answer since launch they come from the cache, and while it is
+  // still connecting for that first answer it is 'pending' rather than stale.
   const listedRemote = useRef(new Set<string>());
   useEffect(() => {
     const serving = new Set(servingHosts);
+    const connecting = new Set(connectingKey ? connectingKey.split('\n') : []);
     for (const hostId of remoteHosts) {
       if (serving.has(hostId)) {
         if (listedRemote.current.has(hostId)) continue;
@@ -419,13 +445,13 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
         continue;
       }
       listedRemote.current.delete(hostId);
-      setListing(hostId, 'stale');
+      setListing(hostId, connecting.has(hostId) && !answeredRemote.current.has(hostId) ? 'pending' : 'stale');
       setRowsByHost(current => {
         if (current.has(hostId)) return current;
         return new Map(current).set(hostId, receiveRows(hostId, sessionListCache.read(hostId)));
       });
     }
-  }, [servingHosts, remoteHosts]);
+  }, [servingHosts, remoteHosts, connectingKey]);
 
   // A host that is removed takes its rows, its cache and its directory entries with it. Only a
   // host this hook has seen registered counts: the registry is empty before main first answers.
@@ -437,7 +463,9 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       registeredRemote.current.delete(hostId);
       listedRemote.current.delete(hostId);
       removedHosts.current.add(hostId);
+      answeredRemote.current.delete(hostId);
       sessionListCache.forget(hostId);
+      sessionHostMemory.forgetHost(hostId);
       sessionDirectory.forgetHost(hostId);
       setRowsByHost(current => {
         const next = new Map(current);

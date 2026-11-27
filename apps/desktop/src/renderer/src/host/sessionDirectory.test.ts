@@ -65,3 +65,48 @@ describe('receiveRows', () => {
     expect(withHostStamp(stamped, 'devbox')).toBe(stamped);
   });
 });
+
+describe('SessionDirectory expected hosts', () => {
+  it('routes an expected session to its host until a listing places it, without a clash', () => {
+    const reportClash = vi.fn();
+    const directory = new SessionDirectory(reportClash);
+    directory.expect('devbox', ['remembered']);
+    expect(directory.hostOf('remembered')).toBe('devbox');
+
+    expect(directory.record('nas', ['remembered'])).toEqual(new Set());
+    expect(directory.hostOf('remembered')).toBe('nas');
+    expect(reportClash).not.toHaveBeenCalled();
+
+    directory.expect('devbox', ['remembered']);
+    expect(directory.hostOf('remembered')).toBe('nas');
+  });
+
+  it('forgets expected sessions with their host', () => {
+    const directory = new SessionDirectory();
+    directory.expect('devbox', ['a']);
+    directory.forgetHost('devbox');
+    expect(directory.hostOf('a')).toBeUndefined();
+  });
+
+  it('tells subscribers once per batch of changes, and not for a change that changes nothing', async () => {
+    const directory = new SessionDirectory();
+    const listener = vi.fn();
+    const off = directory.subscribe(listener);
+
+    directory.record('devbox', ['a']);
+    directory.forget(['a']);
+    expect(listener).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    directory.forget(['a']);
+    directory.record(LOCAL_HOST_ID, []);
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    off();
+    directory.record('devbox', ['b']);
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});

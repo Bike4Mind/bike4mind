@@ -28,6 +28,9 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { hostChat } from '../host/hostChat';
 import { useHostSessionCapabilities, useSessionCapabilities } from '../host/sessionCapabilities';
 import { summaryHostId } from '../host/sessionDirectory';
+import { useSessionHost } from '../host/sessionHost';
+import { sessionHostMemory } from '../host/sessionHostMemory';
+import { useHostEntries } from '../host/hostRegistry';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
@@ -112,7 +115,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectGroupDirectory } from './grouping';
+import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectKeyOf } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -138,7 +141,7 @@ import { workspacePhrase } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
-import { readLastSession, useLastSession } from './lastSession';
+import { readLastSession, restoreGate, useLastSession } from './lastSession';
 import { launchPlace, resolveLaunch, useFirstLaunchPlace } from './rail/launchPlace';
 import { newSessionInProject } from './newSessionInProject';
 import { isSessionDraft, useSessionDraft } from './useSessionDraft';
@@ -370,13 +373,28 @@ export function ChatShell({
     setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
-  // A remembered session not listed yet may be on a remote host still answering its first listing.
-  const restoreWaits =
-    loading ||
-    (!!remembered &&
-      [...hostListings.values()].includes('loading') &&
-      !sessions.some(session => session.id === remembered.id));
-  const restoring = useLastSession({ remembered, loading: restoreWaits, sessions, activeId, onRestore });
+  const rememberedHost = useSessionHost(remembered?.id);
+  const hostsListed = useHostEntries().length > 0;
+  const gate = restoreGate({
+    rememberedHost,
+    listing: hostListings.get(rememberedHost),
+    hostsListed,
+    localLoading: loading,
+    listed: !!remembered && sessions.some(session => session.id === remembered.id),
+  });
+  const restoring = useLastSession({
+    remembered,
+    loading: gate.wait,
+    forgetIfGone: gate.forgetIfGone,
+    sessions,
+    activeId,
+    onRestore,
+  });
+  // Where each opened remote session lives, so the next launch asks its host for it.
+  const activeHost = useSessionHost(activeId);
+  useEffect(() => {
+    if (activeId && !isSessionDraft(activeId)) sessionHostMemory.remember(activeId, activeHost);
+  }, [activeId, activeHost]);
   const detectingFirstPlace = useFirstLaunchPlace(launch.firstLaunch, setMode);
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
@@ -933,9 +951,11 @@ export function ChatShell({
   // The view is remembered per sidebar group, so a Claude Code worktree shares its repository's choice. Only
   // the active session's project counts: a Code draft can briefly stand in for another session.
   const orchestrationProject = orchestrationSession?.id === activeId ? orchestrationSession.project : undefined;
+  // Keyed like the sidebar group: the same directory on two hosts is two projects. A local key
+  // is the bare directory, as before, so saved prefs carry over.
   const orchestratorPrefs = useOrchestratorPrefs(
     activeId,
-    orchestrationProject && projectGroupDirectory(orchestrationProject)
+    orchestrationProject && projectKeyOf(activeHost, orchestrationProject)
   );
   const { setDockOpen, setLayout: setOrchestratorLayout, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.

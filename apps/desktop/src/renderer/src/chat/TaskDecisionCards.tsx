@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
@@ -13,6 +13,12 @@ import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
+function nextTicket(tickets: Map<string, number>, hostId: string): number {
+  const ticket = (tickets.get(hostId) ?? 0) + 1;
+  tickets.set(hostId, ticket);
+  return ticket;
+}
+
 /**
  * Every decision workers wait on the user for, per connected host: read on mount, when a host
  * connects and after each resync, and replaced by each push of the whole list in between. A host
@@ -21,43 +27,62 @@ import { SessionLink } from './SessionLink';
  */
 export function useTaskDecisions(): PendingTaskDecision[] {
   const servingHosts = useServingHostIds();
+  const serving = useRef(servingHosts);
+  serving.current = servingHosts;
   const [byHost, setByHost] = useState<ReadonlyMap<string, PendingTaskDecision[]>>(() => new Map());
-  // Bumped by a resync, which may have skipped a push: the list is read again.
-  const [reads, setReads] = useState(0);
-  useHostResync(() => setReads(count => count + 1));
+  const set = useCallback(
+    (hostId: string, list: PendingTaskDecision[]) => setByHost(current => new Map(current).set(hostId, list)),
+    []
+  );
 
-  useEffect(() => {
-    const pushed = new Set<string>();
-    const serving = new Set(servingHosts);
-    let unmounted = false;
-    const set = (hostId: string, list: PendingTaskDecision[]) =>
-      setByHost(current => new Map(current).set(hostId, list));
-    setByHost(current => {
-      const gone = [...current.keys()].filter(hostId => !serving.has(hostId));
-      if (gone.length === 0) return current;
-      const next = new Map(current);
-      for (const hostId of gone) next.delete(hostId);
-      return next;
-    });
-    const off = hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
-      if (!serving.has(hostId)) return;
-      pushed.add(hostId);
-      set(hostId, decisions);
-    });
-    for (const hostId of servingHosts) {
+  // Per host, the ticket of its latest read; a push bumps it too, since it is newer than any read
+  // already on its way.
+  const reads = useRef(new Map<string, number>());
+
+  useEffect(
+    () =>
+      hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
+        if (!serving.current.includes(hostId)) return;
+        nextTicket(reads.current, hostId);
+        set(hostId, decisions);
+      }),
+    [set]
+  );
+
+  // Each host's list is read when it joins and after its own resync, never because another host
+  // joined or left.
+  const readHost = useCallback(
+    (hostId: string) => {
+      const ticket = nextTicket(reads.current, hostId);
       hostClient
         .request(hostId, 'taskDecision/list')
         .then(({ decisions }) => {
-          // A push that landed first is newer than this read.
-          if (!pushed.has(hostId) && !unmounted) set(hostId, decisions);
+          if (reads.current.get(hostId) === ticket) set(hostId, decisions);
         })
         .catch(() => undefined);
-    }
-    return () => {
-      unmounted = true;
-      off();
-    };
-  }, [reads, servingHosts]);
+    },
+    [set]
+  );
+
+  useEffect(() => {
+    const wanted = new Set(servingHosts);
+    const gone = [...reads.current.keys()].filter(hostId => !wanted.has(hostId));
+    for (const hostId of gone) reads.current.delete(hostId);
+    setByHost(current => {
+      const leaving = [...current.keys()].filter(hostId => !wanted.has(hostId));
+      if (leaving.length === 0) return current;
+      const next = new Map(current);
+      for (const hostId of leaving) next.delete(hostId);
+      return next;
+    });
+    for (const hostId of servingHosts) if (!reads.current.has(hostId)) readHost(hostId);
+  }, [servingHosts, readHost]);
+
+  useHostResync(hostId => {
+    if (reads.current.has(hostId)) readHost(hostId);
+  });
+
+  useEffect(() => () => reads.current.clear(), []);
 
   return useMemo(() => [...byHost.values()].flat(), [byHost]);
 }
