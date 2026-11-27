@@ -56,6 +56,10 @@ enum Tokens {
     static let greeting = BrandFont.font(size: Size.xl2, weight: Weight.md, relativeTo: .title2)
     /// Chat prose: replies, prompts and the composer (web body-md).
     static let body = BrandFont.font(size: Size.md)
+    /// Row titles and section headings outside chat (web h5, weight 600).
+    static let headline = BrandFont.font(size: Size.md, weight: Weight.lg, relativeTo: .headline)
+    /// Screen titles on the list, settings and system screens (web h3, weight 600).
+    static let title = BrandFont.font(size: Size.xl2, weight: Weight.lg, relativeTo: .title2)
     /// Drawer rows (web body-sm).
     static let row = BrandFont.font(size: Size.sm, relativeTo: .subheadline)
     static let caption = BrandFont.font(size: Size.sm, relativeTo: .footnote)
