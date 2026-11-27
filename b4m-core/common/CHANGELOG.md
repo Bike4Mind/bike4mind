@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 31.4.0
+
+### Minor Changes
+
+- [#8602](https://github.com/Bike4Mind/bike4mind/pull/8602) [`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - hold the block-end push when the user muted agent run updates
+
 ## 31.3.2
 
 ### Patch Changes

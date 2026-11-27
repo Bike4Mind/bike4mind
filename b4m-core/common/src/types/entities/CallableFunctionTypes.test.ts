@@ -92,6 +92,7 @@ describe('toCallableFunctionPublic', () => {
         'latestVersion',
         'pin',
         'slug',
+        'sources',
         'state',
         'status',
         'trustLabel',

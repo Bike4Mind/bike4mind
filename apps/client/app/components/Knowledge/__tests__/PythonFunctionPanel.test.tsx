@@ -42,6 +42,7 @@ vi.mock('../SaveFunctionDialog', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
 vi.mock('../FunctionDataSection', () => ({ default: () => null }));
+vi.mock('../FunctionSourcesSection', () => ({ default: () => null }));
 // Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
 vi.mock('../PromoteFunctionSection', () => ({
   default: ({ blocked }: { blocked: string | null }) => (

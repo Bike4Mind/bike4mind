@@ -20,7 +20,7 @@ const packageDirs = {
   '@bike4mind/infra': 'b4m-core/infra',
   '@bike4mind/common': 'b4m-core/common',
 };
-const reached = (changedFiles, tasks = ['typecheck:fast', 'test']) =>
+const reached = (changedFiles, tasks = ['typecheck', 'test']) =>
   [...packagesReachedByForeignInputs({ turbo, packageDirs, tasks, changedFiles })].sort();
 
 describe('resolveForeignInput', () => {
@@ -56,7 +56,7 @@ describe('packagesReachedByForeignInputs (real turbo.json)', () => {
   it('only follows edges of the requested tasks', () => {
     // server-utils#test reads apps/client/pages; its typecheck does not.
     expect(reached(['apps/client/pages/api/foo.ts'], ['test'])).toContain('@bike4mind/server-utils');
-    expect(reached(['apps/client/pages/api/foo.ts'], ['typecheck:fast'])).not.toContain('@bike4mind/server-utils');
+    expect(reached(['apps/client/pages/api/foo.ts'], ['typecheck'])).not.toContain('@bike4mind/server-utils');
   });
 
   it('adds nothing for a change no foreign input reaches', () => {
@@ -144,8 +144,8 @@ describe('planLint', () => {
 
 describe('parseArgs', () => {
   it('passes unknown flags through to turbo', () => {
-    expect(parseArgs(['--tasks', 'typecheck:fast', '--no-lint', '--concurrency=4'])).toEqual({
-      tasks: ['typecheck:fast'],
+    expect(parseArgs(['--tasks', 'typecheck', '--no-lint', '--concurrency=4'])).toEqual({
+      tasks: ['typecheck'],
       lint: false,
       dry: false,
       turboArgs: ['--concurrency=4'],

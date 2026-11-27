@@ -1,9 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthService } from '../auth';
 
 const h = vi.hoisted(() => ({
   handler: null as null | (() => Promise<void>),
   openExternal: vi.fn<(url: string) => Promise<void>>(),
+  authListeners: [] as Array<(state: { status: string }) => void>,
+}));
+vi.mock('../auth', () => ({
+  onAuthStateChanged: (listener: (state: { status: string }) => void) => {
+    h.authListeners.push(listener);
+    return () => {};
+  },
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -13,21 +23,62 @@ vi.mock('electron', () => ({
   },
   shell: { openExternal: h.openExternal },
 }));
-import { registerSessionHandoff, webAppUrlFor } from './index';
+import { purgeLegacyWebPartitions, registerSessionHandoff, webAppUrlFor } from './index';
 
 const authFor = (state: unknown) => ({ getState: () => state }) as unknown as AuthService;
 const signedInAt = (url: string) => ({ status: 'signed-in', environment: { url }, user: { id: 'user' } });
 
+let userDataDir = '';
+
 const open = async (state: unknown) => {
-  registerSessionHandoff(authFor(state));
+  registerSessionHandoff(authFor(state), userDataDir);
   if (!h.handler) throw new Error('Handoff IPC was not registered');
   await h.handler();
 };
 
 beforeEach(() => {
+  userDataDir = mkdtempSync(join(tmpdir(), 'b4m-handoff-'));
+  h.authListeners.length = 0;
   h.handler = null;
   h.openExternal.mockReset().mockResolvedValue(undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  rmSync(userDataDir, { recursive: true, force: true });
+});
+
+const seedPartition = (name: string) => {
+  const dir = join(userDataDir, 'Partitions', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'Cookies'), 'cookie');
+  return dir;
+};
+
+describe('purgeLegacyWebPartitions', () => {
+  it('removes the web-window partitions earlier builds left behind and keeps the rest', async () => {
+    const legacy = seedPartition('server-conversations-0123abcd');
+    const other = seedPartition('something-else');
+    await purgeLegacyWebPartitions(userDataDir);
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+  });
+
+  it('does nothing when there is no Partitions directory', async () => {
+    await expect(purgeLegacyWebPartitions(userDataDir)).resolves.toBeUndefined();
+  });
+
+  it('runs at startup and again on sign-out', async () => {
+    const first = seedPartition('server-conversations-aaaa');
+    registerSessionHandoff(authFor(signedInAt('https://app.example.test')), userDataDir);
+    await vi.waitFor(() => expect(existsSync(first)).toBe(false));
+
+    const second = seedPartition('server-conversations-bbbb');
+    for (const listener of h.authListeners) listener({ status: 'signed-in' });
+    expect(existsSync(second)).toBe(true);
+    for (const listener of h.authListeners) listener({ status: 'signed-out' });
+    await vi.waitFor(() => expect(existsSync(second)).toBe(false));
+  });
 });
 
 describe('webAppUrlFor', () => {
@@ -69,7 +120,7 @@ describe('registerSessionHandoff', () => {
 
   it('follows the environment the user is signed in to at click time', async () => {
     let state = signedInAt('https://app.example.test');
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff({ getState: () => state } as unknown as AuthService, userDataDir);
     state = signedInAt('https://staging.example.test');
     await h.handler?.();
     expect(h.openExternal).toHaveBeenCalledExactlyOnceWith('https://staging.example.test/notebooks');

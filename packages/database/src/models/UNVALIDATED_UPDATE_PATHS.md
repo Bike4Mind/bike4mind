@@ -146,6 +146,13 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `pin.dataPins.name` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.dataPins.sha256` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.sourcePins.bytes` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.sourcePins.name` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.sourcePins.sha256` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `sources.mode` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `sources.name` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `sources.url` | maxlength,match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |

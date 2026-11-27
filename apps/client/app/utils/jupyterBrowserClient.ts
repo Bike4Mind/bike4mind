@@ -13,6 +13,7 @@
  */
 
 import { validateNotebookPath as validateNotebookPathBase, validateJupyterKernelName } from '@bike4mind/common';
+import { JUPYTER_CONFIG_STORAGE_KEY, onIdentityReset } from './identityScopedStorage';
 
 export interface JupyterBrowserConfig {
   serverUrl: string;
@@ -352,7 +353,7 @@ export class JupyterBrowserClient {
 
 // -- Jupyter config persistence (localStorage) --
 
-const JUPYTER_CONFIG_KEY = 'b4m-jupyter-config';
+const JUPYTER_CONFIG_KEY = JUPYTER_CONFIG_STORAGE_KEY;
 // The browser's `storage` event only reaches other tabs, so a change made here announces itself.
 const JUPYTER_CONFIG_CHANGED_EVENT = 'b4m-jupyter-config-changed';
 
@@ -385,6 +386,8 @@ export function clearStoredJupyterConfig(): void {
   localStorage.removeItem(JUPYTER_CONFIG_KEY);
   window.dispatchEvent(new Event(JUPYTER_CONFIG_CHANGED_EVENT));
 }
+
+onIdentityReset(clearStoredJupyterConfig);
 
 /** Calls `onChange` whenever the stored config changes, here or in another tab; returns the unsubscribe. */
 export function subscribeStoredJupyterConfig(onChange: () => void): () => void {

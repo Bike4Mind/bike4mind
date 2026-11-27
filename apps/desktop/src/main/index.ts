@@ -193,7 +193,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  registerSessionHandoff(auth);
+  registerSessionHandoff(auth, app.getPath('userData'));
   const attention = registerAttention({
     openWindow: createWindow,
     notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),

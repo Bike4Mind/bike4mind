@@ -160,7 +160,31 @@ export interface ICallableFunctionPin {
   runtime?: CallableFunctionRuntimePin;
   /** Kept across repins; changed only through `setDataPins`, which returns the function to draft. */
   dataPins?: ICallableFunctionDataPin[];
+  /** The `pinned` sources as promotion fetched them; cleared when the sources change. */
+  sourcePins?: ICallableFunctionSourcePin[];
 }
+
+export const CALLABLE_FUNCTION_SOURCE_MODES = ['live', 'pinned'] as const;
+export type CallableFunctionSourceMode = (typeof CALLABLE_FUNCTION_SOURCE_MODES)[number];
+
+/**
+ * A URL on a listed data origin, read at `/data/<name>`: `live` is fetched on every call, `pinned` once at promotion
+ * (and on every call before the first). Names share the data pins' pattern, namespace, and count.
+ */
+export interface ICallableFunctionSource {
+  name: string;
+  url: string;
+  mode: CallableFunctionSourceMode;
+}
+
+export interface ICallableFunctionSourcePin {
+  name: string;
+  sha256: string;
+  bytes: number;
+  fetchedAt: Date;
+}
+
+export const CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS = 2048;
 
 /** A file's bytes copied once into the function-data store, read by every call at `/data/<name>`. */
 export interface ICallableFunctionDataPin {
@@ -205,6 +229,8 @@ export interface ICallableFunction {
   promoted?: CallableFunctionPromotion;
   caseResults?: CallableFunctionCaseResults;
   grants?: ICallableFunctionGrants;
+  /** Outside the code and the review hash; changed only through `setSources`, which returns the function to draft. */
+  sources?: ICallableFunctionSource[];
 }
 
 export interface ICallableFunctionDocument extends ICallableFunction, IMongoDocument {}
@@ -244,6 +270,8 @@ export interface ICallableFunctionPublic {
   approval: McpToolApprovalMode;
   pin: Pick<ICallableFunctionPin, 'artifactId' | 'version' | 'contentHash' | 'pinnedAt' | 'seq'>;
   dataPins: Pick<ICallableFunctionDataPin, 'name' | 'sha256' | 'bytes' | 'pinnedAt'>[];
+  /** Each declared source, with what promotion froze for a `pinned` one. */
+  sources: (ICallableFunctionSource & { pinned?: Omit<ICallableFunctionSourcePin, 'name'> })[];
   latestVersion: number | null;
   /** The artifact has a newer version than the pinned one. */
   updateAvailable: boolean;
@@ -331,6 +359,15 @@ export function toCallableFunctionPublic(
       ...(doc.pin.seq !== undefined ? { seq: doc.pin.seq } : {}),
     },
     dataPins: (doc.pin.dataPins ?? []).map(({ name, sha256, bytes, pinnedAt }) => ({ name, sha256, bytes, pinnedAt })),
+    sources: (doc.sources ?? []).map(({ name, url, mode }) => {
+      const frozen = mode === 'pinned' ? doc.pin.sourcePins?.find(entry => entry.name === name) : undefined;
+      return {
+        name,
+        url,
+        mode,
+        ...(frozen ? { pinned: { sha256: frozen.sha256, bytes: frozen.bytes, fetchedAt: frozen.fetchedAt } } : {}),
+      };
+    }),
     latestVersion: head?.version ?? null,
     updateAvailable: live !== null && live.version > doc.pin.version,
     trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
@@ -425,6 +462,7 @@ export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'examples',
   'caseResults',
   'grants',
+  'sources',
 ] as const;
 
 export class CallableFunctionProtectedFieldError extends Error {
@@ -495,6 +533,7 @@ export const CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS = [
   'promoted',
   'examples',
   'caseResults',
+  'sources',
 ] as const;
 
 export type CallableFunctionCreateInput = Omit<
@@ -514,6 +553,8 @@ export interface CallableFunctionPromote {
   lastServerRun: CallableFunctionServerRun;
   trustLabel: CallableFunctionTrustLabel;
   contract: FunctionContract;
+  /** The `pinned` sources as fetched for this promotion. */
+  sourcePins: ICallableFunctionSourcePin[];
 }
 
 export interface ICallableFunctionRepository extends IBaseRepository<ICallableFunctionDocument> {
@@ -598,6 +639,13 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     owner: CallableFunctionOwner,
     expected: { updatedAt: Date },
     dataPins: ICallableFunctionDataPin[]
+  ): Promise<ICallableFunctionDocument | null>;
+  /** Replaces `sources` and drops what promotion froze, returning the function to draft as `setDataPins` does. */
+  setSources(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    sources: ICallableFunctionSource[]
   ): Promise<ICallableFunctionDocument | null>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

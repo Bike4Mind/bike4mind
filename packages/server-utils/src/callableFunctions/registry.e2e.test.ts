@@ -568,6 +568,16 @@ describe('ownership', () => {
     expect(deletePrefix).toHaveBeenCalledWith(callableFunctionDataPrefix(view.id));
     expect(await CallableFunction.countDocuments({})).toBe(0);
   });
+
+  it('delete removes the stored source bytes of a function that has declared sources, even after removing them', async () => {
+    const view = await save();
+    const read = await callableFunctionRepository.findByIdForOwner(view.id, OWNER_KEY);
+    await callableFunctionRepository.setSources(view.id, OWNER_KEY, read!, []);
+    const storage = { deletePrefix: vi.fn(async () => 1) };
+    await deleteCallableFunction(OWNER, view.id, storage as never);
+    expect(storage.deletePrefix.mock.calls).toEqual([[`data/${view.id}/`], [`data/.live/${view.id}/`]]);
+    expect(await CallableFunction.countDocuments({})).toBe(0);
+  });
 });
 
 const OWNER_KEY = { ownerType: 'user' as const, ownerKey: OWNER.id };
@@ -603,6 +613,7 @@ async function promoteDirectly(id: string, seq = 1) {
       seq,
       runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
       lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      sourcePins: [],
       trustLabel: 'verified',
       contract: fn!.contract,
     }
@@ -839,6 +850,7 @@ describe('callableFunctionRepository.promote', () => {
         seq: 1,
         runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
         lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+        sourcePins: [],
         trustLabel: 'unverified',
         contract: read!.contract,
       }

@@ -55,6 +55,7 @@ public final class AuthController: AccessTokenProviding {
   /// Bumped whenever the session changes hands, so a refresh that lands after sign-out is discarded
   /// instead of writing a dead session's token back to the Keychain.
   private var sessionGeneration = UUID()
+  @ObservationIgnored private var isRetryingRevocations = false
   @ObservationIgnored private var rotationContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
   @ObservationIgnored private var protectedDataObservers: [any NSObjectProtocol] = []
 
@@ -335,17 +336,79 @@ public final class AuthController: AccessTokenProviding {
     state = .signedOut(reason)
   }
 
+  /// A revocation that fails (offline, server error) is kept and retried by `retryPendingRevocations()`, so the
+  /// server ends the session, and the push tokens bound to it, once it is reachable again.
   private func revokeRemoteSession(accessToken: String?, refreshToken: String?) async {
     let api = self.api
+    let baseURL = environment.baseURL
+    var latestRefreshToken = refreshToken
     do {
       var bearer = accessToken
       if bearer == nil, let refreshToken {
-        bearer = try await api.refresh(refreshToken: refreshToken).accessToken
+        let refreshed = try await api.refresh(refreshToken: refreshToken)
+        bearer = refreshed.accessToken
+        latestRefreshToken = refreshed.refreshToken ?? refreshToken
       }
       guard let bearer else { return }
       try await api.logout(accessToken: bearer)
+    } catch AuthError.refreshRejected {
+      return
     } catch {
-      logger.notice("Server-side logout failed (session already wiped locally): \(error, privacy: .public)")
+      logger.notice("Server-side logout failed; will retry: \(error, privacy: .public)")
+      guard let latestRefreshToken else { return }
+      updatePendingRevocations(
+        removing: [],
+        adding: [PendingRevocation(baseURL: baseURL, refreshToken: latestRefreshToken, createdAt: now())])
+    }
+  }
+
+  /// Finishes revocations an earlier sign-out on this server could not complete. Call at launch and on foreground.
+  public func retryPendingRevocations() async {
+    guard !isRetryingRevocations else { return }
+    isRetryingRevocations = true
+    defer { isRetryingRevocations = false }
+    let pending: [PendingRevocation]
+    do {
+      pending = try tokenStore.pendingRevocations().filter { $0.baseURL == environment.baseURL }
+    } catch {
+      logger.notice("Pending revocations not readable yet: \(error, privacy: .public)")
+      return
+    }
+    guard !pending.isEmpty else { return }
+    var stillPending: [PendingRevocation] = []
+    for revocation in PendingRevocation.bounded(pending, now: now()) {
+      if let retry = await revoke(revocation) { stillPending.append(retry) }
+    }
+    updatePendingRevocations(removing: pending, adding: stillPending)
+  }
+
+  /// `nil` once the server no longer holds the session; otherwise what to retry with next time.
+  private func revoke(_ revocation: PendingRevocation) async -> PendingRevocation? {
+    let api = AuthAPI(baseURL: revocation.baseURL, transport: transport)
+    var current = revocation
+    do {
+      let refreshed = try await api.refresh(refreshToken: revocation.refreshToken)
+      if let rotated = refreshed.refreshToken {
+        current = PendingRevocation(
+          baseURL: revocation.baseURL, refreshToken: rotated, createdAt: revocation.createdAt)
+      }
+      try await api.logout(accessToken: refreshed.accessToken)
+      return nil
+    } catch AuthError.refreshRejected {
+      return nil
+    } catch {
+      return current
+    }
+  }
+
+  /// Read-modify-write against the latest stored list, since a sign-out can add one while a retry is awaiting.
+  private func updatePendingRevocations(removing: [PendingRevocation], adding: [PendingRevocation]) {
+    do {
+      let latest = try tokenStore.pendingRevocations()
+      try tokenStore.setPendingRevocations(
+        PendingRevocation.bounded(latest.filter { !removing.contains($0) } + adding, now: now()))
+    } catch {
+      logger.error("Saving pending revocations failed: \(error, privacy: .public)")
     }
   }
 

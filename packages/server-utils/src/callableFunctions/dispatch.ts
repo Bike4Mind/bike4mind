@@ -8,6 +8,7 @@ import {
   type CallableFunctionCallOutcome,
   type CallableFunctionCallSurface,
   type CallableFunctionStamp,
+  type CallableFunctionStampData,
   type FunctionContract,
   type FunctionContractProblem,
   type ICallableFunctionCall,
@@ -25,15 +26,19 @@ import { resolveCallableFunctionsEnabled } from './access';
 import {
   callableFunctionDataReachable,
   callableFunctionStampData,
+  signCallableFunctionDataEntries,
   signCallableFunctionDataLinks,
   type CallableFunctionDataLink,
 } from './dataPins';
+import { CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS, CallableFunctionSourceError } from './fetchSource';
+import { resolveCallableFunctionSources, type CallableFunctionSourceDeps } from './sources';
 import type { CallableFunctionRunData } from './runtimeData';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_PARENT_MARGIN_MS,
   CALLABLE_FUNCTION_START_BUDGET_MS,
+  runTimeoutAfterDownload,
   type CallableFunctionReason,
   type CallableFunctionRunPayload,
   type CallableFunctionRunResult,
@@ -67,6 +72,7 @@ export type CallableFunctionDispatchReason =
   | 'input_too_large'
   | 'wait_exceeded'
   | 'budget_exhausted'
+  | 'source_unavailable'
   | 'dispatch_failed'
   | 'queue_failed';
 
@@ -140,6 +146,8 @@ export interface CallableFunctionDispatchOptions {
   signData?: (fn: ICallableFunctionDocument) => Promise<CallableFunctionDataLink[]>;
   /** Whether this process can sign data links (`callableFunctionDataReachable` by default). */
   dataReachable?: boolean;
+  /** The fetcher, store, origins, and limits for the function's sources; the environment's by default. */
+  sources?: CallableFunctionSourceDeps;
 }
 
 export type { CallableFunctionStamp };
@@ -173,6 +181,8 @@ export function buildCallableFunctionStamp(input: {
   run: Pick<CallableFunctionRunResult, 'runtime' | 'durationMs'>;
   surface: CallableFunctionCallSurface;
   calledAt: Date;
+  /** What the call's sources resolved to, after the pinned files. */
+  sources?: CallableFunctionStampData[];
 }): CallableFunctionStamp {
   const packages = [...(input.run.runtime?.packages ?? [])].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0
@@ -186,7 +196,7 @@ export function buildCallableFunctionStamp(input: {
     input_hash: input.inputHash,
     runtime: { kind: RUNTIME_KIND, version: PYODIDE_VERSION, lock_hash: input.run.runtime?.lockHash ?? null },
     packages,
-    data: callableFunctionStampData(input.fn.pin.dataPins),
+    data: [...callableFunctionStampData(input.fn.pin.dataPins), ...(input.sources ?? [])],
     uses: [],
     trust_label: input.fn.state === 'live' ? (input.fn.trustLabel ?? null) : null,
     surface: input.surface,
@@ -508,24 +518,68 @@ export async function dispatchFunctionCall(
       options.callId === undefined
         ? caps.waitMs
         : requestedMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS;
-    const waitMs = waitFor(capMs, options.deadline === undefined ? options.waitMs : options.deadline - Date.now());
-    if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
+    const budgetStarted = Date.now();
+    const budgetMs = waitFor(capMs, options.deadline === undefined ? options.waitMs : options.deadline - budgetStarted);
+    if (options.minWaitMs !== undefined && budgetMs < options.minWaitMs) {
       return finish({ outcome: 'refused', reason: 'budget_exhausted' });
     }
-    const timeoutMs = limitWithin(requestedMs, waitMs);
     const outputBytesCap = Math.min(caps.outputBytes, CALLABLE_FUNCTION_LIMITS.outputBytes);
     const pins = fn.pin.dataPins ?? [];
     row.dataHashes = pins.map(pin => pin.sha256);
-    let data: CallableFunctionRunData[] | undefined;
-    if (pins.length > 0) {
-      // Elsewhere the files bucket would be signed for keys that live in the data bucket: refuse loudly instead.
-      if (!(options.dataReachable ?? callableFunctionDataReachable())) {
-        Logger.error('[CALLABLE_FUNCTION_DATA_NOT_WIRED]', { functionId: fn.id });
-        return finish({ outcome: 'error', reason: 'data_unavailable' });
-      }
-      // Links for exactly this function's pins, valid for minutes; the runtime gets links, never the bytes.
+    // Elsewhere the files bucket would be signed for keys that live in the data bucket: refuse loudly instead.
+    if ((pins.length > 0 || fn.sources?.length) && !(options.dataReachable ?? callableFunctionDataReachable())) {
+      Logger.error('[CALLABLE_FUNCTION_DATA_NOT_WIRED]', { functionId: fn.id });
+      return finish({ outcome: 'error', reason: 'data_unavailable' });
+    }
+    // Fetched outside the sandbox before the run, so the runtime keeps its closed network and reads them as files.
+    let sources: CallableFunctionStampData[] = [];
+    let sourceKeys: string[] = [];
+    const fetchStarted = Date.now();
+    const fetchMs = Math.min(requestedMs, budgetMs);
+    if (fn.sources?.length) {
       try {
-        const links = await (options.signData ?? signCallableFunctionDataLinks)(fn);
+        const reads = await resolveCallableFunctionSources(fn, options.sources, { timeoutMs: fetchMs });
+        sources = reads.map(read => read.entry);
+        sourceKeys = reads.map(read => read.key);
+      } catch (error) {
+        // A stall that spent the call's own time, or the caller's wait, ends as the run would have: a timeout. The
+        // code covers a timer that fires a millisecond early; under the fetch's own ceiling, `fetchMs` is its limit.
+        const stalled =
+          Date.now() - fetchStarted >= fetchMs ||
+          (error instanceof CallableFunctionSourceError &&
+            error.code === 'source_timeout' &&
+            fetchMs <= CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS);
+        if (stalled) {
+          return finish(
+            fetchMs < requestedMs ? { outcome: 'timeout', reason: 'wait_exceeded' } : { outcome: 'timeout' }
+          );
+        }
+        Logger.error('[CALLABLE_FUNCTION_SOURCE_FAILED]', describeRunnerError(error));
+        const errorClass = error instanceof CallableFunctionSourceError ? error.code : undefined;
+        return finish({ outcome: 'error', reason: 'source_unavailable', ...(errorClass ? { errorClass } : {}) });
+      }
+      row.dataHashes = [...row.dataHashes, ...sources.map(entry => entry.sha256)];
+    }
+    // The source fetch spends the call's own time limit and the same wait as the run.
+    const runMs = runTimeoutAfterDownload(requestedMs, Date.now() - fetchStarted);
+    if (runMs === 0) return finish({ outcome: 'timeout' });
+    const waitMs = Math.max(0, budgetMs - (Date.now() - budgetStarted));
+    if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
+      return finish({ outcome: 'refused', reason: 'budget_exhausted' });
+    }
+    const timeoutMs = limitWithin(runMs, waitMs);
+    let data: CallableFunctionRunData[] | undefined;
+    if (pins.length > 0 || sources.length > 0) {
+      // Links for exactly this function's files, valid for minutes; the runtime gets links, never the bytes.
+      try {
+        const links = [
+          ...(pins.length > 0 ? await (options.signData ?? signCallableFunctionDataLinks)(fn) : []),
+          ...(await signCallableFunctionDataEntries(
+            fn.id,
+            sources.map((entry, index) => ({ ...entry, key: sourceKeys[index] })),
+            options.sources?.storage
+          )),
+        ];
         data = links.map(link => ({ ...link, prefix: fn.id }));
       } catch (error) {
         Logger.error('[CALLABLE_FUNCTION_DATA_SIGN_FAILED]', describeRunnerError(error));
@@ -547,7 +601,7 @@ export async function dispatchFunctionCall(
     );
     row.runtime = runtimeRow(run);
     if (run.initMs !== undefined) row.initMs = run.initMs;
-    const stamp = buildCallableFunctionStamp({ fn, inputHash, run, surface, calledAt: startedAt });
+    const stamp = buildCallableFunctionStamp({ fn, inputHash, run, surface, calledAt: startedAt, sources });
     const ran = {
       errorClass: run.errorClass,
       problems: run.problems,

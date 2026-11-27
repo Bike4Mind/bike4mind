@@ -73,11 +73,13 @@ export interface ICallableFunctionCall {
 
 export interface ICallableFunctionCallDocument extends ICallableFunctionCall, IMongoDocument {}
 
+/** One file a call read at `/data/<name>`; `fetched_at` only for a source fetched during the call. */
 export interface CallableFunctionStampData {
   name: string;
-  mode: 'pinned';
+  mode: 'pinned' | 'live';
   sha256: string;
   bytes: number;
+  fetched_at?: string;
 }
 
 /** What a call ran on. Room for output hashes beside `data` later; nothing here assumes every output is inline. */
