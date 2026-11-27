@@ -15,6 +15,7 @@
   },
   "scripts": {
     "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
+    "db:state": "tsx src/db-state.ts",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",

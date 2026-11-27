@@ -32,9 +32,9 @@ describe('MorningBriefCard', () => {
     expect(screen.getByTestId('morning-brief-human-link')).toHaveAttribute('href', '/admin?tab=2');
     expect(screen.queryByText(/AI summary/)).not.toBeInTheDocument();
   });
-  it('explains the empty manual fallback', () => {
+  it('renders nothing when no brief has been generated', () => {
     query.mockReturnValue({ data: { brief: null } });
-    render(<MorningBriefCard />, { wrapper });
-    expect(screen.getByText(/Review the admin queues manually/)).toBeInTheDocument();
+    const { container } = render(<MorningBriefCard />, { wrapper });
+    expect(container).toBeEmptyDOMElement();
   });
 });

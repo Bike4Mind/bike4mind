@@ -11,6 +11,7 @@ import { StageLayout } from './StageLayout';
 import { agentFixture, createThemedMount, el, viewAgentFixture, snapshotFixture } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
 import { OverflowStack } from './scene/OverflowStack';
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 
 const themed = createThemedMount();
 const onSelect = vi.fn();
@@ -40,6 +41,7 @@ const agentIndicators = () => indicators().filter(badge => !badge.closest('[data
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       onStreamEvent: vi.fn(() => () => undefined),

@@ -241,6 +241,30 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
     XCTAssertEqual(scheduler.submits.count, 1)
   }
 
+  func testRunDuringAUserSaveJoinsItAndRearmsForItsOutcome() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask()
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.holdSave()
+    let save = Task { try await syncer.save(enabled: false) }
+    while await api.saveAttempts == 0 { await Task.yield() }
+
+    let refresh = refresh(scheduler) { await syncer.syncJoiningInFlight() }
+    let ran = Task { await run(refresh, until: task) }
+    for _ in 0..<5 { await Task.yield() }
+    XCTAssertTrue(task.completions.isEmpty)
+    await api.release()
+    await ran.value
+    _ = try? await save.value
+
+    XCTAssertEqual(task.completions, [true])
+    let rearmedAt = now.addingTimeInterval(BusyBlockBackgroundRefresh.disabledInterval)
+    XCTAssertEqual(scheduler.submits.map(\.earliestBegin), [rearmedAt])
+    let reads = await api.reads
+    XCTAssertEqual(reads, 0)
+  }
+
   func testDelayPerOutcome() {
     let interval = BusyBlockBackgroundRefresh.interval
     XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: nil), interval)

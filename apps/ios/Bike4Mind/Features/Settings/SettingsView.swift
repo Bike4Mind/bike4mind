@@ -84,7 +84,7 @@ struct SettingsView: View {
         AccountAvatar(initial: profile?.initial, diameter: 56)
         VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
           Text(profile?.displayName ?? profile?.firstName ?? "Your account")
-            .font(.headline)
+            .font(Tokens.Typography.headline)
             .foregroundStyle(Tokens.Palette.primaryText)
           if let email = profile?.email {
             Text(email)

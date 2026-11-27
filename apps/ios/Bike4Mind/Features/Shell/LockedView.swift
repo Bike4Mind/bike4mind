@@ -13,7 +13,7 @@ struct LockedView: View {
         .foregroundStyle(Tokens.Palette.brand)
         .accessibilityHidden(true)
       Text("Bike4Mind is locked")
-        .font(.title2.weight(.semibold))
+        .font(Tokens.Typography.title)
         .foregroundStyle(Tokens.Palette.primaryText)
       Button("Unlock") {
         Task { await auth.unlock() }

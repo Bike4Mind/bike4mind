@@ -8,6 +8,7 @@ import { sceneView } from '../scene/SceneStage';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { MANAGER_ART } from './officeArt';
 import { OFFICE_SCENE } from './officeScene';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 
 const OfficeView = sceneView(OFFICE_SCENE);
 const mount = createThemedMount();
@@ -28,6 +29,7 @@ function render(agents: AgentView[], extra: Partial<OrchestratorViewProps> = {})
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),

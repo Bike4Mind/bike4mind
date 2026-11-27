@@ -8,6 +8,7 @@ import { QUEST_DONE_LINGER_MS } from './quests';
 import type { ComponentProps } from 'react';
 import { SceneStage } from './SceneStage';
 import { TAVERN_SCENE } from '../tavern/tavernScene';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 
 const TavernView = (props: Omit<ComponentProps<typeof SceneStage>, 'scene'>) => (
   <SceneStage {...props} scene={TAVERN_SCENE} />
@@ -40,6 +41,7 @@ const notes = () => [
 // A needs-you agent's speech bubble loads its session to find what it waits on.
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       onStreamEvent: vi.fn(() => () => undefined),

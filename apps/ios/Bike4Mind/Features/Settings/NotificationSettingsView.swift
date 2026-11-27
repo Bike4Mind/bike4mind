@@ -23,6 +23,7 @@ private struct NotificationSettingsContent: View {
   @State private var interruptions: InterruptionFeedbackViewModel
   private let settings: any SystemSettingsOpening
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(AuthController.self) private var auth
 
   init(
     push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening,
@@ -62,7 +63,7 @@ private struct NotificationSettingsContent: View {
     // Reloads on return from iOS Settings, where the user may have changed the system switch.
     .task(id: scenePhase) { if scenePhase == .active { await model.load() } }
     .task { await brief.load() }
-    .task { await busyBlocks.load() }
+    .onChange(of: auth.captureSession().id, initial: true) { _, _ in busyBlocks.scheduleLoad() }
     .task(id: scenePhase) {
       if scenePhase == .active && !interruptions.isLoaded { await interruptions.load() }
     }
@@ -159,7 +160,7 @@ private struct NotificationSettingsContent: View {
         "Brief After Busy Blocks",
         isOn: Binding(
           get: { busyBlocks.isEnabled },
-          set: { isOn in Task { await busyBlocks.setEnabled(isOn) } })
+          set: { isOn in busyBlocks.scheduleSetEnabled(isOn) })
       )
       .disabled(!busyBlocks.isLoaded || busyBlocks.isSaving)
       .accessibilityIdentifier("settings-busy-block-brief-toggle")
