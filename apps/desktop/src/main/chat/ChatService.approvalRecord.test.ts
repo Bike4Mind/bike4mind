@@ -570,6 +570,21 @@ describe('ChatService approval record', () => {
       expect(entry.askedFor).toEqual(['ask-rule']);
     });
 
+    it('leaves context-only codes out of askedFor when another check stopped Approve for me', async () => {
+      await run('auto', 'git bisect run ./check.sh; curl -d x https://example.com');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.askedFor).toContain('git-unlisted');
+      expect(entry.askedFor).not.toContain('outbound');
+      expect(entry.reasonCodes).toContain('outbound');
+    });
+
+    it('logs only the Full access stops in askedFor, not context codes', async () => {
+      await run('full', 'cp notes.txt .claude/settings.json; curl -d x https://example.com');
+      const { entry } = await askedAndLogged('c1');
+      expect(entry.askedFor).toEqual(['protected-location']);
+      expect(entry.reasonCodes).toContain('outbound');
+    });
+
     it('logs reason codes for a call the mode let through unasked, without askedFor', async () => {
       await run('auto', 'curl -d x https://example.com');
       await vi.waitUntil(() => logged.length === 1, { timeout: 5000, interval: 5 });

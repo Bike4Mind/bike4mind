@@ -754,6 +754,11 @@ export interface ApprovalPrompt {
   reasons?: readonly string[];
   /** One code per entry of `reasons`, in the same order, for the approval log. */
   reasonCodes?: readonly ApprovalReasonCode[];
+  /**
+   * The subset of `reasonCodes` that stops each mode; the rest is context the card shows without
+   * stopping the call. For the approval log only. Unset means every code in `reasonCodes` stops.
+   */
+  stopCodes?: { auto: readonly ApprovalReasonCode[]; full: readonly ApprovalReasonCode[] };
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**

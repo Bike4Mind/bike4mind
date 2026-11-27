@@ -59,6 +59,28 @@ describe('shell approval reason codes', () => {
     expect(pairs.get('outbound')).toContain('send data off this computer');
   });
 
+  it.each<[string, ApprovalReasonCode[], ApprovalReasonCode[], ApprovalReasonCode[]]>([
+    ['curl -d x https://example.com', ['outbound'], [], []],
+    ['cat .env', ['env-file-read'], ['env-file-read'], []],
+    ['rm -rf src; curl -d x https://example.com', ['recursive-delete', 'outbound'], [], []],
+    ['cp notes.txt .claude/settings.json', ['protected-location'], ['protected-location'], ['protected-location']],
+    ['$CMD; curl -d x https://example.com', ['outbound', 'unfollowable'], ['unfollowable'], ['unfollowable']],
+  ])('names which codes of %s stop each mode', async (command, all, auto, full) => {
+    const prompt = await promptFor(command);
+    expect([...(prompt.reasonCodes ?? [])].sort()).toEqual([...all].sort());
+    expect(prompt.stopCodes?.auto).toEqual(auto);
+    expect(prompt.stopCodes?.full).toEqual(full);
+  });
+
+  it('keeps stop codes a subset of the reason codes', async () => {
+    const prompt = await promptFor('git clone https://example.com/repo.git; cat .env; curl -d x https://example.com');
+    for (const code of [...(prompt.stopCodes?.auto ?? []), ...(prompt.stopCodes?.full ?? [])]) {
+      expect(prompt.reasonCodes).toContain(code);
+    }
+    expect(prompt.stopCodes?.auto).toEqual(expect.arrayContaining(['remote-clone', 'env-file-read']));
+    expect(prompt.stopCodes?.auto).not.toContain('outbound');
+  });
+
   it('carries no codes when there is no reason', async () => {
     const prompt = await promptFor('ls');
     expect(prompt.reasons).toBeUndefined();

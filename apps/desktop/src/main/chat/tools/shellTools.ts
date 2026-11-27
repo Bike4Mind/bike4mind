@@ -560,11 +560,11 @@ export async function shellApproval(
   const parts = scan.commands.map(entry => partAsk(entry));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const signingRisk = scan.gitSigningRisk === true || scan.commands.some(entry => entry.gitSigningRisk);
-  const opaque =
-    gitUnlisted.length > 0 ||
+  const unfollowable =
     scan.unreadScript === true ||
     (scan.unread === true && !scan.commands.some(entry => entry.refsMovedOnly)) ||
     scan.commands.some(entry => entry.unread && !entry.refsMovedOnly);
+  const opaque = gitUnlisted.length > 0 || unfollowable;
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -706,6 +706,32 @@ export async function shellApproval(
       : []),
   ];
   const reasons = coded.map(([, sentence]) => sentence);
+  // Which of the coded reasons stop each mode, from the same booleans as `scriptAsks` and
+  // `scriptAsksInFull`; keep in sync with them. Codes absent here are context only.
+  const stopsAuto = new Set<ApprovalReasonCode>();
+  const stopsFull = new Set<ApprovalReasonCode>();
+  const stop = (code: ApprovalReasonCode, inAuto: boolean, inFull: boolean) => {
+    if (inAuto) stopsAuto.add(code);
+    if (inFull) stopsFull.add(code);
+  };
+  stop('env-file-read', envScript || parts.some(ask => ask !== undefined && ask.mode !== 'ask'), false);
+  stop('git-program', !!gitProgram, false);
+  stop('git-path-unplaced', scan.gitPathUnplaced === true, false);
+  stop('remote-clone', scan.remoteTree === true, false);
+  stop('protected-location', writesProtected || secret, (writesProtected && !scan.readOnly) || secret);
+  stop('unfollowable', unfollowable, unfollowable);
+  stop('git-unlisted', gitUnlisted.length > 0, gitUnlisted.length > 0);
+  stop('settings-write-unfollowable', uncheckedSettingsWrite, uncheckedSettingsWrite);
+  stop('protected-unresolved', writesWhileUnresolved, writesWhileUnresolved);
+  for (const code of [
+    'wsl-distro-outside-project',
+    'wsl-unnamed-distro',
+    'wsl-system-distro',
+    'wsl-management',
+  ] as const) {
+    stop(code, unreachable.length > 0, unreachable.length > 0);
+  }
+  const codes = coded.map(([code]) => code);
   // A worktree session reading its own main checkout (`git -C <main> status`, `ls <main>/x`) is
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
@@ -720,7 +746,16 @@ export async function shellApproval(
   return {
     detail: [detail, ...reasons].join('\n\n'),
     ...summary,
-    ...(reasons.length > 0 ? { reasons, reasonCodes: coded.map(([code]) => code) } : {}),
+    ...(reasons.length > 0
+      ? {
+          reasons,
+          reasonCodes: codes,
+          stopCodes: {
+            auto: codes.filter(code => stopsAuto.has(code)),
+            full: codes.filter(code => stopsFull.has(code)),
+          },
+        }
+      : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.

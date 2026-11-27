@@ -8956,7 +8956,9 @@ export class ChatService {
       ...new Set([
         ...askedGateReasons.map(([code]) => code),
         ...(modeStop?.codes ?? []),
-        ...codedFullAccessStops.map(([code]) => code),
+        ...(prompt.irreversible || !prompt.reasons?.length
+          ? codedFullAccessStops.map(([code]) => code)
+          : stoppingFullCodes(prompt, codedFullAccessStops)),
       ]),
     ];
     const askedBecause =
@@ -10915,7 +10917,12 @@ function modeAskReason(
   const source = shown.reasons?.length ? shown : prompt;
   const reasons = source.reasons ?? [];
   if (reasons.length > 0) {
-    return { text: `${AUTO_ASK_PREFIX} ${reasons.join(' ')}`, codes: reasonCodesOf(source) };
+    const stopping = stoppingCodes(source, 'auto');
+    const fallback: ApprovalReasonCode = toolStopped ? 'tool-asks-in-auto' : 'part-undecided';
+    return {
+      text: `${AUTO_ASK_PREFIX} ${reasons.join(' ')}`,
+      codes: stopping.length > 0 ? stopping : [fallback],
+    };
   }
   if (prompt.irreversible) {
     return { text: `${AUTO_ASK_PREFIX} It cannot be undone, so it is asked every time.`, codes: ['irreversible'] };
@@ -10931,6 +10938,16 @@ function reasonCodesOf(prompt: ApprovalPrompt): ApprovalReasonCode[] {
 }
 
 /**
+ * The codes among a prompt's reasons that stop the mode, for `askedFor`; the rest is card context.
+ * A prompt that does not say which stop (`stopCodes` unset) has every reason code count.
+ */
+function stoppingCodes(prompt: ApprovalPrompt, mode: 'auto' | 'full'): ApprovalReasonCode[] {
+  const codes = reasonCodesOf(prompt);
+  const stops = prompt.stopCodes?.[mode];
+  return stops ? codes.filter(code => stops.includes(code)) : codes;
+}
+
+/**
  * Why Full access stops for a call it would otherwise run: the same two flags `autoApproves`
  * checks before any mode, with the tool's own words for them.
  */
@@ -10940,6 +10957,13 @@ function fullAccessStopReasons(prompt: ApprovalPrompt): CodedReason[] {
   if (!prompt.reasons?.length) return [['tool-asks-in-full', 'This tool asks in every mode, Full access included.']];
   const codes = reasonCodesOf(prompt);
   return prompt.reasons.map((reason, index) => [codes[index], reason]);
+}
+
+/** The Full access stop codes that name a reason the tool says stops Full access; the generic code when none does. */
+function stoppingFullCodes(prompt: ApprovalPrompt, stops: readonly CodedReason[]): ApprovalReasonCode[] {
+  if (stops.length === 0) return [];
+  const stopping = stoppingCodes(prompt, 'full');
+  return stopping.length > 0 ? stopping : ['tool-asks-in-full'];
 }
 
 function approvalRecord(
