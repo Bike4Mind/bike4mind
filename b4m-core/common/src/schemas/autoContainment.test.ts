@@ -39,6 +39,11 @@ describe('AutoContainmentConfigSchema tiers', () => {
     expect(effectiveTierMode(on, 'limit')).toBe('enforce');
   });
 
+  it('turns link rules on by default and keeps an explicit off', () => {
+    expect(AutoContainmentConfigSchema.parse({}).linkRules).toEqual({ enabled: true });
+    expect(AutoContainmentConfigSchema.parse({ linkRules: { enabled: false } }).linkRules.enabled).toBe(false);
+  });
+
   it('rejects out-of-range tier values', () => {
     expect(() => AutoContainmentConfigSchema.parse({ tiers: { verify: { rolloutPercent: 101 } } })).toThrow();
     expect(() => AutoContainmentConfigSchema.parse({ tiers: { verify: { expiryHours: 0 } } })).toThrow();
@@ -63,6 +68,7 @@ describe('autoContainmentDecisionItemSchema', () => {
       decidedAt: new Date(),
     });
     expect(item).toMatchObject({ tier: 'contain', policyVersion: null, scope: 'account', expiresAt: null });
+    expect(item).toMatchObject({ decidedBy: 'model', linkRules: [], modelJudgment: null });
   });
 });
 

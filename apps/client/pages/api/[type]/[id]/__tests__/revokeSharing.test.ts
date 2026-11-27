@@ -39,6 +39,11 @@ vi.mock('@server/sharing/revokedFileReferences', () => ({
   projectRevokeCleanupTargets: (...a: unknown[]) => mockProjectTargets(...a),
 }));
 
+const mockRescope = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({
+  rescopeUserSubscriptions: (...a: unknown[]) => mockRescope(...a),
+}));
+
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   fabFileRepository: {},
@@ -140,5 +145,46 @@ describe('/api/[type]/[id]/revokeSharing - revoked file references', () => {
     const { req, res } = request({ type: 'files', id: 'file1' }, { userId: 'target-user' });
     await expect(mockRefs.useHandler!(req, res)).rejects.toThrow('denied');
     expect(mockCleanUp).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/[type]/[id]/revokeSharing - live subscriptions', () => {
+  beforeEach(() => {
+    mockRevoke.mockClear();
+    mockRescope.mockClear();
+  });
+
+  it('rebuilds the subscriptions of every user the revoke reports, after it commits', async () => {
+    mockRevoke.mockImplementationOnce(
+      async (_caller: string, _params: unknown, adapters: { onAccessRemoved: (ids: string[]) => void }) => {
+        adapters.onAccessRemoved(['target-user', 'project-member']);
+        expect(mockRescope).not.toHaveBeenCalled();
+        return { id: 'doc1' };
+      }
+    );
+    const { req, res } = request({ type: 'files', id: 'doc1' }, { userId: 'target-user' });
+
+    await mockRefs.useHandler!(req, res);
+
+    expect(mockRescope).toHaveBeenCalledTimes(1);
+    expect(mockRescope.mock.calls[0][0]).toEqual(expect.arrayContaining(['target-user', 'project-member']));
+  });
+
+  it('cleans up the file references of every user a file revoke reports', async () => {
+    mockCleanUp.mockClear();
+    mockRevoke.mockImplementationOnce(
+      async (_caller: string, _params: unknown, adapters: { onAccessRemoved: (ids: string[]) => void }) => {
+        adapters.onAccessRemoved(['target-user', 'project-member']);
+        return { id: 'doc1' };
+      }
+    );
+    const { req, res } = request({ type: 'files', id: 'doc1' }, { userId: 'target-user' });
+
+    await mockRefs.useHandler!(req, res);
+
+    expect(mockCleanUp.mock.calls[0][0]).toEqual([
+      { userId: 'target-user', fileIds: ['doc1'] },
+      { userId: 'project-member', fileIds: ['doc1'] },
+    ]);
   });
 });

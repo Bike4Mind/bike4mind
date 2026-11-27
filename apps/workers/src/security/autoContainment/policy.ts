@@ -8,10 +8,14 @@ import {
   type AutoContainmentConfig,
   type AutoContainmentMode,
   type GraduatedInterventionTier,
+  type InterventionDecider,
   type InterventionScope,
   type InterventionTier,
+  type LinkRule,
+  type LinkRuleFacts,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
+import { decideLinkRules, type LinkRuleDecision, type LinkRuleTier } from './linkRules';
 
 /**
  * Whether automated containment acts on one assessed detection. Pure, so the thresholds are tested
@@ -55,6 +59,9 @@ export function decideContainment(input: {
   return { kind: 'contain', userIds, reason: containmentReason(input.assessment, input.detection) };
 }
 
+const truncateReason = (text: string): string =>
+  text.length <= ADMIN_ACTION_REASON_MAX_LENGTH ? text : `${text.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH - 3)}...`;
+
 const formatSignal = ({ key, value }: { key: string; value: number | boolean | null }) =>
   `${key}=${value === null ? 'unknown' : String(value)}`;
 
@@ -74,9 +81,7 @@ export function containmentReason(
     `${label}: abuse assessment ${assessment.id} (${assessment.model}, confidence ` +
     `${(assessment.confidence ?? 0).toFixed(2)}) on ${detection.detector} detection ${detection.id}: ` +
     `${detection.summary}${signals}`;
-  return text.length <= ADMIN_ACTION_REASON_MAX_LENGTH
-    ? text
-    : `${text.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH - 3)}...`;
+  return truncateReason(text);
 }
 
 export const INTERVENTION_SKIP_REASONS = [
@@ -103,6 +108,9 @@ export type InterventionDecision =
       /** null for Contain, which never lapses. */
       expiresAt: Date | null;
       policyVersion: number;
+      decidedBy: InterventionDecider;
+      /** The link rules that fired for the detection's accounts; empty when none did or they are off. */
+      linkRules: LinkRule[];
     }
   | { kind: 'skip'; why: InterventionSkipReason; tier: InterventionTier | null };
 
@@ -140,17 +148,91 @@ export const rolloutBucket = (userId: string): number =>
   createHash('sha256').update(userId).digest().readUInt32BE(0) % 100;
 
 /**
- * Which tier, if any, acts on one assessed detection. Contain keeps decideContainment's rules
- * unchanged; graduated tiers also refuse unusable or stale evidence and honor the tier's rollout.
+ * Model skips a link rule may override: the model abstained or was unusable, or the detection's own mapped
+ * tier is off (decideByLinkRule applies the rule tier's mode gate). Never an admin gate, and never a positive
+ * legitimate_automation judgment, whose skip decideIntervention keeps whatever its reason.
  */
-export function decideIntervention(input: {
+const LINK_RULE_OVERRIDABLE: ReadonlySet<InterventionSkipReason> = new Set([
+  'tier_off',
+  'evidence_unavailable',
+  'stale_evidence',
+  'not_abuse',
+  'below_confidence',
+]);
+
+type InterventionInput = {
   assessment: Pick<AbuseAssessmentItem, 'id' | 'result' | 'confidence' | 'model' | 'featureSummary' | 'assessedAt'>;
   detection: Pick<ShadowDetectionItem, 'id' | 'detector' | 'wouldAction' | 'userIds' | 'verdict' | 'summary'>;
   config: AutoContainmentConfig;
   now: Date;
   /** Whether any verification flow (card or phone) can clear a verify hold; without one, verify becomes review. */
   verificationAvailable: boolean;
-}): InterventionDecision {
+  /** Per-account link-rule facts; null or absent when not loaded (rules off, or nothing to load). */
+  linkFacts?: LinkRuleFacts[] | null;
+};
+
+const LINK_RULE_TIERS: readonly LinkRuleTier[] = ['limit', 'holdGrant'];
+
+/**
+ * The gates a link rule's tier must pass that do not read the model's judgment; null when it passes. The one
+ * predicate both linkRulesCanAct (whether to load facts) and decideByLinkRule (whether to act) apply.
+ */
+function linkRuleGate(
+  detection: Pick<ShadowDetectionItem, 'detector' | 'userIds' | 'verdict'>,
+  config: AutoContainmentConfig,
+  tier: LinkRuleTier
+): InterventionSkipReason | null {
+  if (config.mode === 'off') return 'mode_off';
+  if (effectiveTierMode(config, tier) === 'off') return 'tier_off';
+  if (isReviewOnlyCompletionDetector(detection.detector)) return 'review_only_detector';
+  if (detection.verdict !== null) return 'already_reviewed';
+  const named = new Set(detection.userIds).size;
+  if (named === 0) return 'no_accounts';
+  if (named > config.maxAccountsPerDetection) return 'too_many_accounts';
+  return null;
+}
+
+/** Whether link rules could decide anything for this detection, so callers can skip loading their facts. */
+export function linkRulesCanAct(
+  detection: Pick<ShadowDetectionItem, 'detector' | 'wouldAction' | 'userIds' | 'verdict'>,
+  config: AutoContainmentConfig
+): boolean {
+  if (!config.linkRules.enabled || !TIER_BY_ACTION[detection.wouldAction]) return false;
+  return LINK_RULE_TIERS.some(tier => linkRuleGate(detection, config, tier) === null);
+}
+
+/**
+ * Whether a model decision leaves the link rules room to decide, so callers load facts only then: the model
+ * skipped for an overridable reason, without a legitimate_automation judgment, and a rule tier could act.
+ */
+export function linkRulesMayOverride(
+  input: Pick<InterventionInput, 'assessment' | 'detection' | 'config'>,
+  decided: InterventionDecision
+): boolean {
+  if (decided.kind !== 'skip' || !LINK_RULE_OVERRIDABLE.has(decided.why)) return false;
+  // A positive legitimate judgment is the more specific signal for the same cluster, so rules defer to it.
+  if (input.assessment.result === 'legitimate_automation') return false;
+  return linkRulesCanAct(input.detection, input.config);
+}
+
+/**
+ * Which tier, if any, acts on one assessed detection. Contain keeps decideContainment's rules
+ * unchanged; graduated tiers also refuse unusable or stale evidence and honor the tier's rollout.
+ * When the model abstains or the mapped tier is off, a firing link rule (linkRules.ts) may decide
+ * Limit or Hold signup grant under the same non-model gates; a link rule never decides Contain, never
+ * overrides a legitimate_automation judgment, and when it cannot act the model's skip stands.
+ */
+export function decideIntervention(input: InterventionInput): InterventionDecision {
+  const decided = decideByModel(input);
+  if (!input.linkFacts || !linkRulesMayOverride(input, decided)) return decided;
+  const linkRules = decideLinkRules(input.linkFacts);
+  if (!linkRules) return decided;
+  // A rule that cannot act leaves the model's own skip, so skip reasons keep reporting its judgment.
+  const ruled = decideByLinkRule(input, linkRules);
+  return ruled.kind === 'act' ? ruled : decided;
+}
+
+function decideByModel(input: InterventionInput): InterventionDecision {
   const { detection, config } = input;
   const mapped = TIER_BY_ACTION[detection.wouldAction];
   if (!mapped) return { kind: 'skip', why: 'not_an_intervention_detection', tier: null };
@@ -170,16 +252,49 @@ export function decideIntervention(input: {
       scope: SCOPE_BY_TIER.contain,
       expiresAt: null,
       policyVersion: INTERVENTION_POLICY_VERSION,
+      decidedBy: 'model',
+      linkRules: [],
     };
   }
 
   return decideGraduated(input, mapped);
 }
 
-function decideGraduated(
-  input: Parameters<typeof decideIntervention>[0],
-  mapped: GraduatedInterventionTier
-): InterventionDecision {
+/** The rule's tier under every gate that does not read the model's judgment. */
+function decideByLinkRule(input: InterventionInput, rule: LinkRuleDecision): InterventionDecision {
+  const { detection, config, now } = input;
+  const tier = rule.tier;
+  const skip = (why: InterventionSkipReason): InterventionDecision => ({ kind: 'skip', why, tier });
+  const gated = linkRuleGate(detection, config, tier);
+  if (gated) return skip(gated);
+  const tierConfig = config.tiers[tier];
+  const mode = effectiveTierMode(config, tier);
+  // Unreachable after the gate; narrows mode for the act below.
+  if (mode === 'off') return skip('tier_off');
+  const named = new Set(detection.userIds);
+  // Rule ids come from facts loaded for detection.userIds, so the named filter is defensive;
+  // empty here means rollout excluded every account.
+  const userIds = rule.userIds.filter(id => named.has(id) && rolloutBucket(id) < tierConfig.rolloutPercent);
+  if (userIds.length === 0) return skip('not_in_rollout');
+
+  return {
+    kind: 'act',
+    tier,
+    mode,
+    userIds,
+    reason: truncateReason(
+      `Automated ${tier} by link rule ${rule.rules.join(', ')} (policy v${INTERVENTION_POLICY_VERSION}) on ` +
+        `${detection.detector} detection ${detection.id}: ${rule.reason}`
+    ),
+    scope: SCOPE_BY_TIER[tier],
+    expiresAt: new Date(now.getTime() + tierConfig.expiryHours * HOUR_MS),
+    policyVersion: INTERVENTION_POLICY_VERSION,
+    decidedBy: 'link_rule',
+    linkRules: rule.rules,
+  };
+}
+
+function decideGraduated(input: InterventionInput, mapped: GraduatedInterventionTier): InterventionDecision {
   const { assessment, detection, config, now } = input;
   const tier: GraduatedInterventionTier = mapped === 'verify' && !input.verificationAvailable ? 'review' : mapped;
   const skip = (why: InterventionSkipReason): InterventionDecision => ({ kind: 'skip', why, tier });
@@ -210,5 +325,7 @@ function decideGraduated(
     scope: SCOPE_BY_TIER[tier],
     expiresAt: new Date(now.getTime() + tierConfig.expiryHours * HOUR_MS),
     policyVersion: INTERVENTION_POLICY_VERSION,
+    decidedBy: 'model',
+    linkRules: [],
   };
 }

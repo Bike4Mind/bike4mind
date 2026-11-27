@@ -1,4 +1,5 @@
 // The main surface's session deps: a tutorial runs in an ordinary notebook the user owns.
+import { rescopeUserSubscriptions } from '../websocket/rescopeUserSubscriptions';
 import type { TutorialRequest } from './routes/types';
 import { isTutorialSessionName, TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
 import {
@@ -50,8 +51,9 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       if (!session || !isTutorialSessionName(session.name)) return false;
       if ((await fabFileRepository.find({ sessionId })).length > 0) return false;
-      await withTransaction(() =>
-        sessionService.deleteSession(
+      const affectedUserIds = await withTransaction(async () => {
+        const affected = new Set<string>();
+        await sessionService.deleteSession(
           userId,
           { id: sessionId },
           {
@@ -64,9 +66,12 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
               sessionAgentConfigs: sessionAgentConfigRepository,
             },
             logger: req.logger,
+            onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
           }
-        )
-      );
+        );
+        return [...affected];
+      });
+      await rescopeUserSubscriptions(affectedUserIds, req.logger);
       return true;
     },
     setSessionMarker: setCoreSessionMarker,

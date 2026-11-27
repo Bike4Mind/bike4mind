@@ -36,9 +36,11 @@ const OAuthClientSignInSchema = new Schema<IOAuthClientSignInDocument>(
   { timestamps: true }
 );
 
-// One row per (client, user); the upsert keys on it, and the clientId prefix serves per-client counts.
+// One row per (client, user); the upsert keys on it.
 OAuthClientSignInSchema.index({ clientId: 1, userId: 1 }, { unique: true });
 OAuthClientSignInSchema.index({ userId: 1, lastSignInAt: -1 });
+// Serves the per-client active-user counts.
+OAuthClientSignInSchema.index({ clientId: 1, lastSignInAt: -1 });
 
 const isDuplicateKey = (error: unknown) =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;

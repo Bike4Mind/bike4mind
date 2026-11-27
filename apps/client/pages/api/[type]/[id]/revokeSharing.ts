@@ -10,6 +10,7 @@ import {
 import { sharingService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request, Response } from 'express';
 
@@ -40,12 +41,10 @@ const handler = baseApi().use(
     // id and type come after the body spread so URL params win over any body field with the same name.
     // Wrap in a transaction so the guarded doc write and revokeFromProject's side effects are atomic:
     // a ConcurrencyConflictError from a racing grant rolls the whole revoke back (mirrors accept).
-    const document = await withTransaction(() =>
-      sharingService.revoke(
+    const { document, lostAccess } = await withTransaction(async () => {
+      const lostAccess = new Set<string>();
+      const document = await sharingService.revoke(
         req.user.id,
-        // 'projects' included: the Members panel posts to /api/projects/<id>/revokeSharing, which
-        // lands on revoke's projects arm. The narrower cast excluded the one type that runs the
-        // revokeFromProject cascade.
         { ...body, id, type: type as 'files' | 'sessions' | 'projects' },
         {
           db: {
@@ -54,15 +53,19 @@ const handler = baseApi().use(
             projects: projectRepository,
             users: userRepository,
           },
+          onAccessRemoved: userIds => userIds.forEach(userId => lostAccess.add(userId)),
         }
-      )
-    );
+      );
+      return { document, lostAccess: [...lostAccess] };
+    });
+    await rescopeUserSubscriptions(lostAccess, req.logger);
 
     // After the commit, outside its session (see cleanUpDeletedFileReferences). Each target is
     // re-checked, so a user who still reads a file through another grant keeps it.
     const cleanUpTargets =
       type === 'files'
-        ? [{ userId: body.userId, fileIds: [id] }]
+        ? // lostAccess includes the participants of any project the file was detached from.
+          [...new Set([body.userId, ...lostAccess])].map(userId => ({ userId, fileIds: [id] }))
         : type === 'sessions' && !body.projectId
           ? // An unscoped session revoke also drops the grants it minted on the session's files.
             [{ userId: body.userId, fileIds: (document as ISessionDocument).knowledgeIds ?? [] }]

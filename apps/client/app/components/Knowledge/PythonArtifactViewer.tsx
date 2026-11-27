@@ -78,7 +78,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
     interrupt,
     detectPackages,
     isReady,
-  } = usePyodide();
+  } = usePyodide(artifact.id);
   const dataOrigins = usePythonArtifactDataOrigins();
   const callableFunctionsEnabled = useCallableFunctionsEnabled();
 
@@ -680,6 +680,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
           {showFunctionTab && (
             <TabPanel value={2} sx={{ p: 0, position: 'relative' }}>
               <PythonFunctionPanel
+                sandboxOwner={artifact.id}
                 code={editableCode}
                 packages={detectedPackages}
                 disabled={isPyodideLoading || isExecuting || !isReady()}

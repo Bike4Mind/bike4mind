@@ -89,7 +89,9 @@ export const projectRevokeCleanupTargets = async (
 ): Promise<RevokedFileReferenceTarget[]> => {
   const project = await db.projects.findById(projectId);
   if (!project) return [];
-  const fileIds = (project.fileIds ?? []).map(String);
+  const fileIds = Array.from(
+    new Set([...(project.fileIds ?? []), ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)].map(String))
+  );
   const participants = Array.from(new Set([project.userId, ...(project.users ?? []).map(u => u.userId)].map(String)));
   if (!revokedUserId) return participants.map(userId => ({ userId, fileIds }));
 

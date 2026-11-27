@@ -193,6 +193,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/tools/weather',
     'POST /api/v1/tools/web-fetch',
     'POST /api/v1/tools/web-search',
+    'POST /api/v1/turns',
   ],
   [ApiKeyScope.READ_PROJECTS]: [
     'GET /api/projects',

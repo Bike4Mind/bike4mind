@@ -3965,6 +3965,442 @@
           "max_tokens": 500
         }
       },
+      "createSessionTurnResponse200": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "meta"
+                ]
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "requestId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "turn"
+                ]
+              },
+              "quest_id": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "quest_id",
+              "session_id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "delta"
+                ]
+              },
+              "quest_id": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "quest_id",
+              "slot",
+              "text"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "replace"
+                ]
+              },
+              "quest_id": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "quest_id",
+              "slot",
+              "text"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "settled"
+                ]
+              },
+              "quest_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "stopped"
+                ]
+              },
+              "failed": {
+                "type": "boolean"
+              },
+              "credits_used": {
+                "type": "number"
+              },
+              "error_code": {
+                "type": "string",
+                "enum": [
+                  "insufficient_credits",
+                  "spend_cap_exceeded",
+                  "spend_frozen",
+                  "free_quest_limit_reached",
+                  "run_budget_exhausted",
+                  "content_blocked"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "quest_id",
+              "status",
+              "failed"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string",
+                "enum": [
+                  "insufficient_credits",
+                  "spend_cap_exceeded",
+                  "spend_frozen",
+                  "free_quest_limit_reached",
+                  "run_budget_exhausted",
+                  "invalid_request",
+                  "provider_error",
+                  "provider_rejected",
+                  "content_blocked",
+                  "output_budget_exhausted"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ]
+          }
+        ],
+        "example": {
+          "type": "delta",
+          "quest_id": "664f1c2b9a1e4d0012ab34cd",
+          "slot": 0,
+          "text": "The report covers"
+        }
+      },
+      "createSessionTurnResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "unknown_model",
+              "assistant_prefill_unsupported",
+              "tool_search_unsupported",
+              "all_tools_deferred",
+              "deferred_tool_cache_control",
+              "unknown_tool_reference",
+              "tool_changes_unsupported",
+              "invalid_tool_change",
+              "end_user_id_not_allowed",
+              "invalid_end_user_id"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createSessionTurnResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "billing_organization_mismatch",
+              "model_requires_subscription",
+              "org_model_not_allowed",
+              "spend_frozen"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "frozenScope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "organization",
+              "api_key"
+            ],
+            "description": "With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused."
+          },
+          "frozenAt": {
+            "type": "string",
+            "description": "With `errorCode: spend_frozen`: when spending was paused (ISO 8601)."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createSessionTurnResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded",
+              "spend_frozen",
+              "free_quest_limit_reached",
+              "run_budget_exhausted"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createSessionTurnRequest": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The session (notebook) to add the turn to. It must already exist."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The user message for this turn."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Model id, as listed by `GET /api/v1/models`."
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "top_p": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "max_tokens": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "Output ceiling. Omit it to let the server size it for the model."
+          },
+          "thinking": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "budget_tokens": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 32000
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "message_file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 100,
+            "description": "Files attached to this message."
+          },
+          "fab_file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 100,
+            "description": "Workbench files to put in context for this turn."
+          },
+          "history_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Earlier turns of the session to send as context. Defaults to 10. 14 is reserved and rejected with 422."
+          },
+          "prompt_mode": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "grounded",
+              "surface"
+            ],
+            "description": "How much of the system stack to place in front of the model. Unset keeps the full stack the web app uses."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Organization to bill. `null` bills personal credits; omitted uses the caller default."
+          },
+          "client_submitted_at": {
+            "type": "number",
+            "description": "Epoch ms when the client submitted the message, for the turn timing log."
+          }
+        },
+        "required": [
+          "session_id",
+          "message",
+          "model"
+        ],
+        "example": {
+          "session_id": "664f1c2b9a1e4d0012ab34cd",
+          "message": "Summarize the attached report.",
+          "model": "claude-opus-4-8"
+        }
+      },
       "createCompletionRunResponse201": {
         "type": "object",
         "properties": {
@@ -50644,6 +51080,284 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"claude-opus-4-8\",\n        \"messages\": [\n            {\n                \"role\": \"user\",\n                \"content\": \"How do I reset my password?\"\n            }\n        ],\n        \"max_tokens\": 500\n    },\n    stream=True,\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/turns": {
+      "post": {
+        "operationId": "createSessionTurn",
+        "summary": "Add a turn to a session",
+        "description": "Adds a user message to an existing session (called a \"notebook\" in the product UI) and runs the assistant reply through the same pipeline as the web app, so the turn appears in the session and every other client watching it sees it live. A successful request is answered with an SSE stream (`text/event-stream`): a `meta` event carrying `requestId`, a `turn` event with the new `quest_id` and `session_id`, then `delta` events (`{ quest_id, slot, text }`) that each APPEND `text` to reply slot `slot`, and `replace` events (`{ quest_id, slot, text }`) that REPLACE a slot whole when the server reset or rewrote it (a retry, a rapid-reply handoff). Thinking models stream their reasoning in an earlier slot than the answer. One `settled` event (`{ quest_id, status, failed, credits_used, error_code }`) follows the last slot event, then `data: [DONE]`. `status` is `done` or `stopped`; when `failed` is true the slots hold an explanation rather than an answer, and `error_code` names the cause when it is a known one.\n\nDISCONNECTS. Closing the stream detaches from the turn; it does not stop it. The turn runs to the end and is saved to the session, and an API key's concurrent-request slot stays held until the turn finishes. Stop a turn with `POST /api/sessions/{id}/chat/stop-reply`.\n\nERRORS. Everything checked before the turn starts fails with a JSON error body and a real HTTP status, before any stream opens: a bad credential `401`; a key without `ai:chat` `403` (with `required_scopes`); a suspended account, paused spending or an organization the caller cannot bill `403` with an `errorCode`; a `model` that does not exist, is disabled or cannot run a chat completion `400`; a `session_id` that does not exist or that the caller cannot write to `404` (the two are indistinguishable on purpose); a body that fails schema validation `422`; too many requests, or the free-tier daily allowance used up, `429` with `Retry-After`. Once the turn exists the stream opens and the status stays `200`: a turn the account cannot pay for (`error_code: \"insufficient_credits\"`) or a model its plan or organization does not allow is reported by its `settled` event with `failed: true`, like any other failed turn, and an `error` event is sent only when the server could not follow the turn to its end.",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createSessionTurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of turn events (see the SessionTurnStreamEvent shape).",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/createSessionTurnResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A `model` that does not exist, is disabled or cannot run a chat completion, or an otherwise invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createSessionTurnResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold `ai:chat`, the account is suspended (`errorCode: \"account_suspended\"`), AI access is turned off for the account, the organization policy does not allow the model for an API key (`errorCode: \"org_model_not_allowed\"`; a signed-in caller gets the refusal as a failed turn in the stream), or the caller named an `organization_id` it cannot bill (`errorCode: \"billing_organization_mismatch\"` for an organization-billed key). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createSessionTurnResponse403"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session with that id exists, or the caller cannot write to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body over 25 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body failed schema validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createSessionTurnResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded, or the free-tier daily allowance is used up (`errorCode: \"daily_free_limit_reached\"`).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error before the stream opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/v1/turns\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"session_id\": \"664f1c2b9a1e4d0012ab34cd\",\n  \"message\": \"Summarize the attached report.\",\n  \"model\": \"claude-opus-4-8\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/turns\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"session_id\": \"664f1c2b9a1e4d0012ab34cd\",\n  \"message\": \"Summarize the attached report.\",\n  \"model\": \"claude-opus-4-8\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/turns\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"session_id\": \"664f1c2b9a1e4d0012ab34cd\",\n        \"message\": \"Summarize the attached report.\",\n        \"model\": \"claude-opus-4-8\"\n    },\n    stream=True,\n)"
           }
         ]
       }

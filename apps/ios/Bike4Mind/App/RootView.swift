@@ -169,6 +169,7 @@ struct RootView: View {
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }
+    services.sessionsModel.reset()
     Task { await services.sessionListCache.clear() }
     let mediaFirstPages = services.mediaFirstPages
     Task { await mediaFirstPages.invalidate() }

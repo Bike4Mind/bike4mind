@@ -235,6 +235,22 @@ export interface OAuthClientView {
   updatedAt: string | null;
 }
 
+/** Per-client counts for the admin OAuth Clients tab. Active users counts people whose last sign-in through the client falls in the window. */
+export interface OAuthClientUsage {
+  signups7d: number;
+  signups30d: number;
+  activeUsers7d: number;
+  activeUsers30d: number;
+}
+
+export type OAuthClientUsageStats = Record<string, OAuthClientUsage>;
+
+/** Where a user signed up and which apps they sign in to; names are null for a deleted client. */
+export interface AdminUserOAuthApps {
+  signupClient: { clientId: string; name: string | null } | null;
+  apps: { clientId: string; name: string | null; firstSignInAt: string; lastSignInAt: string }[];
+}
+
 /** Create and rotate responses: the only place the plaintext secret ever appears. */
 export interface OAuthClientWithSecret {
   client: OAuthClientView;

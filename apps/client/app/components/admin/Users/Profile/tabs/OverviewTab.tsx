@@ -13,9 +13,10 @@ import {
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
+import { useAdminUserOAuthApps } from '@client/app/hooks/data/adminUserOAuthApps';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
-import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtc } from '../../../shared';
+import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtcDay } from '../../../shared';
 import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
@@ -28,6 +29,7 @@ import { InterventionHoldsCard } from '../../../InterventionHolds';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
+import { OAuthAppsCard } from './OAuthAppsCard';
 import { OAuthClientRolesCard } from './OAuthClientRolesCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
@@ -63,9 +65,10 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
   const { currentUser } = useUser();
   const storage = resolveUserStorageLimit(user);
   const network = user.signupMeta;
+  const oauthApps = useAdminUserOAuthApps(user.id);
   const signupParts = [
     user.acquisition?.signupMethod,
-    user.createdAt && formatUtc(new Date(user.createdAt)).split(',')[0],
+    user.createdAt && formatUtcDay(new Date(user.createdAt)),
     network?.country,
   ].filter(Boolean);
 
@@ -87,6 +90,11 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
         </Stack>
       </Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
+      <Fact label="Signed up via" data-testid="user-profile-fact-signup-client">
+        {user.signupClientId && !oauthApps.isPending
+          ? (oauthApps.data?.signupClient?.name ?? user.signupClientId)
+          : null}
+      </Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
         {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (
           <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
@@ -369,6 +377,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         <AccessCard user={user} onAction={onAction} />
         <ClientsCard user={user} />
         <OAuthClientRolesCard user={user} />
+        <OAuthAppsCard userId={user.id} />
         <SignupClassificationCard key={user.id} userId={user.id} />
         <RiskEvidenceCard userId={user.id} />
         <SectionCard

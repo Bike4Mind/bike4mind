@@ -41,7 +41,11 @@ export const listFiles = async (
   const project = await adapters.db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) throw new NotFoundError('Project not found');
 
-  const files = await adapters.db.files.findAllByIds(project.fileIds);
+  // Listed in the project is not a grant: only files the caller can still read.
+  const readable = new Set(
+    (await adapters.db.files.shareable.findAllAccessibleByIds(user, project.fileIds)).map(file => String(file.id))
+  );
+  const files = (await adapters.db.files.findAllByIds(project.fileIds)).filter(file => readable.has(String(file.id)));
 
   // Sign on read: URLs are response-only and never stored
   if (adapters.storage) {

@@ -179,7 +179,11 @@ describe('rotateSession', () => {
         expiresAt,
       })
     );
-    await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
+    await rotateSession(buildRefreshToken(SID, secret), {
+      db,
+      signAccessToken,
+      isImpersonatorAuthorized: async () => true,
+    });
     expect(authSessions.rotateHash).toHaveBeenCalledWith(SID, expect.objectContaining({ newExpiresAt: expiresAt }));
     expect(signAccessToken).toHaveBeenCalledWith('user-1', 7, {
       sid: SID,
@@ -187,6 +191,38 @@ describe('rotateSession', () => {
       impersonationExpiresAt: expiresAt.getTime(),
     });
   });
+  it.each([
+    { label: 'the admin no longer may impersonate', isImpersonatorAuthorized: async () => false },
+    { label: 'the caller cannot check the admin', isImpersonatorAuthorized: undefined },
+  ])('refuses to refresh an impersonation session when $label', async ({ isImpersonatorAuthorized }) => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: future(),
+      })
+    );
+    const checker = isImpersonatorAuthorized && vi.fn(isImpersonatorAuthorized);
+    await expect(
+      rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken, isImpersonatorAuthorized: checker })
+    ).rejects.toThrow(UnauthorizedError);
+    if (checker) expect(checker).toHaveBeenCalledWith('admin');
+    expect(signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the impersonator check for an ordinary session', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret(secret) }));
+    const isImpersonatorAuthorized = vi.fn(async () => false);
+    await expect(
+      rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken, isImpersonatorAuthorized })
+    ).resolves.toMatchObject({ status: 'rotated' });
+    expect(isImpersonatorAuthorized).not.toHaveBeenCalled();
+  });
+
   it('rotates on a current-hash match and returns a fresh opaque token + access token', async () => {
     const { authSessions, signAccessToken, db } = setup();
     const secret = generateRefreshSecret();

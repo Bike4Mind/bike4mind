@@ -72,6 +72,79 @@ final class APIClientTests: XCTestCase {
     }
   }
 
+  // MARK: - Rename and delete
+
+  private static let renamedSession = """
+    {"id":"a b/c","name":"New name","userId":"owner",
+     "firstCreated":"2026-10-02T08:00:00Z","lastUpdated":"2026-10-03T08:00:00Z"}
+    """
+
+  func testRenameSendsOnlyTheNameToTheEncodedPath() async throws {
+    let (client, transport) = makeClient(tokens: FakeTokens()) { _ in Self.ok(Self.renamedSession) }
+
+    let session = try await client.renameSession(id: "a b/c", name: "New name")
+
+    XCTAssertEqual(session.name, "New name")
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "PUT")
+    XCTAssertEqual(request.url?.path(percentEncoded: true), "/api/sessions/a%20b%2Fc")
+    let body = try XCTUnwrap(request.httpBody)
+    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+    XCTAssertEqual(json, ["name": "New name"])
+  }
+
+  func testRenameOfAMissingSessionIsNotFound() async {
+    let (client, _) = makeClient(tokens: FakeTokens()) { _ in (404, Data(APIFixtures.errorBody.utf8)) }
+    do {
+      _ = try await client.renameSession(id: "gone", name: "x")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? APIError, .notFound)
+    }
+  }
+
+  func testRenameRetriesA401WithAFreshToken() async throws {
+    let tokens = FakeTokens([.success("token-1"), .success("token-2")])
+    let (client, transport) = makeClient(tokens: tokens) { request in
+      request.value(forHTTPHeaderField: "Authorization") == "Bearer token-1"
+        ? (401, Data(APIFixtures.errorBody.utf8)) : Self.ok(Self.renamedSession)
+    }
+
+    let session = try await client.renameSession(id: "a b/c", name: "New name")
+
+    XCTAssertEqual(session.name, "New name")
+    let requests = await transport.requests
+    XCTAssertEqual(requests.map(\.httpMethod), ["PUT", "PUT"])
+  }
+
+  func testDeleteUsesTheEncodedPath() async throws {
+    let (client, transport) = makeClient(tokens: FakeTokens()) { _ in Self.ok(#"{"newLastNotebookId":null}"#) }
+
+    try await client.deleteSession(id: "a b/c")
+
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "DELETE")
+    XCTAssertEqual(request.url?.path(percentEncoded: true), "/api/sessions/a%20b%2Fc")
+  }
+
+  func testDeleteOfAnAlreadyGoneSessionSucceeds() async throws {
+    let (client, _) = makeClient(tokens: FakeTokens()) { _ in (404, Data(APIFixtures.errorBody.utf8)) }
+    try await client.deleteSession(id: "gone")
+  }
+
+  func testDeleteConflictIsRetryable() async {
+    let (client, _) = makeClient(tokens: FakeTokens()) { _ in (409, Data(APIFixtures.errorBody.utf8)) }
+    do {
+      try await client.deleteSession(id: "busy")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? APIError, .conflict)
+      XCTAssertEqual((error as? APIError)?.isRetryable, true)
+    }
+  }
+
   func testA401IsRetriedOnceWithAFreshToken() async throws {
     let tokens = FakeTokens([.success("stale"), .success("fresh")])
     let (client, transport) = makeClient(tokens: tokens) { request in

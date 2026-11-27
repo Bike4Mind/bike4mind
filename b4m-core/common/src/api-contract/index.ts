@@ -11,6 +11,7 @@ export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
+export { createSessionTurnContract } from './contracts/sessionTurns.contract';
 export {
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
