@@ -1116,6 +1116,17 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  /** `lastCreditsPurchasedAt` per id (the purchase half of paid standing); ids that are not users are absent. */
+  async findCreditPurchaseStamps(ids: string[]): Promise<Map<string, Date | null>> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return new Map();
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('lastCreditsPurchasedAt')
+      .lean();
+    return new Map(docs.map(doc => [String(doc._id), doc.lastCreditsPurchasedAt ?? null]));
+  }
+
   /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
   async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
@@ -3009,6 +3020,20 @@ UserSchema.index(
   { nextBlockBriefAt: 1 },
   { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
+// Serves the per-client sign-up counts and the admin users filter; partial because almost every user has no client.
+const SIGNUP_CLIENT_ID_INDEX_FILTER = { signupClientId: { $type: 'string' } } as const;
+UserSchema.index(
+  { signupClientId: 1, createdAt: -1 },
+  { partialFilterExpression: SIGNUP_CLIENT_ID_INDEX_FILTER, name: 'user_signupClientId_createdAt' }
+);
+
+/** Match on signupClientId that states the partial index's filter, which the planner needs to pick that index. */
+export const signupClientIdMatch = (value: string | { $in: string[] }) => ({
+  signupClientId: {
+    ...SIGNUP_CLIENT_ID_INDEX_FILTER.signupClientId,
+    ...(typeof value === 'string' ? { $eq: value } : value),
+  },
+});
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 UserSchema.index(
   { 'releasedPlatformEmailAddresses.address': 1 },

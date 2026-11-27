@@ -147,6 +147,8 @@ private actor BlockingAPI: B4MAPI {
 
   func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt { throw APIError.notFound }
   func session(id: String) async throws -> SessionSummary { throw APIError.notFound }
+  func renameSession(id: String, name: String) async throws -> SessionSummary { throw APIError.notFound }
+  func deleteSession(id: String) async throws {}
   func quest(id: String) async throws -> QuestTurn { throw APIError.notFound }
 
   func creditBalance() async throws -> CreditBalance { CreditBalance(credits: 0) }

@@ -1,6 +1,7 @@
 import type {
   AbuseAssessmentResult,
   AutoContainmentOutcome,
+  InterventionDecider,
   ShadowDetectionVerdict,
   ShadowDetectionVerdictSource,
   SignupRiskReviewState,
@@ -107,6 +108,7 @@ type LeanDecision = {
   mode: string;
   confidence: number;
   decidedAt: Date;
+  decidedBy?: InterventionDecider;
 };
 type LeanAudit = { action: string; actor: { kind: string }; target: { id: string }; occurredAt: Date };
 type LeanUser = {
@@ -344,7 +346,7 @@ export async function loadVerdictEvalInput(
     inChunks(detectionIds, chunk =>
       AutoContainmentDecisionModel.find(
         { detectionId: { $in: chunk } },
-        { detectionId: 1, outcome: 1, mode: 1, confidence: 1, decidedAt: 1 }
+        { detectionId: 1, outcome: 1, mode: 1, confidence: 1, decidedAt: 1, decidedBy: 1 }
       )
         .maxTimeMS(MAX_TIME_MS)
         .lean<LeanDecision[]>()

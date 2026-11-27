@@ -915,7 +915,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:accountCampaignSweep',
-    '91f216c1167faa53a3a3f263bada6004ec296646cddba8eac0a90869d53c1b5b'
+    'fbf102bff1f9fb5a03579c16cfb667e3fa6ac242a68535d2e33de491e50def17',
+    ['cloudwatch:PutMetricData']
   ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', 'affe75eb1ea58ec7de19131925c6c8907a82f258f187996331f5df4183eb3ab0', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
@@ -1290,7 +1291,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   }),
   gap(
     'schedule:infra/cron.ts:abuseAssessmentSweep',
-    'ea8660b95977904b15a42e29c55cf99aa096ca8bb712e5c49606ecc007f57c34'
+    'd6e32f3fbe83d61fe3b30767b34354f69c92ec481e30bc81c02b6d2f1c1f8b45',
+    ['cloudwatch:PutMetricData']
   ),
   gap('schedule:infra/cron.ts:usagePatternSignals', '066edef1ae0b959ca2c6049626beb3c8630d5c22f99aed2b3bca1430f1f05766'),
   wired(
@@ -1324,7 +1326,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c1f4e7cdb3ffd85316ea918cda0b0ba6c950e512143539c2539f146a36213a58',
+    'c01849c37004687a89c06c1a60dd1dbe1ed290d89c7b5842c09389a10483e2ca',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

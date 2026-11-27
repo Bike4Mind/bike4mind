@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   resend: vi.fn(),
   findById: vi.fn(),
+  publish: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -41,22 +42,68 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
   userRepository: { findById: h.findById },
-  withTransaction: (fn: () => Promise<unknown>) => fn(),
+  ...(await import('@server/utils/__tests__/fakeTransaction')),
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { resendEmailVerification: h.resend } }));
-vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
+  generateVerificationLink: (token: string) => `https://app.example.com/verify?token=${token}`,
+  getLogoUrl: () => '',
+  buildEmailLogoImg: () => '',
+  escapeHtml: (value: string) => value,
+}));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { fakeTransaction } from '@server/utils/__tests__/fakeTransaction';
 
 await import('../resend-verification');
 
 describe('POST /api/admin/users/[userId]/resend-verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeTransaction.reset();
+    h.publish.mockResolvedValue(undefined);
+    h.resend.mockImplementation(
+      async (
+        _params: unknown,
+        adapters: { mailer: { sendEmailVerificationEmail: (user: object, token: string) => Promise<void> } }
+      ) => {
+        await adapters.mailer.sendEmailVerificationEmail({ username: 'ada', email: 'ada@example.com' }, 'tok');
+      }
+    );
+  });
+
+  const adminRequest = () => ({
+    query: { userId: 'user-1' },
+    user: { id: 'admin-1', username: 'admin', isAdmin: true },
+    headers: {},
+    logger: { info: vi.fn() },
+  });
+
+  it('publishes once when the transaction callback is retried', async () => {
+    fakeTransaction.outcome = 'retryOnce';
+    const json = vi.fn();
+
+    await h.handler!(adminRequest(), { json });
+
+    expect(fakeTransaction.runs).toBe(2);
+    expect(h.resend).toHaveBeenCalledTimes(2);
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    expect(h.publish).toHaveBeenCalledWith(expect.objectContaining({ to: 'ada@example.com' }));
+    expect(json).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes nothing and sends no response when the transaction aborts', async () => {
+    fakeTransaction.outcome = 'abort';
+    const json = vi.fn();
+
+    await expect(h.handler!(adminRequest(), { json })).rejects.toThrow('Transaction aborted');
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
   });
 
   it('records user.email.verification_resent against the user', async () => {

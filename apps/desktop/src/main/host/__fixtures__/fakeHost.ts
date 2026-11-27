@@ -132,6 +132,8 @@ export class FakeHost {
   readonly connectFailures: HostConnectFailure[] = [];
   protocol: HostProtocolVersion = HOST_PROTOCOL_VERSION;
   account: HostAccount = ACCOUNT;
+  /** The id this host reports in host/initialize and host/info. */
+  hostId = 'devbox-id';
   epoch = 'epoch-1';
   /** When set, host/info never answers. */
   silent = false;
@@ -202,11 +204,15 @@ export class FakeHost {
             data: { reason: negotiated.reason, host: this.protocol },
           });
         }
-        return hostInfo({ protocol: { major: this.protocol.major, minor: negotiated.minor }, account: this.account });
+        return hostInfo({
+          hostId: this.hostId,
+          protocol: { major: this.protocol.major, minor: negotiated.minor },
+          account: this.account,
+        });
       }
       case 'host/info':
         if (this.silent) return new Promise(() => undefined);
-        return hostInfo({ protocol: this.protocol, account: this.account });
+        return hostInfo({ hostId: this.hostId, protocol: this.protocol, account: this.account });
       case 'session/subscribe':
         return this.subscribe(connection, hostMethods['session/subscribe'].params.parse(params));
       case 'session/unsubscribe':

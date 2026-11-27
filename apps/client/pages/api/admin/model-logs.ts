@@ -1,8 +1,8 @@
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { Quest } from '@bike4mind/database';
+import { Quest, User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { AdminSupportAccessAction, ApiKeyScope } from '@bike4mind/common';
+import { AdminSupportAccessAction, ApiKeyScope, isFullAdmin } from '@bike4mind/common';
 import type { PipelineStage, Types } from 'mongoose';
 import { z } from 'zod';
 import { dateParam } from '@server/utils/dateParam';
@@ -57,6 +57,17 @@ const LIST_PROJECTION = {
     },
   },
 };
+
+// Wider than canAccessAdmin (any direct grant counts), so a delegate's search never reaches an
+// account the per-log read would refuse.
+async function findAdminAccessUserIds(): Promise<string[]> {
+  const users = await User.find({
+    $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }, { 'adminRoleIds.0': { $exists: true } }],
+  })
+    .select('_id')
+    .lean<{ _id: Types.ObjectId }[]>();
+  return users.map(user => user._id.toString());
+}
 
 type ModelLogSummaryRow = {
   _id: Types.ObjectId;
@@ -119,6 +130,11 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
             },
           },
         ];
+        // A delegate searches only logs with a recorded owner that holds no admin access, matching
+        // the owner refusal model-logs/[id] applies to the same reader.
+        if (!isFullAdmin(req.user)) {
+          query['promptMeta.session.userId'] = { $exists: true, $nin: [null, ...(await findAdminAccessUserIds())] };
+        }
       }
 
       const pipeline: PipelineStage[] = [

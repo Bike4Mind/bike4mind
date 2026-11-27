@@ -75,6 +75,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  withoutNonOwnerSessionAuthoring,
   respondFromWorkspace,
   respondFromCoreTutorial,
   createReasoningWithholder,
@@ -288,7 +289,7 @@ import {
 } from './ChatCompletionFeatures';
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
-import { StatusManager } from './StatusManager';
+import { StatusManager, type ClientFrameSender } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
 import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
@@ -1360,6 +1361,7 @@ export class ChatCompletionProcess {
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private onStatusUpdate?: IChatCompletionServiceOptions['onStatusUpdate'];
+  private injectedClientMessageSender?: IChatCompletionServiceOptions['clientMessageSender'];
   private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
@@ -1446,6 +1448,7 @@ export class ChatCompletionProcess {
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
     this.onStatusUpdate = options.onStatusUpdate;
+    this.injectedClientMessageSender = options.clientMessageSender;
     this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
@@ -2002,12 +2005,7 @@ export class ChatCompletionProcess {
 
     const clientInitStartTime = Date.now();
     if (!this.statusManager) {
-      this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, logger),
-        logger,
-        this.wsHttpsUrl,
-        this.user.id
-      );
+      this.statusManager = new StatusManager(this.clientFrameSender(logger), logger, this.wsHttpsUrl, this.user.id);
       logger.info('StatusManager initialized');
     }
     logger.info(
@@ -2547,7 +2545,7 @@ export class ChatCompletionProcess {
         return;
       }
       const workspaceSession = await applyWorkspaceSessionSettings(
-        loadedSession,
+        withoutNonOwnerSessionAuthoring(loadedSession, this.user.id),
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
@@ -8231,6 +8229,11 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** The injected frame sink when the host supplied one, else a websocket sender of our own. */
+  private clientFrameSender(logger: Logger): ClientFrameSender {
+    return this.injectedClientMessageSender ?? new ClientMessageSender(this.db, logger);
+  }
+
   public async sendStatusUpdate(
     q: IChatHistoryItemDocument,
     status: string | null,
@@ -8247,7 +8250,7 @@ export class ChatCompletionProcess {
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, this.logger),
+        this.clientFrameSender(this.logger),
         this.logger,
         this.wsHttpsUrl,
         this.user.id
@@ -8276,7 +8279,7 @@ export class ChatCompletionProcess {
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, this.logger),
+        this.clientFrameSender(this.logger),
         this.logger,
         this.wsHttpsUrl,
         this.user.id
@@ -8562,8 +8565,7 @@ export class ChatCompletionProcess {
         },
       };
 
-      // Send directly to client using a new ClientMessageSender instance
-      const clientMessageSender = new ClientMessageSender(this.db, this.logger);
+      const clientMessageSender = this.clientFrameSender(this.logger);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await clientMessageSender.sendToClient(this.user.id, this.wsHttpsUrl, payload as any);
     } catch (error) {

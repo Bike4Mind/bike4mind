@@ -8,6 +8,9 @@ public enum APIError: Error, Equatable, Sendable {
   case signedOut
   case forbidden
   case notFound
+  /// A concurrent change touched the same resource and nothing was applied, so retrying is safe. Only
+  /// operations that document this 409 map to it; any other 409 stays `.server(status: 409)`.
+  case conflict
   case rateLimited
   case server(status: Int)
   /// The device could not reach the server.
@@ -19,7 +22,7 @@ public enum APIError: Error, Equatable, Sendable {
 
   public var isRetryable: Bool {
     switch self {
-    case .offline, .rateLimited, .server: true
+    case .offline, .rateLimited, .server, .conflict: true
     case .signedOut, .forbidden, .notFound, .malformedResponse, .upgradeRequired: false
     }
   }

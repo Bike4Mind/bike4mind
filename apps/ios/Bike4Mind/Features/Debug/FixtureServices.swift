@@ -413,6 +413,15 @@
         return session
       }
 
+      func renameSession(id: String, name: String) async throws -> SessionSummary {
+        let current = try await session(id: id)
+        return SessionSummary(
+          id: id, name: name, lastUsedModel: current.lastUsedModel, firstCreated: current.firstCreated,
+          lastUpdated: Date())
+      }
+
+      func deleteSession(id: String) async throws {}
+
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]
         let sessions = names.enumerated().map { index, name in

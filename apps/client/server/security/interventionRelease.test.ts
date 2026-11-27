@@ -38,6 +38,9 @@ const decision = (over: Partial<AutoContainmentDecisionItem> = {}): AutoContainm
   releasedAt: null,
   releasedBy: null,
   releaseReason: null,
+  decidedBy: 'model',
+  linkRules: [],
+  modelJudgment: null,
   ...over,
 });
 

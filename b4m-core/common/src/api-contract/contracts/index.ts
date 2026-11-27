@@ -8,6 +8,7 @@ import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './webTools.contract';
 import { createCompletionContract } from './completions.contract';
+import { createSessionTurnContract } from './sessionTurns.contract';
 import {
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
@@ -250,6 +251,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   fetchWebPageContract,
   getCurrentWeatherContract,
   createCompletionContract,
+  createSessionTurnContract,
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,

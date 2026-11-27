@@ -121,7 +121,10 @@ export interface LakeConfigHistoryFileEntry extends LakeConfigHistoryEntryBase {
   kind: 'file';
   action: LakeConfigHistoryFileAction;
   target: ILakeConfigEventTarget;
-  /** The file's name when it still exists; absent for a deleted file, where a reader falls back to the id. */
+  /**
+   * The file's current name, present only while the file exists AND is still a member of the lake
+   * (or is owned by the reader). Absent otherwise, where a reader falls back to the id.
+   */
   fileName?: string;
   origin: LakeMembershipChangeOrigin;
   /** This row is a side effect of that event, so it has no Undo of its own. */

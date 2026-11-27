@@ -12414,7 +12414,13 @@ describe('ChatCompletionProcess', () => {
 
     it('leaves the session untouched with an empty table', async () => {
       const turn = await runTurn(
-        { surface: 'settings-surface', systemPromptText: 'SESSION PROMPT', temperature: 0.4, maxToolCalls: 5 },
+        {
+          userId: 'user1',
+          surface: 'settings-surface',
+          systemPromptText: 'SESSION PROMPT',
+          temperature: 0.4,
+          maxToolCalls: 5,
+        },
         {}
       );
 
@@ -12422,6 +12428,33 @@ describe('ChatCompletionProcess', () => {
       expect(turn.sessionPrompt).toBe('SESSION PROMPT');
       expect(turn.temperature).toBe(0.4);
       expect(turn.maxToolCalls).toBe(5);
+    });
+
+    it("withholds the owner's own prompt and forced tools from a collaborator's turn", async () => {
+      const turn = await runTurn(
+        {
+          userId: 'owner-2',
+          systemPromptText: 'OWNER PROMPT',
+          enabledTools: ['current_datetime'],
+          temperature: 0.4,
+        },
+        {}
+      );
+
+      expect(turn.sessionPrompt).toBeUndefined();
+      expect(turn.enabledTools).not.toContain('current_datetime');
+      expect(turn.temperature).toBe(0.4);
+    });
+
+    it('keeps the workspace-resolved prompt and tools on a collaborator turn', async () => {
+      resolve.mockResolvedValue({ systemPromptText: 'RESOLVED WORKSPACE PROMPT', enabledTools: ['current_datetime'] });
+      const turn = await runTurn(
+        { userId: 'owner-2', surface: 'settings-surface', systemPromptText: 'OWNER PROMPT' },
+        table
+      );
+
+      expect(turn.sessionPrompt).toBe('RESOLVED WORKSPACE PROMPT');
+      expect(turn.enabledTools).toContain('current_datetime');
     });
 
     describe('with a turn responder', () => {
@@ -13323,6 +13356,21 @@ describe('ChatCompletionProcess', () => {
 
       expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
       expect(retrieval).toMatchObject({ outcome: 'ok', dataLakeTags: ['datalake:corpus'] });
+    });
+
+    it('recalls only trusted lakes unless the session names its lakes', async () => {
+      const recall = vi.fn().mockResolvedValue([]);
+      await runAndCaptureSystemText({ message: 'What is the warranty?', recallLakeMemory: recall, retrievalTags: [] });
+      expect(recall).toHaveBeenCalledWith(expect.objectContaining({ trustedLakesOnly: true }));
+
+      recall.mockClear();
+      mockedBuildAndSortMessages.mockClear();
+      await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        recallLakeMemory: recall,
+        retrievalTags: ['datalake:corpus'],
+      });
+      expect(recall).toHaveBeenCalledWith(expect.objectContaining({ trustedLakesOnly: false }));
     });
   });
 

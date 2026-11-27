@@ -94,6 +94,7 @@ const ecsSecretNames = [
   'HMAC_SIGNING_SECRET',
   'HMAC_SIGNING_SECRET_PREVIOUS',
   'MEMORY_KEY_SECRET',
+  'MEMORY_KEY_SECRET_PREVIOUS',
   'OAUTH_RSA_PRIVATE_KEY',
   'APNS_KEY',
   'FCM_SERVICE_ACCOUNT',
@@ -601,6 +602,10 @@ if (!$dev) {
   // its own per-origin CORS), and the SSE stream is not cached. Only the chat
   // path is on this origin; /api/embed/session is a normal Next app route.
   router.route(`${routePrefix}/api/embed/chat`, originUrl);
+
+  // Public session turns endpoint (sessionTurns.contract.ts): an SSE stream of a turn run in this
+  // service. A top-level path because routing is by prefix and Next serves /api/v1/sessions/*.
+  router.route(`${routePrefix}/api/v1/turns`, originUrl);
 
   // The shared preview load balancer's equivalent rule is owned with that load balancer.
   if (!sharedListenerTarget) {
