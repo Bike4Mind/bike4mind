@@ -124,14 +124,21 @@ private func sessionAuthFixture(
 }
 
 @MainActor
+private final class CaptureCounter {
+  var count = 0
+}
+
+@MainActor
 private func sessionSyncer(
-  _ auth: AuthController, transport: FakeTransport, reader: any BusyBlockReader = SessionCalendarReader()
+  _ auth: AuthController, transport: FakeTransport, reader: any BusyBlockReader = SessionCalendarReader(),
+  captures: CaptureCounter? = nil
 ) -> BusyBlockSyncer {
   let initial = BusyBlocksClient.session(for: auth, transport: transport)
   return BusyBlockSyncer(
     api: initial.api, reader: reader,
     sessionFactory: {
-      BusyBlocksClient.session(for: auth, transport: transport)
+      captures?.count += 1
+      return BusyBlocksClient.session(for: auth, transport: transport)
     })
 }
 
@@ -255,9 +262,12 @@ final class BusyBlockSessionIsolationTests: XCTestCase {
     let transport = FakeTransport { _ in
       (200, Fixtures.json(["enabled": true, "blocks": [], "nextBlockBriefAt": NSNull()]))
     }
-    let syncer = sessionSyncer(fixture.auth, transport: transport)
+    let captures = CaptureCounter()
+    let syncer = sessionSyncer(fixture.auth, transport: transport, captures: captures)
     let oldAdmission = syncer.captureAdmission()
+    let capturesBeforeSchedule = captures.count
     let queued = syncer.scheduleSync()
+    XCTAssertEqual(captures.count, capturesBeforeSchedule + 1, "scheduleSync must capture before its Task starts")
     await fixture.auth.signOut()
     try await fixture.auth.signIn(using: FakeWebAuthenticator(.approve(code: "account-b")))
     let queuedOutcome = await queued.value
@@ -335,6 +345,29 @@ final class BusyBlockSessionIsolationTests: XCTestCase {
     XCTAssertEqual(puts.first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(fixture.tokenB)")
   }
 
+  func testRetainedViewCannotSaveTheOldAccountsToggleIntoTheNewOne() async throws {
+    let fixture = sessionAuthFixture()
+    try await fixture.auth.signIn(using: FakeWebAuthenticator(.approve(code: "account-a")))
+    let transport = FakeTransport { _ in
+      (200, Fixtures.json(["enabled": false, "blocks": [], "nextBlockBriefAt": NSNull()]))
+    }
+    let syncer = sessionSyncer(fixture.auth, transport: transport)
+    let model = BusyBlockBriefViewModel(
+      api: BusyBlocksClient.session(for: fixture.auth, transport: transport).api,
+      reader: SessionCalendarReader(), syncer: syncer)
+    await model.load()
+    XCTAssertTrue(model.isLoaded)
+    await fixture.auth.signOut()
+    try await fixture.auth.signIn(using: FakeWebAuthenticator(.approve(code: "account-b")))
+
+    await model.setEnabled(true)
+
+    let puts = await transport.requests.filter { $0.httpMethod == "PUT" }
+    XCTAssertTrue(puts.isEmpty)
+    XCTAssertFalse(model.isEnabled)
+    XCTAssertFalse(model.isLoaded)
+  }
+
   func testHeldSaveCannotMoveToAnotherServer() async throws {
     let fixture = sessionAuthFixture()
     try await fixture.auth.signIn(using: FakeWebAuthenticator(.approve(code: "account-a")))
@@ -390,7 +423,8 @@ final class BusyBlockSessionIsolationTests: XCTestCase {
     let transport = FakeTransport { _ in
       (200, Fixtures.json(["enabled": true, "blocks": [], "nextBlockBriefAt": NSNull()]))
     }
-    let syncer = sessionSyncer(fixture.auth, transport: transport)
+    let captures = CaptureCounter()
+    let syncer = sessionSyncer(fixture.auth, transport: transport, captures: captures)
     let scheduler = SessionBackgroundScheduler()
     let refresh = BusyBlockBackgroundRefresh(
       identifier: "app.test.refresh", scheduler: scheduler,
@@ -400,6 +434,7 @@ final class BusyBlockSessionIsolationTests: XCTestCase {
       })
     let old = SessionBackgroundTask()
     refresh.handle(old)
+    XCTAssertEqual(captures.count, 1, "handle must capture the admission before its Task starts")
     await fixture.auth.signOut()
     try await fixture.auth.signIn(using: FakeWebAuthenticator(.approve(code: "account-b")))
     await old.waitForCompletion()

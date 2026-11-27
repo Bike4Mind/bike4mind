@@ -59,6 +59,8 @@ public final class BusyBlockSyncer {
   /// Retains an already-sent save until settlement, including across account changes.
   private var sentSave: Task<BusyBlockSyncOutcome, Never>?
   public private(set) var lastOutcome: BusyBlockSyncOutcome?
+  /// Calls currently parked behind another sync or save; tests wait on it instead of yielding.
+  private(set) var parkedWaits = 0
 
   public init(
     api: any BusyBlocksAPI, reader: any BusyBlockReader, now: @escaping @Sendable () -> Date = { Date() },
@@ -108,7 +110,7 @@ public final class BusyBlockSyncer {
     guard reader.access() != .notDetermined else { return record(.skipped(.neverAsked)) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
     let task = Task { [sentSave] in
-      _ = await sentSave?.value
+      if let sentSave { await waitOut(sentSave) }
       return await perform(admission)
     }
     current = task
@@ -138,7 +140,7 @@ public final class BusyBlockSyncer {
   public func save(enabled: Bool, admission: Admission) async throws -> BusyBlocksState {
     guard isCurrent(admission) else { throw CancellationError() }
     while let pending = current ?? sentSave {
-      _ = await pending.value
+      await waitOut(pending)
       release(pending)
       if sentSave == pending { sentSave = nil }
       guard isCurrent(admission) else { throw CancellationError() }
@@ -196,6 +198,12 @@ public final class BusyBlockSyncer {
       if isCurrent(admission) { lastSync = now() }
       return .synced
     } catch APIError.signedOut { return .skipped(.signedOut) } catch { return .failed }
+  }
+
+  private func waitOut(_ task: Task<BusyBlockSyncOutcome, Never>) async {
+    parkedWaits += 1
+    defer { parkedWaits -= 1 }
+    _ = await task.value
   }
 
   private func release(_ task: Task<BusyBlockSyncOutcome, Never>) {

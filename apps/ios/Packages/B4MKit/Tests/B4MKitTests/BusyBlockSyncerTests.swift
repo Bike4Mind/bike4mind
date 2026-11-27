@@ -440,7 +440,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     let sync = Task { await syncer.sync(force: true) }
     while await api.reads == 0 { await Task.yield() }
     let save = Task { try await syncer.save(enabled: false) }
-    for _ in 0..<5 { await Task.yield() }
+    await waitUntil("the save to park behind the sync") { syncer.parkedWaits == 1 }
     syncer.sessionDidStart()
     await api.release()
     _ = await sync.value
@@ -451,7 +451,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(saveAttempts, 0)
   }
 
-  func testNewSessionSyncRunsWhileThePreviousSessionsSyncIsStillRunning() async {
+  func testNewSessionSyncHoldsTheLockWhileThePreviousSessionsSyncIsStillRunning() async {
     let api = FakeBusyBlocksAPI(enabled: true)
     let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
     await api.holdState()
@@ -482,7 +482,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     while await api.saveAttempts == 0 { await Task.yield() }
     syncer.sessionDidStart()
     let sync = Task { await syncer.sync() }
-    for _ in 0..<10 { await Task.yield() }
+    await waitUntil("the sync to park behind the sent save") { syncer.parkedWaits == 1 }
     await api.release()
     _ = try? await save.value
     let outcome = await sync.value
@@ -501,7 +501,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     while await api.saveAttempts == 0 { await Task.yield() }
     syncer.sessionDidStart()
     let new = Task { try await syncer.save(enabled: true) }
-    for _ in 0..<10 { await Task.yield() }
+    await waitUntil("the new save to park behind the sent one") { syncer.parkedWaits == 1 }
     let attemptsBeforeOldLanded = await api.saveAttempts
     await api.release()
     _ = try? await old.value
@@ -531,7 +531,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(outcome, .synced)
   }
 
-  func testNewSessionSyncsWhileThePreviousSessionsSyncIsStillRunning() async {
+  func testPreviousSessionsSyncFinishingLateLeavesTheNewSessionsOutcome() async {
     let api = FakeBusyBlocksAPI(enabled: true)
     let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
     await api.holdState()
@@ -581,6 +581,19 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(reader.requested, 1)
     let saves = await api.saves
     XCTAssertTrue(saves.isEmpty)
+  }
+
+  func testCancelledSaveRollsTheToggleBackWithoutAnError() async {
+    let api = FakeBusyBlocksAPI(enabled: false)
+    let model = BusyBlockBriefViewModel(api: api, reader: FakeReader(access: .authorized))
+    await model.load()
+    await api.failSave(with: CancellationError())
+
+    await model.setEnabled(true)
+
+    XCTAssertFalse(model.isEnabled)
+    XCTAssertFalse(model.isSaving)
+    XCTAssertNil(model.errorMessage)
   }
 
   func testEnablingWithAccessSendsCurrentBlocksAndDisablingClearsThem() async {
