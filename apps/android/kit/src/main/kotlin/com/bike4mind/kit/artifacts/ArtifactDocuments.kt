@@ -16,7 +16,7 @@ object ArtifactDocuments {
 
     private const val SCRIPT_HOSTS = "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com"
 
-    // connect-src 'none' keeps a script from sending anything out; images may load from https, as pages embed photos.
+    // connect-src 'none' blocks fetch/XHR/WebSocket; img-src stays open to https because pages embed photos.
     private val PAGE_POLICY = listOf(
         "default-src 'none'",
         "script-src 'unsafe-inline' 'unsafe-eval' $SCRIPT_HOSTS",

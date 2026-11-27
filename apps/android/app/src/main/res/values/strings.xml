@@ -359,7 +359,6 @@
     <string name="artifacts_full_version_title">Best viewed in the web app</string>
     <string name="artifacts_full_version_body">This kind of artifact is interactive. Open it in the browser to see it in full.</string>
     <string name="artifacts_open_full_version">Open full version</string>
-    <string name="artifacts_render_failed">This artifact could not be displayed here.</string>
     <string name="artifacts_error_offline">Couldn\'t reach Bike4Mind. Check your connection and try again.</string>
     <string name="artifacts_error_not_found">This artifact is no longer available to you.</string>
     <string name="artifacts_error_rate_limited">Too many requests. Try again in a moment.</string>

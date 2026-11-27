@@ -155,13 +155,14 @@ internal fun ArtifactListContent(
 private fun ArtifactRow(artifact: ArtifactSummary, onClick: () -> Unit) {
     val type = typeLabel(artifact.type)
     val updated = stringResource(R.string.artifacts_updated, relativeTime(artifact))
+    val description = stringResource(R.string.artifacts_row_description, artifact.title, type)
     ListItem(
         headlineContent = { Text(artifact.title, maxLines = 1) },
         supportingContent = { Text("$type - $updated", maxLines = 1) },
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .semantics { contentDescription = "${artifact.title}, $type" }
+            .semantics { contentDescription = description }
             .testTag("artifacts-row-${artifact.id}"),
     )
 }
