@@ -67,16 +67,22 @@ private struct ShimmerModifier: ViewModifier {
   private static let period: TimeInterval = 1.4
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var isOnScreen = false
 
   func body(content: Content) -> some View {
-    if reduceMotion {
-      content
-    } else {
-      content
-        .mask {
+    // The Reduce Motion branch lives inside the mask so the content keeps one identity and its
+    // appear/disappear events stay paired when the setting flips.
+    content
+      .mask {
+        if reduceMotion {
+          Color.black
+        } else {
           // Phase comes from the frame clock rather than an animated state value, so the sweep
           // restarts after a Reduce Motion toggle and no layout change rides an animation transaction.
-          TimelineView(.animation) { timeline in
+          // Paused while covered by a pushed screen or the app is inactive, so it stops redrawing.
+          TimelineView(.animation(minimumInterval: nil, paused: !isOnScreen || scenePhase != .active)) {
+            timeline in
             let elapsed = timeline.date.timeIntervalSinceReferenceDate
             let phase = CGFloat(elapsed.truncatingRemainder(dividingBy: Self.period) / Self.period)
             // A band three widths wide slides from its dim tail to its dim head, so the bright middle
@@ -95,6 +101,8 @@ private struct ShimmerModifier: ViewModifier {
             }
           }
         }
-    }
+      }
+      .onAppear { isOnScreen = true }
+      .onDisappear { isOnScreen = false }
   }
 }
