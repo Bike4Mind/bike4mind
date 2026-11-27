@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type mongoose from 'mongoose';
 import {
   chargedBytes,
   IDataLakeRepository,
@@ -16,7 +17,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
-import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
+import { deleteStoredObjectsAfterCommit, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import { deletedFileReferences, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
 import {
   recordLakeMembershipChange,
@@ -73,6 +74,8 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
   storage: ObjectStorage;
+  /** The owning withTransaction session; stored objects are deleted after it commits. */
+  session?: mongoose.mongo.ClientSession;
   /**
    * Where an in-chat generated asset's inline-playback copy lives. Optional so the doors that never delete
    * generated files need not wire it; a door that can must, or the copy outlives the file.
@@ -116,6 +119,7 @@ export const deleteAuthorizedFabFile = async (
     origin = 'person',
     auditPrincipal,
     logger,
+    session,
   } = adapter;
   const userId = ownedFile.userId;
   // User owns this file - soft-delete it
@@ -181,7 +185,11 @@ export const deleteAuthorizedFabFile = async (
     await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
   }
 
-  await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
+  await deleteStoredObjectsAfterCommit(
+    [ownedFile],
+    { files: storage, generated: generatedCopies },
+    { session, key: `storedObjects|${ownedFile.id}`, logger }
+  );
 
   // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
   if (onDeleteComplete) {
