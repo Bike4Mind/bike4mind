@@ -299,6 +299,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'persistConfidenceGate').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'persistResolvedEnabledTools').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markFailedIfActive').mockResolvedValue(true as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
   vi.spyOn(actual.questRepository, 'addGenerationJobs').mockResolvedValue(undefined as never);
@@ -1309,7 +1310,7 @@ describe('processExecution tool deps', () => {
 
       expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
-      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+      expect(agentExecutionRepository.markFailedIfActive).toHaveBeenCalledExactlyOnceWith(
         'exec-1',
         expect.objectContaining({
           message: 'Workspace session settings resolver for "settings-workspace" failed',
