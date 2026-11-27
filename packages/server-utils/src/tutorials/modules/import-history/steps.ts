@@ -1,6 +1,6 @@
 import type { TutorialStep } from '@bike4mind/common';
 
-export const IMPORT_HISTORY_PROMPT = 'How do I bring my chat history from ChatGPT or Claude into Bike4Mind?';
+export const IMPORT_HISTORY_PROMPT = 'How do I bring my chat history over from ChatGPT or Claude?';
 
 // The export happens in the other app, so nothing here waits on a file: every step past the question is a
 // plain point step the learner can move past with or without an export in hand.
@@ -22,7 +22,7 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     // Bottom-left: the default bottom-right corner covers the end of the recorded answer.
     placement: 'left',
     title: 'Export comes first',
-    body: 'The answer shows where to export. The file arrives later by email as a .zip. No export yet? Carry on, the next steps show where it goes.',
+    body: 'The answer shows where to export. A download link for the .zip arrives later by email. No export yet? Carry on, the next steps show where it goes.',
   },
   {
     id: 'import-history-open-profile',
@@ -56,7 +56,7 @@ export const IMPORT_HISTORY_STEPS: TutorialStep[] = [
     placement: 'left',
     avoid: '[data-testid="import-history-submit-btn"]',
     title: 'Upload your export',
-    body: 'Set the switch to OpenAI for ChatGPT, or to Claude. Choose your .zip and press Upload. No file yet? Close the box. Then press Next.',
+    body: 'Set the switch to OpenAI for ChatGPT, or to Claude. Choose your .zip and press Upload. No file yet? Tap outside the box to close it. Then press Next.',
   },
   {
     id: 'import-history-after',

@@ -39,7 +39,7 @@ describe('the import-history tutorial selectors', () => {
   });
 
   it.each(usedTestIds)('finds testid "%s" in the client', id => {
-    expect(clientHas(`["']${escape(id)}["']`)).toBe(true);
+    expect(clientHas(`data-testid=["']${escape(id)}["']`)).toBe(true);
   });
 
   // The cards name the importer button by its English label, so a relabel must update them too.
