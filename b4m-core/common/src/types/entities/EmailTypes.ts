@@ -243,7 +243,6 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
       endDate?: Date;
     }
   ) => Promise<PaginatedResponse<IEmailSendAttemptDocument>>;
-  updateStatus: (id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttempt>) => Promise<void>;
   markQueued: (id: string, updates: { sentAt: Date; retryCount: number }) => Promise<boolean>;
   recordDeliveryOutcome: (
     id: string,

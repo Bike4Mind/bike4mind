@@ -147,10 +147,6 @@ export class EmailSendAttemptRepository
     };
   }
 
-  async updateStatus(id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttemptDocument>): Promise<void> {
-    await this.model.findByIdAndUpdate(id, { status, ...updates });
-  }
-
   /**
    * PENDING/PROCESSING -> QUEUED once the event bus accepts the mail. Also from CANCELLED: a cancel
    * that lands mid-publish cannot stop mail the bus accepted. Returns false when the email-send worker

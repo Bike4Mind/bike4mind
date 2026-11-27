@@ -31,8 +31,8 @@ const BatchPayload = z.object({
 const PARALLEL_SEND_SIZE = 5;
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1000; // 1 second delay between retries
-// An attempt's send lease (ms). Longer than the emailBatchQueue Lambda timeout (infra/emailMarketing.ts),
-// so a lease this old belongs to an invocation that is no longer running.
+// An attempt's send lease (ms). Longer than the emailBatchQueue Lambda timeout, and the queue's visibility
+// timeout must cover timeout + lease (both in infra/emailMarketing.ts).
 export const SEND_LEASE_MS = 150_000;
 
 type AttemptOutcome = 'sent' | 'failed' | 'busy' | 'skipped';
