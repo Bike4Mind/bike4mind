@@ -40,6 +40,8 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
 
 import { dispatch, MAX_RETRIES } from './webhookDelivery';
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 const DEDUP_KEY = 'webhook-delivery-evt-1-sub-1';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
 
@@ -75,7 +77,7 @@ beforeAll(async () => {
   mongo = await createMongoServer();
   await mongoose.connect(mongo.getUri());
   await Cache.init();
-}, MONGO_TEST_TIMEOUT_MS);
+});
 
 afterAll(async () => {
   await mongoose.disconnect();
