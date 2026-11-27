@@ -55,4 +55,20 @@ final class CaptureSessionAdmissionTests: XCTestCase {
     try CaptureAdmissionScenarios.pendingRevocationsMigrateOnceBeforeUse()
   }
 
+  func testExpiredUploadRecoversForItsAccount() async throws {
+    try await CaptureAdmissionScenarios.expiredUploadRecovery(.sameAccount)
+  }
+  func testExpiredUploadCannotRegisterForAnotherAccount() async throws {
+    try await CaptureAdmissionScenarios.expiredUploadRecovery(.anotherAccount)
+  }
+  func testExhaustedExpiredUploadKeepsPayloadForExplicitRetry() async throws {
+    try await CaptureAdmissionScenarios.expiredUploadRecovery(.exhaustedAttempts)
+  }
+  func testCoherentPeerRefreshRetriesOnce() async throws {
+    try await CaptureAdmissionScenarios.coherentPeerRefresh(repeatedRejection: false)
+  }
+  func testRepeatedCoherentPeerRejectionEndsSession() async throws {
+    try await CaptureAdmissionScenarios.coherentPeerRefresh(repeatedRejection: true)
+  }
+
 }

@@ -218,7 +218,7 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(listed, [])
   }
 
-  func testAnUploadFinishingAfterTheSessionEndedIsNotRegisteredUntilItsAccountReturns() async throws {
+  func testAnUploadFinishingAfterTheSessionEndedRecoversOnlyAfterItsAccountReturns() async throws {
     let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
     let rig = ownedRig(signedIn)
     let job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
@@ -226,13 +226,70 @@ final class CaptureEngineTests: XCTestCase {
 
     await rig.engine.releaseOwner()
     signedIn.withLock { $0 = nil }
-    rig.uploader.finish(job.id)
-    try await eventually("the PUT outcome is recorded") { (try? rig.store.load(id: job.id))?.stage == .registering }
-    try await Task.sleep(for: .milliseconds(50))
+    rig.uploader.vanish(job.id)
+    await rig.engine.handle(
+      UploadEvent(jobID: job.id, taskID: try XCTUnwrap(job.uploadTaskID), outcome: .succeeded),
+      from: try XCTUnwrap(job.uploadSession))
 
-    XCTAssertEqual(try rig.store.load(id: job.id)?.stage, .registering)
+    XCTAssertEqual(try rig.store.load(id: job.id)?.stage, .uploading)
+    let signedOutJobs = await rig.engine.jobs()
+    XCTAssertTrue(signedOutJobs.isEmpty)
     let calls = await rig.api.calls
     XCTAssertEqual(calls.count, 1, "only the ticket was minted: \(calls)")
+
+    signedIn.withLock { $0 = alice }
+    await rig.engine.resume()
+    XCTAssertEqual(rig.uploader.started.count, 2)
+    XCTAssertEqual(try rig.store.load(id: job.id)?.ticket?.fileID, "file-2")
+    rig.uploader.finish(job.id)
+    try await eventually("the retained payload is delivered") { stage(rig, job.id) == .done }
+    let resumedCalls = await rig.api.calls
+    XCTAssertTrue(resumedCalls.contains(.addToLake(lake: "lake-1", file: "file-2")))
+  }
+
+  func testACompletedUploadFromAnEndedSessionCannotRegisterForAnotherAccount() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    let job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
+    await rig.engine.releaseOwner()
+    signedIn.withLock { $0 = nil }
+    rig.uploader.vanish(job.id)
+    await rig.engine.handle(
+      UploadEvent(jobID: job.id, taskID: try XCTUnwrap(job.uploadTaskID), outcome: .succeeded),
+      from: try XCTUnwrap(job.uploadSession))
+
+    signedIn.withLock { $0 = bob }
+    await rig.engine.resume()
+
+    XCTAssertNil(try rig.store.load(id: job.id))
+    let calls = await rig.api.calls
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(rig.uploader.started.count, 1)
+  }
+
+  func testAnExpiredLastUploadKeepsItsPayloadForExplicitRetryByItsAccount() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    var job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
+    job.uploadAttempts = CaptureEngine.Configuration().maxUploadAttempts
+    try rig.store.save(job)
+    await rig.engine.releaseOwner()
+    signedIn.withLock { $0 = nil }
+    rig.uploader.vanish(job.id)
+    await rig.engine.handle(
+      UploadEvent(jobID: job.id, taskID: try XCTUnwrap(job.uploadTaskID), outcome: .succeeded),
+      from: try XCTUnwrap(job.uploadSession))
+
+    signedIn.withLock { $0 = alice }
+    await rig.engine.resume()
+    XCTAssertEqual(try rig.store.load(id: job.id)?.stage, .failed)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: rig.uploader.started[0].file.path))
+
+    await rig.engine.retry(jobID: job.id)
+    XCTAssertEqual(rig.uploader.started.count, 2)
+    XCTAssertEqual(try rig.store.load(id: job.id)?.uploadAttempts, 1)
+    rig.uploader.finish(job.id)
+    try await eventually("the explicit retry delivers the retained payload") { stage(rig, job.id) == .done }
   }
 
   func testAnUploadFinishingInAFreshProcessIsRegisteredForTheSignedInAccount() async throws {

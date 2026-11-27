@@ -120,7 +120,7 @@ private func sessionAuthFixture(
     )
   }
   let auth = AuthController(
-    environment: .production, tokenStore: store, transport: transport,
+    environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: transport,
     biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults(),
     deviceName: { "test" }, now: { clock.now }
   )
@@ -164,7 +164,7 @@ final class BusyBlockSessionIsolationTests: XCTestCase {
       )
     }
     let auth = AuthController(
-      environment: .production, tokenStore: InMemoryTokenStore(), transport: authTransport,
+      environment: .production, tokenStore: InMemoryTokenStore(), sessionEndCleanup: { _ in }, transport: authTransport,
       biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults(),
       deviceName: { "test" }, now: { clock.now }
     )

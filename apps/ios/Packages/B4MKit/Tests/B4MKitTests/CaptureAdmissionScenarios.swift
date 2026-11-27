@@ -61,6 +61,8 @@ private actor FixtureTransport: HTTPTransport {
   let refresh = Rendezvous()
   let ticket = Rendezvous()
   private var userID: String
+  private var peerRotation: SharedSessionCoordinator?
+  private var rejectRotated = false
   private var holdRefresh = false
   private var holdNextTicket = false
   private var ticketCount = 0
@@ -69,6 +71,10 @@ private actor FixtureTransport: HTTPTransport {
   init(userID: String) { self.userID = userID }
   func setUser(_ value: String) { userID = value }
   func pauseRefresh() { holdRefresh = true }
+  func rotateFromPeer(_ coordinator: SharedSessionCoordinator, rejectRotated: Bool) {
+    peerRotation = coordinator
+    self.rejectRotated = rejectRotated
+  }
   func pauseNextTicket() { holdNextTicket = true }
   private func token() throws -> String {
     let claims = try JSONEncoder().encode(Claims(id: userID, exp: Int(Date().timeIntervalSince1970) + 3600))
@@ -92,6 +98,14 @@ private actor FixtureTransport: HTTPTransport {
       return try reply(Grant(accessToken: token(), refreshToken: "fixture-\(userID)"), request: request)
     case "/api/auth/refreshToken":
       refreshCalls += 1
+      if let peerRotation {
+        if refreshCalls == 1 {
+          guard let snapshot = try peerRotation.restore() else { throw CheckFailure.failed("Missing peer session") }
+          _ = try peerRotation.refresh(expected: snapshot, token: "peer-rotated", userID: snapshot.record.userID)
+          return try reply([String: String](), request: request, status: 401)
+        }
+        if rejectRotated { return try reply([String: String](), request: request, status: 401) }
+      }
       if holdRefresh { await refresh.pause(); throw URLError(.notConnectedToInternet) }
       return try reply(Refresh(accessToken: token(), refreshToken: "rotated-\(userID)"), request: request)
     case "/api/logout":
@@ -110,15 +124,19 @@ private actor FixtureTransport: HTTPTransport {
 
 private final class RecordedUploader: BackgroundUploading, Sendable {
   let identifier = BackgroundSessionIdentifier.app
-  private let started = OSAllocatedUnfairLock(initialState: [UUID]())
+  private struct State { var started: [UUID] = []; var live = Set<UUID>() }
+  private let state = OSAllocatedUnfairLock(initialState: State())
   func start(jobID: UUID, file: URL, to url: URL, contentType: String) async throws -> Int {
-    started.withLock {
-      $0.append(jobID); return $0.count
+    state.withLock {
+      $0.started.append(jobID)
+      $0.live.insert(jobID)
+      return $0.started.count
     }
   }
-  func liveJobIDs() async -> Set<UUID> { started.withLock { Set($0) } }
+  func liveJobIDs() async -> Set<UUID> { state.withLock { $0.live } }
   func events() -> AsyncStream<UploadEvent> { AsyncStream { $0.finish() } }
-  func starts() -> [UUID] { started.withLock { $0 } }
+  func starts() -> [UUID] { state.withLock { $0.started } }
+  func vanish(_ jobID: UUID) { state.withLock { _ = $0.live.remove(jobID) } }
 }
 
 private func waitForSignal(_ semaphore: DispatchSemaphore, seconds: Double = 5) async -> Bool {
@@ -201,6 +219,8 @@ private actor LocalCaptureAPI: CaptureAPI {
   let lookupGate: MultiGate?
   let sendGate: MultiGate?
   private(set) var sends = 0
+  private(set) var uploads = 0
+  private(set) var attachments = 0
   var scanGate: MultiGate?
   var scanFails = false
   var lookup: SentTurnLookup = .notFound
@@ -218,7 +238,8 @@ private actor LocalCaptureAPI: CaptureAPI {
     self.sendGate = sendGate
   }
   func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
-    UploadTicket(
+    uploads += 1
+    return UploadTicket(
       fileID: "fixture-file", uploadURL: URL(string: "https://uploads.example.test/fixture")!, expiresAt: .distantFuture
     )
   }
@@ -229,7 +250,7 @@ private actor LocalCaptureAPI: CaptureAPI {
   }
   func setNotes(fileID: String, notes: String) async throws {}
   func listLakes(cursor: String?, limit: Int) async throws -> Page<LakeSummary> { throw APIError.offline }
-  func addFileToLake(lakeID: String, fileID: String) async throws {}
+  func addFileToLake(lakeID: String, fileID: String) async throws { attachments += 1 }
   func sendSessionMessage(sessionID: String, message: String, fileIDs: [String]) async throws {
     sends += 1
     await sendGate?.pause()
@@ -825,6 +846,99 @@ enum CaptureAdmissionScenarios {
     try require(
       PendingRevocation.bounded(migrated, now: clock.addingTimeInterval(PendingRevocation.maxAge)).isEmpty,
       "Migrated records bypassed the existing age cap")
+  }
+
+  enum ExpiredUploadRecovery { case sameAccount, anotherAccount, exhaustedAttempts }
+
+  static func expiredUploadRecovery(_ recovery: ExpiredUploadRecovery) async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "capture-expired-put-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = InMemoryTokenStore()
+    let transport = FixtureTransport(userID: a)
+    let cleanup = CaptureSessionCleanup(directory: directory, destinations: InMemoryDestinationStore())
+    let auth = controller(storage, transport, cleanup: cleanup.perform)
+    auth.restore()
+    try await auth.signIn(using: Approval())
+    let store = FileUploadJobStore(directory: directory)
+    let api = LocalCaptureAPI()
+    let uploader = RecordedUploader()
+    let engine = CaptureEngine(
+      store: store, api: api, ownIdentifier: uploader.identifier, makeUploader: { _ in uploader }, sleep: { _ in },
+      currentAdmission: { try await auth.captureAdmission() }, makeAdmittedAPI: { _ in api })
+    let submitted = try await engine.submit(
+      [file(in: directory, name: "expired.png")], to: .lake(id: "A", name: "A"), note: nil)
+    guard var job = submitted.first, let task = job.uploadTaskID, let session = job.uploadSession,
+      case .file(let name, _, _) = job.payload
+    else { throw CheckFailure.failed("Missing active file upload") }
+    if recovery == .exhaustedAttempts {
+      job.uploadAttempts = CaptureEngine.Configuration().maxUploadAttempts
+      try auth.captureAdmission().withCurrent { try store.save(job) }
+    }
+    await engine.releaseOwner()
+    auth.sessionRejected()
+    uploader.vanish(job.id)
+    await engine.handle(UploadEvent(jobID: job.id, taskID: task, outcome: .succeeded), from: session)
+    let hidden = await engine.jobs()
+    let inactiveUploads = await api.uploads
+    let inactiveAttachments = await api.attachments
+    try require(
+      try store.load(id: job.id)?.stage == .uploading && hidden.isEmpty
+        && inactiveUploads == 1 && inactiveAttachments == 0, "Expired completion wrote or registered without admission")
+    if recovery == .anotherAccount { await transport.setUser(b) }
+    try await auth.signIn(using: Approval())
+    await engine.resume()
+    if recovery == .anotherAccount {
+      let uploads = await api.uploads
+      let attachments = await api.attachments
+      try require(
+        try store.load(id: job.id) == nil && uploads == 1 && attachments == 0,
+        "Another account registered the retained upload")
+      return
+    }
+    if recovery == .exhaustedAttempts {
+      try require(
+        try store.load(id: job.id)?.stage == .failed
+          && FileManager.default.fileExists(atPath: store.payloadURL(jobID: job.id, fileName: name).path),
+        "An exhausted upload lost its retained payload or bypassed explicit Retry")
+      await engine.retry(jobID: job.id)
+    }
+    guard let retry = try store.load(id: job.id), let retryTask = retry.uploadTaskID,
+      let retrySession = retry.uploadSession
+    else { throw CheckFailure.failed("Recovery did not start another upload") }
+    let uploads = await api.uploads
+    try require(uploads == 2 && retry.stage == .uploading && retryTask != task, "Recovery reused an ended upload task")
+    uploader.vanish(job.id)
+    await engine.handle(UploadEvent(jobID: job.id, taskID: retryTask, outcome: .succeeded), from: retrySession)
+    let attachments = await api.attachments
+    try require(
+      try store.load(id: job.id)?.stage == .done && attachments == 1, "Recovery did not deliver the retained payload")
+  }
+
+  static func coherentPeerRefresh(repeatedRejection: Bool) async throws {
+    let storage = InMemoryTokenStore(refreshToken: "sid.0")
+    let transport = FixtureTransport(userID: a)
+    guard let peer = SharedSessionCoordinator(tokenStore: storage, baseURL: ServerEnvironment.production.baseURL)
+    else { throw CheckFailure.failed("Missing shared-session peer") }
+    await transport.rotateFromPeer(peer, rejectRotated: repeatedRejection)
+    let auth = controller(storage, transport)
+    auth.restore()
+    if repeatedRejection {
+      do {
+        _ = try await auth.accessToken()
+        throw CheckFailure.failed("Repeated refresh rejection succeeded")
+      } catch AuthError.refreshRejected {}
+      try require(
+        auth.state == .signedOut(.sessionEnded) && (try storage.refreshToken()) == nil,
+        "Repeated coherent-peer rejection did not end the session")
+    } else {
+      _ = try await auth.accessToken()
+      try require(
+        auth.state == .signedIn && (try storage.refreshToken()) == "rotated-\(a)",
+        "Coherent peer rotation did not recover with the newer token")
+    }
+    let refreshes = await transport.refreshCalls
+    try require(refreshes == 2, "Coherent peer refresh did not retry exactly once")
   }
 
 }
