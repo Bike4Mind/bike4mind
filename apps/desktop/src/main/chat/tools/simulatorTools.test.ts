@@ -162,6 +162,24 @@ describe('device approval', () => {
     }
   });
 
+  it('still asks in auto mode for an app outside the shared folders or a file: URL', async () => {
+    const { context } = setup({ roots: ['/work/proj'] });
+    const outside = await simulatorLaunch.approval?.({ app_path: '/Users/someone/Downloads/Other.app' }, context);
+    expect(outside?.askInAuto).toBe(true);
+    const bundle = await simulatorLaunch.approval?.({ bundle_id: 'com.example.foo' }, context);
+    expect(bundle?.askInAuto).toBeUndefined();
+    const file = await simulatorOpenUrl.approval?.({ url: 'file:///etc/hosts' }, context);
+    expect(file?.askInAuto).toBe(true);
+    const web = await simulatorOpenUrl.approval?.({ url: 'https://example.com' }, context);
+    expect(web?.askInAuto).toBeUndefined();
+  });
+
+  it('marks a screenshot as safe to repeat, and an input as not', async () => {
+    const { context } = setup();
+    expect((await simulatorScreenshot.approval?.({}, context))?.repeatSafe).toBe(true);
+    expect((await simulatorInput.approval?.({ action: 'tap', x: 1, y: 2 }, context))?.repeatSafe).toBeUndefined();
+  });
+
   it('uses a different key for another device', async () => {
     const { context } = setup();
     const prompt = await simulatorScreenshot.approval?.({ device: 'iPad Pro' }, context);

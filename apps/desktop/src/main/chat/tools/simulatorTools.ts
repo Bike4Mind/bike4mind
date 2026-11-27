@@ -108,12 +108,31 @@ function deviceArgument(input: Record<string, unknown>): string | undefined {
   return typeof input.device === 'string' && input.device.trim() ? input.device.trim() : undefined;
 }
 
-function deviceApproval(action: (input: Record<string, unknown>) => string) {
+/** Whether `app_path` names an app outside the shared folders, which would run code from elsewhere on this computer. */
+async function appOutsideRoots(input: Record<string, unknown>, context: ToolContext): Promise<boolean> {
+  if (typeof input.app_path !== 'string' || !input.app_path) return false;
+  return resolveWithinRoots(input.app_path, context.roots, context.workingDirectory).then(
+    () => false,
+    () => true
+  );
+}
+
+/**
+ * A simulator action follows the approval mode, unless `reaches` says it touches this computer
+ * beyond the simulator (an app built outside the shared folders, a file: URL), which asks in auto too.
+ */
+function deviceApproval(
+  action: (input: Record<string, unknown>) => string,
+  reaches?: (input: Record<string, unknown>, context: ToolContext) => Promise<boolean> | boolean,
+  observes = false
+) {
   return async (input: Record<string, unknown>, context: ToolContext): Promise<ApprovalPrompt> => {
     const device = await resolveSimulatorDevice(requireSimulator(context), deviceArgument(input));
     return {
       detail: `${action(input)} on the iOS Simulator ${describeDevice(device)}`,
       key: `${DEVICE_KEY_PREFIX}${device.udid}`,
+      ...((await reaches?.(input, context)) ? { askInAuto: true as const } : {}),
+      ...(observes ? { repeatSafe: true as const } : {}),
       alwaysCovers: `every simulator action on ${describeDevice(device)}`,
     };
   };
@@ -260,8 +279,10 @@ export const simulatorLaunch: ToolDefinition = {
       },
     },
   },
-  approval: deviceApproval(input =>
-    typeof input.app_path === 'string' ? `Install and launch ${input.app_path}` : `Launch ${String(input.bundle_id)}`
+  approval: deviceApproval(
+    input =>
+      typeof input.app_path === 'string' ? `Install and launch ${input.app_path}` : `Launch ${String(input.bundle_id)}`,
+    appOutsideRoots
   ),
   async run(input, context) {
     const simulator = requireSimulator(context);
@@ -293,7 +314,7 @@ export const simulatorScreenshot: ToolDefinition = {
       },
     },
   },
-  approval: deviceApproval(() => 'Take a screenshot'),
+  approval: deviceApproval(() => 'Take a screenshot', undefined, true),
   async run(input, context) {
     const simulator = requireSimulator(context);
     const device = await approvedDevice(input, context);
@@ -405,7 +426,10 @@ export const simulatorOpenUrl: ToolDefinition = {
       required: ['url'],
     },
   },
-  approval: deviceApproval(input => `Open ${String(input.url)}`),
+  approval: deviceApproval(
+    input => `Open ${String(input.url)}`,
+    input => /^file:/i.test(String(input.url).trim())
+  ),
   async run(input, context) {
     const url = requireString(input, 'url');
     if (!/^[a-z][a-z0-9+.-]*:/i.test(url))

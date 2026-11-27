@@ -8887,8 +8887,7 @@ export class ChatService {
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
     const byPart = !(prompt.irreversible || prompt.allowOnce || askedByRule);
     // A looping call is decided on rules and allowances alone: the mode's own cover is what the guard withdraws.
-    const partsMode: ChatApprovalMode = stuck ? 'ask' : mode;
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, partsMode) : null;
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode, stuck) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -9026,7 +9025,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, partsMode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode, stuck) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -10302,8 +10301,8 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'screen_capture looks at other apps on this computer: without a target it lists the open',
   'windows, and with a window title or id it captures that window as an image you and the user',
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
-  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
-  'capture asks the user first. For web pages use the browser tools.',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. A',
+  'whole-screen capture asks the user first. For web pages use the browser tools.',
 ];
 
 const SIMULATOR_GUIDANCE: readonly string[] = [
@@ -10311,8 +10310,8 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
   'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
   'the app with simulator_screenshot rather than predicting it from the code: the image is in',
-  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
-  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'points, so read tap coordinates straight off it for simulator_input. Whether it asks the user',
+  'first follows their approval mode. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
@@ -10990,7 +10989,9 @@ function decideParts(
   rules: PermissionRuleSet | undefined,
   gate: ApprovalGate,
   sessionId: string,
-  mode: ChatApprovalMode
+  mode: ChatApprovalMode,
+  // The repeat-call guard: the mode's own cover is withdrawn, rules and allowances still count.
+  withoutModeCover = false
 ): PartDecision | null {
   const always = prompt.always;
   if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
@@ -11003,7 +11004,7 @@ function decideParts(
     const covering = byRule?.[index] ?? null;
     if (covering) rule ??= covering;
     else if (partAllowed(allowed, part)) allowance = true;
-    else if (!modeCovers(mode, part)) uncovered.push(part);
+    else if (withoutModeCover || !modeCovers(mode, part)) uncovered.push(part);
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);

@@ -117,7 +117,7 @@ export const screenCapture: ToolDefinition = {
       detail: `Capture ${describeSource(source)}\n\n${READ_AS_YOU}`,
       key: `${SCREEN_CAPTURE_TOOL_NAME}\x00${source.id}`,
       // One app's window follows the approval mode; a whole screen can show other apps, so it asks.
-      ...(source.id.startsWith('screen:') ? { askInAuto: true as const } : {}),
+      ...(source.kind === 'screen' ? { askInAuto: true as const } : { repeatSafe: true as const }),
     };
   },
   async run(input, context) {

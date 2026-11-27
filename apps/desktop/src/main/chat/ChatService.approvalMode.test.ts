@@ -235,6 +235,21 @@ describe('ChatService approval modes', () => {
       ).toEqual(['c1', 'c2']);
     });
 
+    it('lets an "always" answered on a looping call cover the repeats waiting behind it', async () => {
+      await startTurn('auto');
+      for (const id of ['c1', 'c2', 'c3', 'c4']) {
+        streams[0].write(toolTurn(id, 'bash_execute', { command: 'touch again.txt', cwd: root }));
+      }
+      streams[0].write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(['c3', 'c4']).toContain(asked.id);
+      approvals.resolve(asked.approvalId as string, { decision: 'always' });
+
+      await vi.waitUntil(() => calls('done').length === 4, { timeout: 8000, interval: 10 });
+      expect(calls('awaiting-approval').length).toBeLessThanOrEqual(2);
+    });
+
     it('asks before reading a .env file but not .env.example', async () => {
       await writeFile(join(root, '.env'), 'SECRET=1\n', 'utf8');
       await writeFile(join(root, '.env.example'), 'SECRET=\n', 'utf8');
