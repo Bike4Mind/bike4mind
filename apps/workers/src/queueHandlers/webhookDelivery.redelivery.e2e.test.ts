@@ -1,22 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Cache } from '@bike4mind/database';
+import { Cache, WebhookDelivery, webhookDeliveryRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
-// Real CacheModel (the dedup claim under test); everything around it is stubbed.
+// Real dedup claim and delivery record; everything around them is stubbed.
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
 const h = vi.hoisted(() => ({
-  createIfNotExists: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async importActual => ({
   ...(await importActual<typeof import('@bike4mind/database')>()),
-  webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
   webhookSubscriptionRepository: {
     findById: vi.fn(async () => ({ id: 'sub-1', enabled: true })),
     incrementConsecutiveFailuresAtomic: vi.fn(async () => ({ wasAutoDisabled: false, newFailureCount: 1 })),
@@ -66,8 +64,14 @@ const sqsEvent = {
   ],
 };
 
-const receive = () =>
-  (dispatch as unknown as (event: unknown, context: unknown, log: unknown) => Promise<void>)(sqsEvent, {}, logger);
+let receiveCount = 0;
+const receive = () => {
+  receiveCount += 1;
+  const event = {
+    Records: [{ ...sqsEvent.Records[0], attributes: { ApproximateReceiveCount: String(receiveCount) } }],
+  };
+  return (dispatch as unknown as (event: unknown, context: unknown, log: unknown) => Promise<void>)(event, {}, logger);
+};
 
 const respond = (status: number) => ({ ok: status >= 200 && status < 300, status, headers: new Headers() });
 
@@ -77,6 +81,7 @@ beforeAll(async () => {
   mongo = await createMongoServer();
   await mongoose.connect(mongo.getUri());
   await Cache.init();
+  await WebhookDelivery.init();
 });
 
 afterAll(async () => {
@@ -85,8 +90,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
+  receiveCount = 0;
   await Cache.deleteMany({});
+  await WebhookDelivery.deleteMany({});
 });
 
 describe('webhookDelivery redelivery', () => {
@@ -101,6 +109,12 @@ describe('webhookDelivery redelivery', () => {
     expect(h.fetchMock).toHaveBeenCalledTimes(2);
     const entry = await Cache.findOne({ key: DEDUP_KEY }).lean();
     expect(entry?.result).toMatchObject({ status: 'completed' });
+    const rows = await WebhookDelivery.find({ deliveryId: 'del-1' }).lean();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'success', retryCount: 1 });
+    expect(rows[0]).not.toHaveProperty('payload');
+    expect(rows[0]).not.toHaveProperty('targetUrl');
+    expect(rows[0]).not.toHaveProperty('errorMessage');
   });
 
   it('does not send again on the redelivery of a completed delivery', async () => {
@@ -114,7 +128,7 @@ describe('webhookDelivery redelivery', () => {
 
   it('does not send again when the endpoint accepted the POST but recording it failed', async () => {
     h.fetchMock.mockResolvedValue(respond(200));
-    h.createIfNotExists.mockRejectedValueOnce(new Error('db down'));
+    vi.spyOn(webhookDeliveryRepository, 'recordAttempt').mockRejectedValueOnce(new Error('db down'));
 
     await expect(receive()).rejects.toThrow('db down');
     await receive();
@@ -130,6 +144,8 @@ describe('webhookDelivery redelivery', () => {
     }
 
     expect(h.fetchMock).toHaveBeenCalledTimes(MAX_RETRIES);
+    const row = await WebhookDelivery.findOne({ deliveryId: 'del-1' }).lean();
+    expect(row).toMatchObject({ status: 'failed', retryCount: MAX_RETRIES - 1 });
   });
 
   it('sends once when two receives of the same message overlap', async () => {

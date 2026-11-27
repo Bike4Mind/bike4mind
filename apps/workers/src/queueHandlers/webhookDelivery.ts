@@ -92,7 +92,10 @@ const CIRCUIT_BREAKER_THRESHOLD = 10;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = JSON.parse(event.Records[0].body);
-  const payload = WebhookDeliveryPayloadSchema.parse(body);
+  const parsed = WebhookDeliveryPayloadSchema.parse(body);
+  // SQS redelivers the same body, so the attempt number advances with the receive count.
+  const receiveCount = Number(event.Records[0].attributes?.ApproximateReceiveCount) || 1;
+  const payload: WebhookDeliveryPayload = { ...parsed, attempt: parsed.attempt + receiveCount - 1 };
   const startTime = Date.now();
 
   logger.updateMetadata({
@@ -438,7 +441,7 @@ async function recordDelivery(
   // Store payload and targetUrl only for failed deliveries (for DLQ replay)
   const shouldStorePayload = status === WebhookDeliveryStatus.Failed;
 
-  await webhookDeliveryRepository.createIfNotExists({
+  await webhookDeliveryRepository.recordAttempt({
     deliveryId: payload.deliveryId,
     organizationId: payload.orgId,
     subscriptionId: payload.subscriptionId,

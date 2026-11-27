@@ -95,4 +95,7 @@ export interface IWebhookDeliveryRepository extends IBaseRepository<IWebhookDeli
 
   /** Check if delivery exists for specific subscriber (per-subscriber dedup) */
   findByDeliveryAndSubscription(deliveryId: string, subscriptionId: string): Promise<IWebhookDeliveryDocument | null>;
+
+  /** Record the latest outbound attempt for a delivery; never downgrades a Success row */
+  recordAttempt(data: Omit<IWebhookDeliveryDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<boolean>;
 }

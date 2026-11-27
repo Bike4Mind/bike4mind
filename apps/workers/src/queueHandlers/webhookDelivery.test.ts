@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   claimDedup: vi.fn(),
   casDeleteDedup: vi.fn(),
   createOrUpdate: vi.fn(),
-  createIfNotExists: vi.fn(),
+  recordAttempt: vi.fn(),
   findSubscription: vi.fn(),
   incrementConsecutiveFailuresAtomic: vi.fn(),
   resetConsecutiveFailures: vi.fn(),
@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { claimDedup: h.claimDedup, casDeleteDedup: h.casDeleteDedup, createOrUpdate: h.createOrUpdate },
-  webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
+  webhookDeliveryRepository: { recordAttempt: h.recordAttempt },
   webhookSubscriptionRepository: {
     findById: h.findSubscription,
     incrementConsecutiveFailuresAtomic: h.incrementConsecutiveFailuresAtomic,
@@ -109,7 +109,7 @@ describe('webhookDelivery dispatch', () => {
 
     await expect(runDispatch()).resolves.toBeUndefined();
 
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({
       status: WebhookDeliveryStatus.Failed,
       errorMessage: expect.stringMatching(/^Security error/),
     });
@@ -128,8 +128,8 @@ describe('webhookDelivery dispatch', () => {
 
     await expect(runDispatch()).resolves.toBeUndefined();
 
-    expect(h.createIfNotExists).toHaveBeenCalledTimes(1);
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({
+    expect(h.recordAttempt).toHaveBeenCalledTimes(1);
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({
       status: WebhookDeliveryStatus.Failed,
       errorMessage: expect.stringMatching(/redirect/i),
     });
@@ -139,7 +139,7 @@ describe('webhookDelivery dispatch', () => {
   it('records a 2xx response as a successful delivery', async () => {
     await runDispatch();
 
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.resetConsecutiveFailures).toHaveBeenCalledWith('sub-1');
   });
 
@@ -153,7 +153,7 @@ describe('webhookDelivery dispatch', () => {
     await expect(runDispatch()).resolves.toBeUndefined();
 
     expect(cancel).toHaveBeenCalled();
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
   });
   describe('dedup claim on a failed attempt', () => {
@@ -167,7 +167,7 @@ describe('webhookDelivery dispatch', () => {
         'a DB error recording the failure',
         () => {
           h.fetchMock.mockResolvedValue({ ok: false, status: 500, headers: new Headers() });
-          h.createIfNotExists.mockRejectedValueOnce(new Error('db down'));
+          h.recordAttempt.mockRejectedValueOnce(new Error('db down'));
         },
       ],
     ])('releases its own claim before throwing on %s', async (_label, arrange) => {
@@ -180,7 +180,7 @@ describe('webhookDelivery dispatch', () => {
     });
 
     it('keeps the claim when the endpoint accepted the POST but a later write failed', async () => {
-      h.createIfNotExists.mockRejectedValueOnce(new Error('db down'));
+      h.recordAttempt.mockRejectedValueOnce(new Error('db down'));
 
       await expect(runDispatch()).rejects.toThrow('db down');
 

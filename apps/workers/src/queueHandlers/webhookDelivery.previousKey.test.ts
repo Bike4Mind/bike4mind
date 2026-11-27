@@ -9,7 +9,7 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   config: {} as { SECRET_ENCRYPTION_KEY?: string; SECRET_ENCRYPTION_KEY_PREVIOUS?: string },
   findByOrganizationId: vi.fn(),
-  createIfNotExists: vi.fn(),
+  recordAttempt: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
     casDeleteDedup: vi.fn(),
     createOrUpdate: vi.fn(),
   },
-  webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
+  webhookDeliveryRepository: { recordAttempt: h.recordAttempt },
   webhookSubscriptionRepository: {
     findById: vi.fn(async () => ({ id: 'sub-1', enabled: true })),
     incrementConsecutiveFailuresAtomic: vi.fn(async () => ({ wasAutoDisabled: false, newFailureCount: 1 })),
@@ -92,7 +92,7 @@ describe('webhookDelivery dispatch with a secret stored under the previous encry
     const timestamp = init.headers['X-Webhook-Timestamp'];
     const expected = crypto.createHmac('sha256', secretFixture).update(`${timestamp}.${init.body}`).digest('hex');
     expect(init.headers['X-Webhook-Signature-256']).toBe(`sha256=${expected}`);
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
   });
 
   it('records a failed delivery without sending when the secret was stored under neither key', async () => {
@@ -101,6 +101,6 @@ describe('webhookDelivery dispatch with a secret stored under the previous encry
     await runDispatch();
 
     expect(h.fetchMock).not.toHaveBeenCalled();
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Failed });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Failed });
   });
 });
