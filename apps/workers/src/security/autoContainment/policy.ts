@@ -15,7 +15,7 @@ import {
   type LinkRuleFacts,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
-import { decideLinkRules, type LinkRuleDecision } from './linkRules';
+import { decideLinkRules, type LinkRuleDecision, type LinkRuleTier } from './linkRules';
 
 /**
  * Whether automated containment acts on one assessed detection. Pure, so the thresholds are tested
@@ -171,31 +171,65 @@ type InterventionInput = {
   linkFacts?: LinkRuleFacts[] | null;
 };
 
+const LINK_RULE_TIERS: readonly LinkRuleTier[] = ['limit', 'holdGrant'];
+
+/**
+ * The gates a link rule's tier must pass that do not read the model's judgment; null when it passes. The one
+ * predicate both linkRulesCanAct (whether to load facts) and decideByLinkRule (whether to act) apply.
+ */
+function linkRuleGate(
+  detection: Pick<ShadowDetectionItem, 'detector' | 'userIds' | 'verdict'>,
+  config: AutoContainmentConfig,
+  tier: LinkRuleTier
+): InterventionSkipReason | null {
+  if (config.mode === 'off') return 'mode_off';
+  if (effectiveTierMode(config, tier) === 'off') return 'tier_off';
+  if (isReviewOnlyCompletionDetector(detection.detector)) return 'review_only_detector';
+  if (detection.verdict !== null) return 'already_reviewed';
+  const named = new Set(detection.userIds).size;
+  if (named === 0) return 'no_accounts';
+  if (named > config.maxAccountsPerDetection) return 'too_many_accounts';
+  return null;
+}
+
 /** Whether link rules could decide anything for this detection, so callers can skip loading their facts. */
-export function linkRulesCanAct(detection: ShadowDetectionItem, config: AutoContainmentConfig): boolean {
-  if (!config.linkRules.enabled || config.mode === 'off') return false;
-  if (isReviewOnlyCompletionDetector(detection.detector) || detection.verdict !== null) return false;
-  if (!TIER_BY_ACTION[detection.wouldAction]) return false;
-  const accounts = new Set(detection.userIds).size;
-  if (accounts === 0 || accounts > config.maxAccountsPerDetection) return false;
-  return effectiveTierMode(config, 'limit') !== 'off' || effectiveTierMode(config, 'holdGrant') !== 'off';
+export function linkRulesCanAct(
+  detection: Pick<ShadowDetectionItem, 'detector' | 'wouldAction' | 'userIds' | 'verdict'>,
+  config: AutoContainmentConfig
+): boolean {
+  if (!config.linkRules.enabled || !TIER_BY_ACTION[detection.wouldAction]) return false;
+  return LINK_RULE_TIERS.some(tier => linkRuleGate(detection, config, tier) === null);
+}
+
+/**
+ * Whether a model decision leaves the link rules room to decide, so callers load facts only then: the model
+ * skipped for an overridable reason, without a legitimate_automation judgment, and a rule tier could act.
+ */
+export function linkRulesMayOverride(
+  input: Pick<InterventionInput, 'assessment' | 'detection' | 'config'>,
+  decided: InterventionDecision
+): boolean {
+  if (decided.kind !== 'skip' || !LINK_RULE_OVERRIDABLE.has(decided.why)) return false;
+  // A positive legitimate judgment is the more specific signal for the same cluster, so rules defer to it.
+  if (input.assessment.result === 'legitimate_automation') return false;
+  return linkRulesCanAct(input.detection, input.config);
 }
 
 /**
  * Which tier, if any, acts on one assessed detection. Contain keeps decideContainment's rules
  * unchanged; graduated tiers also refuse unusable or stale evidence and honor the tier's rollout.
  * When the model abstains or the mapped tier is off, a firing link rule (linkRules.ts) may decide
- * Limit or Hold signup grant under the same non-model gates; a link rule never decides Contain, and
- * never overrides a legitimate_automation judgment.
+ * Limit or Hold signup grant under the same non-model gates; a link rule never decides Contain, never
+ * overrides a legitimate_automation judgment, and when it cannot act the model's skip stands.
  */
 export function decideIntervention(input: InterventionInput): InterventionDecision {
-  const linkRules = input.config.linkRules.enabled && input.linkFacts ? decideLinkRules(input.linkFacts) : null;
   const decided = decideByModel(input);
-  if (decided.kind === 'act') return { ...decided, linkRules: linkRules?.rules ?? [] };
-  if (!linkRules || !LINK_RULE_OVERRIDABLE.has(decided.why)) return decided;
-  // A positive legitimate judgment is the more specific signal for the same cluster, so rules defer to it.
-  if (input.assessment.result === 'legitimate_automation') return decided;
-  return decideByLinkRule(input, linkRules);
+  if (!input.linkFacts || !linkRulesMayOverride(input, decided)) return decided;
+  const linkRules = decideLinkRules(input.linkFacts);
+  if (!linkRules) return decided;
+  // A rule that cannot act leaves the model's own skip, so skip reasons keep reporting its judgment.
+  const ruled = decideByLinkRule(input, linkRules);
+  return ruled.kind === 'act' ? ruled : decided;
 }
 
 function decideByModel(input: InterventionInput): InterventionDecision {
@@ -231,15 +265,13 @@ function decideByLinkRule(input: InterventionInput, rule: LinkRuleDecision): Int
   const { detection, config, now } = input;
   const tier = rule.tier;
   const skip = (why: InterventionSkipReason): InterventionDecision => ({ kind: 'skip', why, tier });
+  const gated = linkRuleGate(detection, config, tier);
+  if (gated) return skip(gated);
   const tierConfig = config.tiers[tier];
   const mode = effectiveTierMode(config, tier);
-  if (config.mode === 'off') return skip('mode_off');
+  // Unreachable after the gate; narrows mode for the act below.
   if (mode === 'off') return skip('tier_off');
-  if (isReviewOnlyCompletionDetector(detection.detector)) return skip('review_only_detector');
-  if (detection.verdict !== null) return skip('already_reviewed');
   const named = new Set(detection.userIds);
-  if (named.size === 0) return skip('no_accounts');
-  if (named.size > config.maxAccountsPerDetection) return skip('too_many_accounts');
   // Rule ids come from facts loaded for detection.userIds, so the named filter is defensive;
   // empty here means rollout excluded every account.
   const userIds = rule.userIds.filter(id => named.has(id) && rolloutBucket(id) < tierConfig.rolloutPercent);

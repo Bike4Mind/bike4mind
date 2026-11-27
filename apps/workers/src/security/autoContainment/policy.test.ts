@@ -7,7 +7,14 @@ import {
   RISK_EVIDENCE_VERSION,
   SHADOW_DETECTION_ACTIONS,
 } from '@bike4mind/common';
-import { containmentReason, decideContainment, decideIntervention, linkRulesCanAct, rolloutBucket } from './policy';
+import {
+  containmentReason,
+  decideContainment,
+  decideIntervention,
+  linkRulesCanAct,
+  linkRulesMayOverride,
+  rolloutBucket,
+} from './policy';
 
 const config = AutoContainmentConfigSchema.parse({});
 const featureSummary = {
@@ -406,29 +413,38 @@ describe('decideIntervention link rules', () => {
     });
   });
 
-  it('keeps a model act as decided by the model, noting the rules that also fired', () => {
+  it('keeps a model act as decided by the model, with no rules recorded', () => {
     expect(decide({ assessment: { result: 'abuse', confidence: 0.95 } })).toMatchObject({
       kind: 'act',
       tier: 'limit',
       decidedBy: 'model',
-      linkRules: ['sharedOwnedDomain'],
+      linkRules: [],
     });
   });
 
   it.each([
-    ['tier_off', { config: tiersOn({ tiers: { holdGrant: { mode: 'shadow', rolloutPercent: 100 } } }) }],
-    ['not_in_rollout', { config: tiersOn({ tiers: { limit: { mode: 'shadow', rolloutPercent: 0 } } }) }],
-    ['already_reviewed', { detection: { verdict: 'legitimate_human' as const } }],
-    ['too_many_accounts', { detection: { userIds: ['u1', '2', '3', '4', '5', '6'] } }],
-    ['mode_off', { config: tiersOn({ mode: 'off' }) }],
-  ])('applies the non-model gate %s to the rule tier', (why, over) => {
+    ['tier_off', { config: tiersOn({ tiers: { holdGrant: { mode: 'shadow', rolloutPercent: 100 } } }) }, 'tier_off'],
+    ['not_in_rollout', { config: tiersOn({ tiers: { limit: { mode: 'shadow', rolloutPercent: 0 } } }) }, 'not_abuse'],
+    ['already_reviewed', { detection: { verdict: 'legitimate_human' as const } }, 'not_abuse'],
+    ['too_many_accounts', { detection: { userIds: ['u1', '2', '3', '4', '5', '6'] } }, 'not_abuse'],
+    ['mode_off', { config: tiersOn({ mode: 'off' }) }, 'mode_off'],
+  ])('keeps the model skip when the rule tier fails the non-model gate %s', (_gate, over, why) => {
     expect(decide(over)).toEqual({ kind: 'skip', why, tier: 'limit' });
+  });
+
+  it("reports the model's own skip, not the rule tier's, when the rule cannot act", () => {
+    const limitOff = tiersOn({ tiers: { holdGrant: { mode: 'shadow' }, review: { mode: 'shadow' } } });
+    expect(decide({ detection: { wouldAction: 'restrict' }, config: limitOff })).toEqual({
+      kind: 'skip',
+      why: 'not_abuse',
+      tier: 'review',
+    });
   });
 
   it('never acts on an account the detection does not name', () => {
     expect(decide({ linkFacts: [facts({ userId: 'stranger' })] })).toEqual({
       kind: 'skip',
-      why: 'not_in_rollout',
+      why: 'not_abuse',
       tier: 'limit',
     });
   });
@@ -438,6 +454,28 @@ describe('decideIntervention link rules', () => {
     expect(decide({ config: tiersOn({ linkRules: { enabled: false } }) })).toEqual(modelSkip);
     expect(decide({ linkFacts: null })).toEqual(modelSkip);
     expect(decide({ linkFacts: [facts({ paying: true })] })).toEqual(modelSkip);
+  });
+
+  describe('linkRulesMayOverride', () => {
+    const input = (over: { assessment?: Partial<typeof fresh>; config?: ReturnType<typeof tiersOn> } = {}) => ({
+      assessment: { ...abstained, ...over.assessment },
+      detection: { ...detection, wouldAction: 'limit' as const },
+      config: over.config ?? tiersOn(),
+    });
+
+    it('asks for facts only after an overridable model skip', () => {
+      expect(linkRulesMayOverride(input(), { kind: 'skip', why: 'not_abuse', tier: 'limit' })).toBe(true);
+      expect(linkRulesMayOverride(input(), { kind: 'skip', why: 'tier_off', tier: 'review' })).toBe(true);
+      expect(linkRulesMayOverride(input(), { kind: 'skip', why: 'mode_off' })).toBe(false);
+      expect(linkRulesMayOverride(input(), decide({ assessment: { result: 'abuse', confidence: 0.95 } }))).toBe(false);
+    });
+
+    it('never asks for facts against a legitimate_automation judgment, or when no rule tier is on', () => {
+      const skip = { kind: 'skip', why: 'not_abuse', tier: 'limit' } as const;
+      expect(linkRulesMayOverride(input({ assessment: { result: 'legitimate_automation' } }), skip)).toBe(false);
+      const rulesOff = tiersOn({ tiers: { review: { mode: 'shadow' } } });
+      expect(linkRulesMayOverride(input({ config: rulesOff }), skip)).toBe(false);
+    });
   });
 
   it('never lets a rule override a review-only detector', () => {
@@ -456,7 +494,7 @@ describe('decideIntervention link rules', () => {
         kind: 'act',
         tier: 'contain',
         decidedBy: 'model',
-        linkRules: ['sharedOwnedDomain'],
+        linkRules: [],
       });
     });
 

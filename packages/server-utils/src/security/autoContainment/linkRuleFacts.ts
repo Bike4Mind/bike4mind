@@ -112,8 +112,7 @@ export async function loadLinkRuleFacts(
   const members = new Set(ids);
   const windowHours = config.strongLinkWindowHours || DEFAULT_LINK_WINDOW_HOURS;
 
-  const [stamps, deviceLinks, clusters] = await Promise.all([
-    read('paying', () => deps.findCreditPurchaseStamps(ids), null),
+  const [deviceLinks, clusters] = await Promise.all([
     read('bannedSameDevice', () => deps.bannedDeviceLinks(ids, config), null),
     Promise.all(accounts.map(account => domainClusterOf(account, windowHours, deps, read))),
   ]);
@@ -127,8 +126,18 @@ export async function loadLinkRuleFacts(
   ].filter((date): date is Date => date !== null);
   const earliest = signups.length > 0 ? Math.min(...signups.map(date => date.getTime())) : null;
   const since = earliest === null ? null : new Date(Math.max(earliest, now.getTime() - SPEND_LOOKBACK_DAYS * DAY_MS));
-  const spend = since ? await read('creditsSpent', () => deps.spendProfileByUsers(spendIds, since), null) : null;
+  const [stamps, spend] = await Promise.all([
+    read('paying', () => deps.findCreditPurchaseStamps(spendIds), null),
+    since ? read('creditsSpent', () => deps.spendProfileByUsers(spendIds, since), null) : null,
+  ]);
   const spentOf = (id: string) => spend?.[id]?.totalCredits ?? 0;
+  // Cluster members overlap across the detection's accounts, so each standing is read once.
+  const standings = new Map<string, Promise<boolean>>();
+  const isPaying = (id: string): Promise<boolean> => {
+    const known = standings.get(id) ?? payingOf(id, stamps, deps, read);
+    standings.set(id, known);
+    return known;
+  };
 
   return Promise.all(
     accounts.map(async (account, index): Promise<LinkRuleFacts> => {
@@ -137,20 +146,13 @@ export async function loadLinkRuleFacts(
       const blockedDevices = deviceLinks?.get(account.id) ?? [];
       return {
         userId: account.id,
-        paying: await payingOf(account.id, stamps, deps, read),
+        paying: await isPaying(account.id),
         // An account with no email cannot be checked against partner domains and reads false, so only
         // the device rule can still fire for it.
         partnerDomain: email ? await read('partnerDomain', () => deps.isOrganizationDomain(email), true) : false,
         // No spend read leaves every account at zero, which no spend-gated rule fires on.
         creditsSpent: account.createdAt ? spentOf(account.id) : 0,
-        ownedDomainCluster:
-          cluster && spend
-            ? {
-                domain: cluster.domain,
-                accounts: 1 + cluster.members.length,
-                spenders: [account.id, ...cluster.members.map(m => m.id)].filter(id => spentOf(id) > 0).length,
-              }
-            : null,
+        ownedDomainCluster: cluster && spend ? await clusterFacts(account.id, cluster, spentOf, isPaying) : null,
         adminHeldDomain: email
           ? await read('heldSignupDomain', () => deps.findAdminBlockedDomain(emailDomainCandidates(email)), null)
           : null,
@@ -160,6 +162,27 @@ export async function loadLinkRuleFacts(
       };
     })
   );
+}
+
+/**
+ * The cluster's counts, or null when another member is paying: a paying colleague marks the domain a real
+ * organization, so the rule must not fire for anyone on it. Only spenders are checked: they are the
+ * members the rule counts, and that bounds the subscription reads.
+ */
+async function clusterFacts(
+  userId: string,
+  cluster: DomainCluster,
+  spentOf: (id: string) => number,
+  isPaying: (id: string) => Promise<boolean>
+): Promise<NonNullable<LinkRuleFacts['ownedDomainCluster']> | null> {
+  const memberSpenders = cluster.members.filter(member => spentOf(member.id) > 0);
+  const paying = await Promise.all(memberSpenders.map(member => isPaying(member.id)));
+  if (paying.some(Boolean)) return null;
+  return {
+    domain: cluster.domain,
+    accounts: 1 + cluster.members.length,
+    spenders: memberSpenders.length + (spentOf(userId) > 0 ? 1 : 0),
+  };
 }
 
 async function payingOf(

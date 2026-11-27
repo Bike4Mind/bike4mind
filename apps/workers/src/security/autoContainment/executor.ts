@@ -21,7 +21,12 @@ import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
-import { decideIntervention, linkRulesCanAct, type InterventionDecision, type InterventionSkipReason } from './policy';
+import {
+  decideIntervention,
+  linkRulesMayOverride,
+  type InterventionDecision,
+  type InterventionSkipReason,
+} from './policy';
 
 /**
  * Automated containment: turns an `abuse` judgment on a shadow detection into the admin bulk Contain
@@ -208,6 +213,8 @@ async function claimDecision(
   const covered = new Set(covering.filter(row => row !== current).flatMap(row => row.userIds));
   const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (current) {
+    // Reclaim keeps the row's decider, accounts and audit fields, so it must not carry another decider's claim.
+    if (decided.tier !== 'contain' && current.decidedBy !== decided.decidedBy) return null;
     const reclaimed = await deps.decisions.reclaim(current.id, {
       staleBefore,
       cappedBefore: new Date(now.getTime() - HOUR_MS),
@@ -278,13 +285,11 @@ async function releaseContainedHolds(
   }
 }
 
-/** Skips the reads when the link rules could not act anyway (see linkRulesCanAct). */
 async function linkFactsFor(
   detection: ShadowDetectionItem,
   config: AutoContainmentConfig,
   deps: AutoContainmentDeps
 ): Promise<LinkRuleFacts[] | null> {
-  if (!linkRulesCanAct(detection, config)) return null;
   try {
     return await deps.loadLinkRuleFacts(detection.userIds, config);
   } catch (error) {
@@ -306,14 +311,17 @@ export async function applyAutoContainment(
   const detection = await deps.findDetection(assessment.detectionId);
   if (!detection) return { status: 'skipped', reason: 'detection_not_found' };
 
-  const decided = decideIntervention({
+  const input = {
     assessment,
     detection,
     config,
     now: deps.now(),
     verificationAvailable: await deps.verificationAvailable(),
-    linkFacts: await linkFactsFor(detection, config, deps),
-  });
+  };
+  const byModel = decideIntervention(input);
+  // The facts cost several reads per account, so they are loaded only when a rule could replace the model's skip.
+  const linkFacts = linkRulesMayOverride(input, byModel) ? await linkFactsFor(detection, config, deps) : null;
+  const decided = linkFacts ? decideIntervention({ ...input, linkFacts }) : byModel;
   if (decided.kind === 'skip') return { status: 'skipped', reason: decided.why };
   if (decided.tier !== 'contain') return applyGraduatedTier(assessment, detection, decided, config, deps);
 

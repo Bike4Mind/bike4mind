@@ -106,6 +106,40 @@ describe('loadLinkRuleFacts', () => {
     expect(facts.ownedDomainCluster).toEqual({ domain: 'corp-example.com', accounts: 3, spenders: 0 });
   });
 
+  it('has no cluster when a spending member is paying, by purchase or by subscription', async () => {
+    const clustered = {
+      findSignupLinkCandidates: vi.fn(async () => [candidate('c1'), candidate('c2')]),
+      spendProfileByUsers: vi.fn(async () => ({ u1: spent(5), c1: spent(5), c2: spent(5) })),
+    };
+    const purchased = makeDeps({
+      ...clustered,
+      findCreditPurchaseStamps: vi.fn(async () => new Map([['c1', SIGNUP]])),
+    });
+    expect((await loadLinkRuleFacts(['u1'], config, purchased))[0].ownedDomainCluster).toBeNull();
+
+    const subscribed = makeDeps({
+      ...clustered,
+      findActiveSubscriptions: vi.fn(async (id: string) => (id === 'c2' ? [{ priceId: 'price_paid' }] : [])),
+    });
+    expect((await loadLinkRuleFacts(['u1'], config, subscribed))[0].ownedDomainCluster).toBeNull();
+
+    const unpaid = makeDeps(clustered);
+    expect((await loadLinkRuleFacts(['u1'], config, unpaid))[0].ownedDomainCluster).toEqual({
+      domain: 'corp-example.com',
+      accounts: 3,
+      spenders: 3,
+    });
+  });
+
+  it('reads each standing once when the detection and the cluster share accounts', async () => {
+    const deps = makeDeps({
+      findSignupLinkCandidates: vi.fn(async () => [candidate('u2')]),
+      spendProfileByUsers: vi.fn(async () => ({ u1: spent(5), u2: spent(5) })),
+    });
+    await loadLinkRuleFacts(['u1', 'u2'], config, deps);
+    expect(deps.findActiveSubscriptions).toHaveBeenCalledTimes(2);
+  });
+
   it('has no cluster on consumer mail', async () => {
     const deps = makeDeps({
       findAccountRiskProfiles: vi.fn(async () => [account('u1', { email: 'someone@gmail.com' })]),

@@ -850,6 +850,26 @@ describe('applyAutoContainment link rules', () => {
       linkRules: [],
       modelJudgment: { result: 'abuse', confidence: 0.97 },
     });
+    // The model acted, so no rule could replace it and the facts are never read.
+    expect(deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+  });
+
+  it('never lets a rule decision reclaim a capped model-decided row, which keeps its accounts and decider', async () => {
+    const enforceLimit = {
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>;
+    const { deps, stored, advance } = makeDeps(enforceLimit, false);
+    vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({ tier: 'limit', outcome: 'capped', decidedBy: 'model' });
+    vi.mocked(deps.takeHourlySlot).mockResolvedValue(true);
+    advance(2 * 60 * 60 * 1000);
+    deps.loadLinkRuleFacts.mockResolvedValue([firing]);
+
+    expect(await applyAutoContainment(abstained, deps)).toEqual({ status: 'skipped', reason: 'already_decided' });
+    expect(deps.decisions.reclaim).not.toHaveBeenCalled();
+    expect(stored[0]).toMatchObject({ outcome: 'capped', decidedBy: 'model', userIds: ['user-1', 'user-2'] });
   });
 
   it('does not load facts when link rules are disabled or the detection is already reviewed', async () => {

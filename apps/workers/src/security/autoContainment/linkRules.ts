@@ -16,7 +16,7 @@ export type LinkRuleDecision = { tier: LinkRuleTier; userIds: string[]; rules: L
 export const MIN_DOMAIN_CLUSTER_ACCOUNTS = 3;
 export const MIN_DOMAIN_CLUSTER_SPENDERS = 2;
 
-/** The rule reported when several fire for one account; a limit rule always outranks a holdGrant one. */
+/** Order of the rules within a tier; a limit rule always outranks a holdGrant one. */
 export const LINK_RULE_PRECEDENCE: readonly LinkRule[] = ['bannedSameDevice', 'sharedOwnedDomain', 'heldSignupDomain'];
 
 const TIER_RANK: Record<LinkRuleTier, number> = { limit: 0, holdGrant: 1 };
@@ -49,31 +49,34 @@ function firingRules(facts: LinkRuleFacts): LinkRuleHit[] {
   return hits;
 }
 
-/** The rule that decides one account's tier, or null when none fires or the account is never touched. */
-export function evaluateLinkRules(facts: LinkRuleFacts): LinkRuleHit | null {
-  if (facts.paying || facts.partnerDomain) return null;
-  const hits = firingRules(facts);
-  if (hits.length === 0) return null;
-  return [...hits].sort(
+/** Every rule that fires for one account, the one deciding its tier first; empty when the account is never touched. */
+export function evaluateLinkRules(facts: LinkRuleFacts): LinkRuleHit[] {
+  if (facts.paying || facts.partnerDomain) return [];
+  return firingRules(facts).sort(
     (a, b) =>
       TIER_RANK[a.tier] - TIER_RANK[b.tier] ||
       LINK_RULE_PRECEDENCE.indexOf(a.rule) - LINK_RULE_PRECEDENCE.indexOf(b.rule)
-  )[0];
+  );
 }
 
-/** One tier for a detection: Limit when any fired account needs it, else Hold signup grant. Null when no rule fires. */
+/**
+ * One tier for a detection: the strongest any account earned, applied only to the accounts that earned it,
+ * so no account gets a stronger scope than its own rules chose. Records every rule that fired for those
+ * accounts, not only the deciding one. Null when no rule fires.
+ */
 export function decideLinkRules(facts: readonly LinkRuleFacts[]): LinkRuleDecision | null {
   const fired = facts.flatMap(account => {
-    const hit = evaluateLinkRules(account);
-    return hit ? [{ userId: account.userId, hit }] : [];
+    const hits = evaluateLinkRules(account);
+    return hits.length > 0 ? [{ userId: account.userId, tier: hits[0].tier, hits }] : [];
   });
   if (fired.length === 0) return null;
-  const tier: LinkRuleTier = fired.some(({ hit }) => hit.tier === 'limit') ? 'limit' : 'holdGrant';
-  const rules = LINK_RULE_PRECEDENCE.filter(rule => fired.some(({ hit }) => hit.rule === rule));
+  const tier: LinkRuleTier = fired.some(account => account.tier === 'limit') ? 'limit' : 'holdGrant';
+  const earned = fired.filter(account => account.tier === tier);
+  const hits = earned.flatMap(account => account.hits);
   return {
     tier,
-    userIds: [...new Set(fired.map(({ userId }) => userId))],
-    rules,
-    reason: [...new Set(fired.map(({ hit }) => hit.why))].join('; '),
+    userIds: [...new Set(earned.map(({ userId }) => userId))],
+    rules: LINK_RULE_PRECEDENCE.filter(rule => hits.some(hit => hit.rule === rule)),
+    reason: [...new Set(hits.map(({ why }) => why))].join('; '),
   };
 }
