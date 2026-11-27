@@ -234,10 +234,12 @@ export default function SharedFunctionsSection({ sx }: { sx?: SxProps }) {
   const enabled = useCallableFunctionsEnabled();
   const { data } = useSharedCallableFunctions(enabled);
   if (!enabled || !data || data.length === 0) return null;
+  // An offer alone (the public API's `platform` group) follows the shares, each part in the server's order.
+  const ordered = [...data].sort((a, b) => Number(a.sharedVia === 'signed_in') - Number(b.sharedVia === 'signed_in'));
   return (
     <Stack gap="8px" sx={sx} data-testid="shared-functions-section">
       <Typography level="title-sm">Functions shared with you</Typography>
-      {data.map(fn => (
+      {ordered.map(fn => (
         <SharedFunctionCard key={`${fn.id}:${fn.reviewHash}`} fn={fn} />
       ))}
     </Stack>
