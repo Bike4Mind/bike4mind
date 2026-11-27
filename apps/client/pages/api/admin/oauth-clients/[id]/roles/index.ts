@@ -2,13 +2,12 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { addOAuthClientRole, listOAuthClientRoles } from '@bike4mind/database';
-import { ApiKeyScope, oauthClientRoleSchema } from '@bike4mind/common';
+import { oauthClientRoleSchema } from '@bike4mind/common';
 
 /** GET lists the roles a client offers and who holds each; POST adds a role ({ key, label, reason }). */
 const handler = adminApi({
   adminPermissions: { GET: ['support:read', 'settings:manage'], POST: 'settings:manage' },
   auth: 'jwtOnly',
-  requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
     const { id } = req.query;

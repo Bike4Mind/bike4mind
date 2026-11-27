@@ -1,10 +1,5 @@
 import type { Request } from 'express';
-import {
-  ApiKeyScope,
-  NotFoundError,
-  assertCanActOnAdminTarget,
-  oauthClientRoleAssignmentInputSchema,
-} from '@bike4mind/common';
+import { NotFoundError, assertCanActOnAdminTarget, oauthClientRoleAssignmentInputSchema } from '@bike4mind/common';
 import {
   assignOAuthClientRole,
   listUserOAuthClientRoles,
@@ -59,7 +54,6 @@ const auditDetails = (client: RoleChange['client'], role: RoleChange['role'], us
 const handler = adminApi({
   adminPermissions: { GET: ['support:read', 'settings:manage'], POST: 'settings:manage', DELETE: 'settings:manage' },
   auth: 'jwtOnly',
-  requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
     res.status(200).json(await listUserOAuthClientRoles(readUserId(req)));

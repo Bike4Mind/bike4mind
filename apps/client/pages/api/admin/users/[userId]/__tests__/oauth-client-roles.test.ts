@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ADMIN_AUDIT_CATALOGUE, ApiKeyScope, BadRequestError, NotFoundError } from '@bike4mind/common';
+import { ADMIN_AUDIT_CATALOGUE, BadRequestError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   config: null as unknown,
@@ -70,8 +70,8 @@ beforeEach(() => {
 });
 
 describe('route registration', () => {
-  it('requires the admin API-key scope and catalogues both actions', () => {
-    expect(h.config).toEqual(expect.objectContaining({ requiredScopes: [ApiKeyScope.ADMIN] }));
+  it('is JWT-only and catalogues both actions', () => {
+    expect(h.config).toEqual(expect.objectContaining({ auth: 'jwtOnly' }));
     expect(ADMIN_AUDIT_CATALOGUE['oauth_client.role_assigned']).toBeDefined();
     expect(ADMIN_AUDIT_CATALOGUE['oauth_client.role_unassigned']).toBeDefined();
   });

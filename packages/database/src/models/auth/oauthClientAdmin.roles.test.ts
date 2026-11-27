@@ -4,6 +4,7 @@ import { ZodError } from 'zod';
 import {
   BadRequestError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   OAUTH_CLIENT_MAX_ROLES,
   OAUTH_CLIENT_ROLE_HOLDERS_SHOWN,
@@ -145,12 +146,46 @@ describe('removeOAuthClientRole', () => {
     const result = await removeOAuthClientRole(client.id, 'admin');
     expect(result.role).toEqual({ key: 'admin', label: 'Admin' });
     expect(result.removedAssignments).toBe(1);
+    expect(result.removedUserIds).toEqual([userId]);
     expect(result.client.roles).toEqual([{ key: 'viewer', label: 'Viewer' }]);
     expect((await OAuthClientModel.findById(client.id))?.roles.map(r => r.key)).toEqual(['viewer']);
     const left = await OAuthClientRoleAssignmentModel.find().sort({ clientId: 1, role: 1 });
     expect(left.map(r => `${r.clientId}:${r.role}`).sort()).toEqual(
       [`${client.clientId}:viewer`, `${other.clientId}:admin`].sort()
     );
+  });
+
+  it('refuses a delegated admin when a holder has admin access, and lets a full admin through', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const plain = await makeUser();
+    const privileged = await makeUser({ adminPermissions: ['support:read'] });
+    for (const userId of [plain, privileged]) {
+      await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a1' });
+    }
+    const delegate = { isAdmin: false, adminPermissions: ['settings:manage'] } as const;
+
+    await expect(removeOAuthClientRole(client.id, 'admin', { actor: delegate })).rejects.toBeInstanceOf(ForbiddenError);
+    expect((await OAuthClientModel.findById(client.id))?.roles.map(r => r.key)).toEqual(['admin']);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(2);
+
+    const result = await removeOAuthClientRole(client.id, 'admin', { actor: { isAdmin: true } });
+    expect(result.removedAssignments).toBe(2);
+  });
+
+  it('lets a delegated admin remove a role held only by ordinary accounts', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    await assignOAuthClientRole({
+      userId: await makeUser(),
+      clientId: client.clientId,
+      role: 'admin',
+      assignedBy: 'a1',
+    });
+    const result = await removeOAuthClientRole(client.id, 'admin', {
+      actor: { isAdmin: false, adminPermissions: ['settings:manage'] },
+    });
+    expect(result.removedAssignments).toBe(1);
   });
 
   it('404s for an unknown role, client or malformed id', async () => {

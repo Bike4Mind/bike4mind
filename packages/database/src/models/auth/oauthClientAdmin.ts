@@ -25,6 +25,8 @@ import {
   type OAuthClientRole,
   type OAuthClientRolesView,
   type UserOAuthClientRolesView,
+  type AdminIdentity,
+  assertCanActOnAdminTarget,
 } from '@bike4mind/common';
 import { OAuthClientModel, type IOAuthClientDocument } from './OAuthClientModel';
 import { oauthClientRoleAssignmentRepository } from './OAuthClientRoleAssignmentModel';
@@ -382,15 +384,33 @@ export async function addOAuthClientRole(
   });
 }
 
-/** Removes the role from the client and deletes every assignment of it. */
+/**
+ * Removes the role from the client and deletes every assignment of it. With `actor`, a delegated admin is
+ * refused (ForbiddenError) when any current holder has admin access; the holders are read under the client lock.
+ */
 export async function removeOAuthClientRole(
   id: string,
-  key: string
-): Promise<{ client: OAuthClientView; role: OAuthClientRole; removedAssignments: number }> {
+  key: string,
+  options: { actor?: AdminIdentity } = {}
+): Promise<{
+  client: OAuthClientView;
+  role: OAuthClientRole;
+  removedAssignments: number;
+  removedUserIds: string[];
+}> {
   assertValidId(id);
   return withLockedRoleClient({ _id: id }, async (current, session) => {
     const role = current.roles.find(existing => existing.key === key);
     if (!role) throw new NotFoundError('Role not found on this client');
+    const removedUserIds = await oauthClientRoleAssignmentRepository.listUserIdsForRole(current.clientId, key, session);
+    if (options.actor) {
+      const holders = await User.find({ _id: { $in: removedUserIds.filter(uid => mongoose.isValidObjectId(uid)) } })
+        .select('isAdmin adminPermissions adminRoleIds')
+        .session(session)
+        .lean<AdminIdentity[]>()
+        .exec();
+      for (const holder of holders) assertCanActOnAdminTarget(options.actor, holder, 'remove an app role from');
+    }
     const doc = await OAuthClientModel.findOneAndUpdate(
       { _id: id },
       { $pull: { roles: { key } } },
@@ -398,7 +418,12 @@ export async function removeOAuthClientRole(
     ).exec();
     if (!doc) throw new NotFoundError('OAuth client not found');
     const removedAssignments = await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, key, session);
-    return { client: toOAuthClientView(doc), role: { key: role.key, label: role.label }, removedAssignments };
+    return {
+      client: toOAuthClientView(doc),
+      role: { key: role.key, label: role.label },
+      removedAssignments,
+      removedUserIds,
+    };
   });
 }
 

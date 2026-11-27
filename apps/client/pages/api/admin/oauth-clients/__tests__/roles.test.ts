@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ADMIN_AUDIT_CATALOGUE, ApiKeyScope, ConflictError, NotFoundError } from '@bike4mind/common';
+import { ADMIN_AUDIT_CATALOGUE, ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() => ({
   configs: {} as Record<string, unknown>,
@@ -45,6 +45,7 @@ const REASON = 'App launches staff roles';
 const client = { id: 'c1', clientId: 'b4m_app_0011aabb', name: 'My App', roles: [] };
 const ADMIN = { isAdmin: true, id: 'admin-1', username: 'root' };
 const NON_ADMIN = { isAdmin: false, id: 'u1' };
+const DELEGATE = { isAdmin: false, id: 'd1', adminPermissions: ['settings:manage'] };
 const READ_ONLY_DELEGATE = { isAdmin: false, id: 'u2', adminPermissions: ['support:read'] };
 
 function makeReqRes(method: string, over: { user?: unknown; body?: unknown; query?: unknown } = {}) {
@@ -66,8 +67,8 @@ beforeEach(async () => {
 });
 
 describe('route registration', () => {
-  it.each(['roles', 'role'])('%s requires the admin API-key scope', route => {
-    expect(configs[route]).toEqual(expect.objectContaining({ requiredScopes: [ApiKeyScope.ADMIN] }));
+  it.each(['roles', 'role'])('%s is JWT-only', route => {
+    expect(configs[route]).toEqual(expect.objectContaining({ auth: 'jwtOnly' }));
   });
 
   it('catalogues every action the routes write', () => {
@@ -164,19 +165,52 @@ describe('DELETE /api/admin/oauth-clients/[id]/roles/[key]', () => {
       client,
       role: { key: 'admin', label: 'Admin' },
       removedAssignments: 3,
+      removedUserIds: ['u1', 'u2', 'u3'],
     });
     const { req, res } = makeReqRes('DELETE', { body: { reason: REASON } });
     await handlers.role.delete(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(db.removeOAuthClientRole).toHaveBeenCalledWith('c1', 'admin');
+    expect(db.removeOAuthClientRole).toHaveBeenCalledWith('c1', 'admin', { actor: ADMIN });
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(req, {
       action: 'oauth_client.role_removed',
       target: { kind: 'oauthClient', id: 'c1', displayName: 'My App' },
       summary: 'removed the role admin from the OAuth client',
       reason: REASON,
-      details: { clientId: client.clientId, role: 'admin', label: 'Admin', removedAssignments: 3 },
+      details: {
+        clientId: client.clientId,
+        role: 'admin',
+        label: 'Admin',
+        removedAssignments: 3,
+        removedUserIds: ['u1', 'u2', 'u3'],
+      },
     });
+  });
+
+  it('caps the audited user ids and flags the truncation', async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `u${i}`);
+    db.removeOAuthClientRole.mockResolvedValue({
+      client,
+      role: { key: 'admin', label: 'Admin' },
+      removedAssignments: 150,
+      removedUserIds: ids,
+    });
+    const { req, res } = makeReqRes('DELETE', { body: { reason: REASON } });
+    await handlers.role.delete(req, res);
+    const details = recordAdminActionFromRequest.mock.calls[0][1].details;
+    expect(details.removedUserIds).toEqual(ids.slice(0, 100));
+    expect(details.removedUserIdsTruncated).toBe(true);
+    expect(details.removedAssignments).toBe(150);
+  });
+
+  it('passes the acting delegate to the removal and surfaces its refusal without auditing', async () => {
+    db.removeOAuthClientRole.mockRejectedValue(
+      new ForbiddenError('Only full administrators can remove an app role from users with admin access')
+    );
+    const { req, res } = makeReqRes('DELETE', { user: DELEGATE, body: { reason: REASON } });
+    await expect(handlers.role.delete(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(db.removeOAuthClientRole).toHaveBeenCalledWith('c1', 'admin', { actor: DELEGATE });
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -39,6 +39,7 @@ export interface IOAuthClientRoleAssignmentRepository extends IBaseRepository<IO
     limit: number
   ): Promise<Array<{ role: string; count: number; rows: IOAuthClientRoleAssignmentDocument[] }>>;
   listByUser(userId: string): Promise<IOAuthClientRoleAssignmentDocument[]>;
+  listUserIdsForRole(clientId: string, role: string, session?: mongoose.mongo.ClientSession): Promise<string[]>;
   /** Every assignment on the client, or only those of `role`. */
   deleteAllForClient(clientId: string, role?: string, session?: mongoose.mongo.ClientSession): Promise<number>;
   deleteAllForUser(userId: string): Promise<number>;
@@ -114,6 +115,16 @@ class OAuthClientRoleAssignmentRepository
         rows: await this.model.find({ clientId, role }).sort({ assignedAt: 1 }).limit(limit).exec(),
       }))
     );
+  }
+
+  async listUserIdsForRole(clientId: string, role: string, session?: mongoose.mongo.ClientSession) {
+    const rows = await this.model
+      .find({ clientId, role })
+      .select('userId')
+      .session(session ?? null)
+      .lean()
+      .exec();
+    return rows.map(r => r.userId);
   }
 
   listByUser(userId: string) {
