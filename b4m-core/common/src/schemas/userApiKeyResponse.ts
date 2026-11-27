@@ -45,6 +45,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   orgOwned: true,
   explicitScopeOnly: true,
   exposureCeiling: true,
+  expiryReminderSentAt: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,

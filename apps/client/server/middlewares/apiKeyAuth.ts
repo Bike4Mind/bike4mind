@@ -33,6 +33,7 @@ import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
+import { refuseIfExpiredMcpKey } from '@bike4mind/server-utils/auth/expiredApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
@@ -128,6 +129,7 @@ export const apiKeyAuth = (
           userAgent: req.headers['user-agent'],
         });
         if (validation.reason === 'not_found') await refuseIfSuspendedOwner(apiKey, req.logger);
+        if (validation.reason === 'not_found') await refuseIfExpiredMcpKey(apiKey, req.logger);
         throw new UnauthorizedError('Invalid API key');
       }
 

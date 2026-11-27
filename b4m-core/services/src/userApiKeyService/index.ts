@@ -5,6 +5,7 @@ export * from './getSystemUser';
 export * from './list';
 export * from './notifyApiKeyReowned';
 export * from './notifyApiKeyRevokedByOrg';
+export * from './notifyApiKeyExpiring';
 export * from './orgServiceAccount';
 export * from './rateLimit';
 export * from './resolveOwnedApiKey';

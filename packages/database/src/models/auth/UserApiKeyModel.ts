@@ -238,6 +238,39 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  findExpiringExplicitScopeOnly(now: Date, until: Date) {
+    return this.model
+      .find({
+        explicitScopeOnly: true,
+        status: ApiKeyStatus.ACTIVE,
+        expiresAt: { $gt: now, $lte: until },
+        expiryReminderSentAt: null,
+      })
+      .exec();
+  }
+
+  async claimExpiryReminder(id: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, expiryReminderSentAt: null },
+      { $set: { expiryReminderSentAt: new Date() } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  // Capped like findDisabledByKeyPrefix: this runs only after auth has already failed.
+  findExpiredExplicitScopeOnlyByKeyPrefix(keyPrefix: string) {
+    return this.model
+      .find({
+        keyPrefix,
+        explicitScopeOnly: true,
+        status: ApiKeyStatus.ACTIVE,
+        expiresAt: { $lte: new Date() },
+      })
+      .limit(5)
+      .exec();
+  }
+
   // Only keys disabled in bulk. Capped because this runs after auth fails and prefix collisions are rare.
   findDisabledByKeyPrefix(keyPrefix: string) {
     return this.model
@@ -566,6 +599,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // MCP key (see IUserApiKey.explicitScopeOnly): a security property read on every request, so top-level.
     explicitScopeOnly: { type: Boolean },
     exposureCeiling: { type: String, enum: API_KEY_EXPOSURE_CEILINGS },
+    expiryReminderSentAt: { type: Date },
     // Embed key (epic #41): agent this key is bound to (required when scopes includes EMBED_CHAT),
     // its https origin allow-list, and optional white-label branding. See IUserApiKey / IEmbedBranding.
     // `default: undefined` on both so a non-embed key does not materialize an empty
@@ -691,6 +725,7 @@ UserApiKeySchema.index({ createdAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });
+UserApiKeySchema.index({ explicitScopeOnly: 1, expiresAt: 1 }, { sparse: true });
 
 UserApiKeySchema.plugin(softDeletePlugin);
 
