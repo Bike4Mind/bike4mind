@@ -64,7 +64,7 @@ private struct CaptureJobRowView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-      Text(row.name).font(.headline).lineLimit(2)
+      Text(row.name).font(Tokens.Typography.headline).lineLimit(2)
       Text("\(row.stageLabel) \u{00B7} \(row.destinationName)")
         .font(Tokens.Typography.caption)
         .foregroundStyle(row.stage == .failed ? Tokens.Palette.destructive : Tokens.Palette.secondaryText)

@@ -1,4 +1,12 @@
-import type { ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
+import type {
+  ChatQueueEvent,
+  ChatSessionStatusEvent,
+  ChatSessionSummary,
+  ChatStreamEvent,
+  ContextNoticeKind,
+} from '@shared/chat';
+import { HELD_CONTEXT_NOTICE_KINDS } from '@shared/chat';
+import type { PendingTaskDecision } from '@shared/orchestration';
 import {
   LOCAL_HOST_ID,
   type HostBridgeApi,
@@ -13,6 +21,12 @@ type ChatStubs = Partial<{
   getSessionStatuses(): Promise<ChatSessionStatusEvent[]>;
   onSessionSummary(listener: (summary: ChatSessionSummary) => void): unknown;
   onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): unknown;
+  // The names below are the test-side stubs a test emits through; the bridge turns each into the
+  // host notification the renderer now listens to.
+  onStreamEvent(listener: (event: ChatStreamEvent) => void): unknown;
+  onQueueChanged(listener: (event: ChatQueueEvent) => void): unknown;
+  onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): unknown;
+  listTaskDecisions(): Promise<PendingTaskDecision[]>;
 }>;
 
 type ChatStub = (...args: never[]) => unknown;
@@ -32,7 +46,7 @@ const withId = (session: unknown, id: unknown): unknown => {
   return 'id' in fields ? session : { id, ...fields };
 };
 
-const TEST_CURSOR = { epoch: 'test', seq: 0 };
+const TEST_EPOCH = 'test';
 
 /** How one host method is answered from a same-named chat stub: which stub, with which old-shape arguments, and how its result is wrapped. */
 type Route = {
@@ -47,13 +61,25 @@ const route = (stub: string, args: Route['args'], result: Route['result'] = () =
   result,
 });
 
-const routeFor = (method: string, params: Record<string, unknown>): Route | undefined => {
+const routeFor = (
+  method: string,
+  params: Record<string, unknown>,
+  cursorOf: (sessionId: unknown) => { epoch: string; seq: number },
+  noticesOf: (sessionId: unknown) => { kind: ContextNoticeKind; message: string }[]
+): Route | undefined => {
   switch (method) {
     case 'session/get':
       return route(
         'getSession',
         p => (p.viewed === undefined ? [p.sessionId] : [p.sessionId, p.viewed]),
-        (r, p) => ({ session: withId(r, p.sessionId), cursor: TEST_CURSOR })
+        (r, p) => {
+          const notices = noticesOf(p.sessionId);
+          return {
+            session: withId(r, p.sessionId),
+            cursor: cursorOf(p.sessionId),
+            ...(notices.length > 0 ? { notices } : {}),
+          };
+        }
       );
     case 'session/create':
       return route(
@@ -146,14 +172,63 @@ const asUnsubscribe = (value: unknown): (() => void) =>
  * host methods the renderer uses from the same-named stubs, read at call time so a test may replace
  * one after stubbing the bridge, with the stubs' old argument shapes. A method whose stub is
  * missing fails as one the host does not serve; a stub that throws fails with its message.
+ * Stream events are numbered per session and reach only subscribed sessions, as a host sends them.
  */
 export function chatBackedHostBridge(): HostBridgeApi {
   // One upstream subscription shared by every listener, as the real bridge's single IPC channel is.
   const listeners = new Set<(delivery: HostNotificationDelivery) => void>();
   const deliver = (delivery: HostNotificationDelivery) => listeners.forEach(listener => listener(delivery));
   let unsubscribeUpstream: () => void = () => undefined;
+  const seqs = new Map<string, number>();
+  const subscribed = new Set<string>();
+  const cursorOf = (sessionId: unknown) => ({
+    epoch: TEST_EPOCH,
+    seq: typeof sessionId === 'string' ? (seqs.get(sessionId) ?? 0) : 0,
+  });
+  const notifyLocal = (notification: HostNotificationDelivery['notification']) =>
+    deliver({ hostId: LOCAL_HOST_ID, notification });
+  // The held notices in force, kept the way the host's ContextNotices keeps them.
+  const heldNotices = new Map<string, Map<ContextNoticeKind, string>>();
+  const holdNotice = (event: ChatStreamEvent) => {
+    if (event.type === 'context-notice' && event.kind && HELD_CONTEXT_NOTICE_KINDS.includes(event.kind)) {
+      const held = heldNotices.get(event.sessionId) ?? new Map<ContextNoticeKind, string>();
+      heldNotices.set(event.sessionId, held.set(event.kind, event.message));
+    }
+    if (event.type === 'context-notice-cleared') heldNotices.get(event.sessionId)?.delete(event.kind);
+  };
+  const noticesOf = (sessionId: unknown) =>
+    typeof sessionId === 'string'
+      ? [...(heldNotices.get(sessionId) ?? [])].map(([kind, message]) => ({ kind, message }))
+      : [];
+  const emitStreamEvent = (event: ChatStreamEvent) => {
+    holdNotice(event);
+    const seq = (seqs.get(event.sessionId) ?? 0) + 1;
+    seqs.set(event.sessionId, seq);
+    if (subscribed.has(event.sessionId)) {
+      notifyLocal(hostNotification('session/event', { sessionId: event.sessionId, seq, epoch: TEST_EPOCH, event }));
+    }
+    if (event.type === 'context-notice' || event.type === 'context-notice-cleared') {
+      notifyLocal(hostNotification('session/contextNotice', { event }));
+    }
+    if (event.type === 'spawn-failed') {
+      notifyLocal(
+        hostNotification('session/spawnFailed', {
+          sessionId: event.sessionId,
+          title: event.title,
+          message: event.message,
+        })
+      );
+    }
+  };
   const subscribeUpstream = () => {
     const chat = chatStubs();
+    const offStream = asUnsubscribe(chat.onStreamEvent?.(emitStreamEvent));
+    const offQueue = asUnsubscribe(
+      chat.onQueueChanged?.(event => notifyLocal(hostNotification('session/queueChanged', { event })))
+    );
+    const offDecisions = asUnsubscribe(
+      chat.onTaskDecisions?.(decisions => notifyLocal(hostNotification('session/taskDecisionsChanged', { decisions })))
+    );
     const offSummary = asUnsubscribe(
       chat.onSessionSummary?.(summary =>
         deliver({ hostId: LOCAL_HOST_ID, notification: hostNotification('session/summaryChanged', { summary }) })
@@ -165,6 +240,9 @@ export function chatBackedHostBridge(): HostBridgeApi {
       )
     );
     return () => {
+      offStream();
+      offQueue();
+      offDecisions();
       offSummary();
       offStatus();
     };
@@ -184,7 +262,19 @@ export function chatBackedHostBridge(): HostBridgeApi {
       if (hostId === LOCAL_HOST_ID && method === 'session/statuses') {
         return { ok: true, result: { statuses: (await chat.getSessionStatuses?.()) ?? [] } };
       }
-      const matched = hostId === LOCAL_HOST_ID ? routeFor(method, asRecord(params)) : undefined;
+      if (hostId === LOCAL_HOST_ID && method === 'taskDecision/list') {
+        return { ok: true, result: { decisions: (await chat.listTaskDecisions?.()) ?? [] } };
+      }
+      const sessionId = asRecord(params).sessionId;
+      if (hostId === LOCAL_HOST_ID && method === 'session/subscribe' && typeof sessionId === 'string') {
+        subscribed.add(sessionId);
+        return { ok: true, result: { cursor: cursorOf(sessionId) } };
+      }
+      if (hostId === LOCAL_HOST_ID && method === 'session/unsubscribe' && typeof sessionId === 'string') {
+        subscribed.delete(sessionId);
+        return { ok: true, result: {} };
+      }
+      const matched = hostId === LOCAL_HOST_ID ? routeFor(method, asRecord(params), cursorOf, noticesOf) : undefined;
       const stub = matched && chat[matched.stub];
       if (!matched || !stub) {
         return { ok: false, error: { code: HOST_ERROR_CODES.methodNotFound, message: `Not faked: ${method}` } };

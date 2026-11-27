@@ -73,7 +73,7 @@ private struct VoiceSettingsContent: View {
         HStack {
           VStack(alignment: .leading, spacing: 2) {
             Text(name).foregroundStyle(.primary)
-            if let detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+            if let detail { Text(detail).font(Tokens.Typography.caption).foregroundStyle(.secondary) }
           }
           Spacer()
           if isSelected {
