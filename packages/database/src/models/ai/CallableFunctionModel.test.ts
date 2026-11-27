@@ -97,7 +97,7 @@ describe('CallableFunctionModel', () => {
   });
 
   describe('indexes', () => {
-    it('declares the unique name index, the three grant indexes and no index on the artifact', async () => {
+    it('declares the unique name index, the grant and audience indexes and no index on the artifact', async () => {
       const byName = new Map((await CallableFunction.collection.indexes()).map(index => [index.name, index]));
       expect(byName.get('callablefn_owner_slug')).toMatchObject({
         key: { ownerType: 1, ownerKey: 1, slug: 1 },
@@ -109,6 +109,7 @@ describe('CallableFunctionModel', () => {
         'callablefn_grant_project',
         'callablefn_grant_users',
         'callablefn_owner_slug',
+        'callablefn_platform_audience',
       ]);
     });
 
@@ -491,6 +492,92 @@ describe('CallableFunctionModel', () => {
       );
       expect(resourced?.state).toBe('draft');
       expect(resourced?.platform).toBeUndefined();
+    });
+
+    it('sets the audience only on a marked, live, verified function, and marking again keeps it', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      expect(await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in')).toBeNull();
+      await promoteAs(created, 'verified');
+      expect(await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in')).toBeNull();
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      const offered = await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in');
+      expect(offered?.platform).toEqual({ ...mark, audience: 'signed_in' });
+      const later = { setBy: 'admin-2', setAt: new Date('2026-02-03T00:00:00Z') };
+      expect((await callableFunctionRepository.setPlatformMark(created.id, later))?.platform).toEqual({
+        ...later,
+        audience: 'signed_in',
+      });
+      await expect(
+        callableFunctionRepository.update({ id: created.id, 'platform.audience': 'signed_in' } as never)
+      ).rejects.toBeInstanceOf(CallableFunctionProtectedFieldError);
+      expect(await callableFunctionRepository.setPlatformAudience('not-an-id', 'signed_in')).toBeNull();
+    });
+
+    it('removes the audience alone, and answers null when there is none', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      await promoteAs(created, 'verified');
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in');
+      expect((await callableFunctionRepository.setPlatformAudience(created.id, null))?.platform).toEqual(mark);
+      expect(await callableFunctionRepository.setPlatformAudience(created.id, null)).toBeNull();
+    });
+
+    it('drops the audience with the mark: cleared, unverified, or returned to draft', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const offer = async () => {
+        await callableFunctionRepository.setPlatformMark(created.id, mark);
+        return (await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in'))!;
+      };
+      const live = await promoteAs(created, 'verified');
+      await offer();
+      expect((await callableFunctionRepository.clearPlatformMark(created.id))?.platform).toBeUndefined();
+
+      const offered = await offer();
+      const unverified = await callableFunctionRepository.setExamples(
+        created.id,
+        OWNER,
+        { updatedAt: offered.updatedAt },
+        [],
+        { unverify: true }
+      );
+      expect(unverified?.platform).toBeUndefined();
+
+      await promoteAs(unverified!, 'verified', 2);
+      await offer();
+      const repinned = await callableFunctionRepository.repin(created.id, OWNER, 1, {
+        pin: {
+          artifactId: 'artifact-1',
+          version: 2,
+          contentHash: calculateContentHash(`${SOURCE}# v2\n`),
+          source: `${SOURCE}# v2\n`,
+          pinnedAt: new Date(),
+        },
+        contract: live.contract,
+        description: live.description,
+      });
+      expect(repinned?.platform).toBeUndefined();
+      expect((await promoteAs(repinned!, 'verified', 3)).platform).toBeUndefined();
+    });
+
+    it('lists an offered function for anyone but its owner, only while the record is live and offered', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      await promoteAs(created, 'verified');
+      const reach = { userId: 'someone-else', projectIds: [], organizationIds: [] };
+      expect(await callableFunctionRepository.listSharedWith(reach)).toEqual([]);
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      expect(await callableFunctionRepository.listSharedWith(reach)).toEqual([]);
+      await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in');
+      const [listed] = await callableFunctionRepository.listSharedWith(reach);
+      expect(listed?.slug).toBe(created.slug);
+      expect(JSON.stringify(listed)).not.toContain('def run');
+      expect(await callableFunctionRepository.listSharedWith({ ...reach, userId: OWNER.ownerKey })).toEqual([]);
+
+      // A record left a draft with its kept promotion is not offered, as `isOfferedToEverySignedInPerson` reads it.
+      await CallableFunction.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(created.id) },
+        { $set: { state: 'draft' } }
+      );
+      expect(await callableFunctionRepository.listSharedWith(reach)).toEqual([]);
     });
   });
 

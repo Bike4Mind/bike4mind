@@ -20,6 +20,7 @@ const VIA: Record<ICallableFunctionShared['sharedVia'], string> = {
   person: 'Shared with you',
   project: 'Shared with a project you are in',
   organization: 'Shared with your organization',
+  signed_in: 'Offered to everyone signed in',
 };
 
 const STATUS: Record<ICallableFunctionShared['status'], { label: string; color: 'warning' | 'success' | 'neutral' }> = {

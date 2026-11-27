@@ -47,11 +47,17 @@ export const CALLABLE_FUNCTION_TRUST_LABEL_TEXT: Record<CallableFunctionTrustLab
   unverified: 'Unverified: no worked example was checked when it was promoted.',
 };
 
+/** Who besides the grants an admin may offer a marked function to: every person who is signed in. */
+export const CALLABLE_FUNCTION_PLATFORM_AUDIENCES = ['signed_in'] as const;
+export type CallableFunctionPlatformAudience = (typeof CALLABLE_FUNCTION_PLATFORM_AUDIENCES)[number];
+
 /** An admin's mark: the function shows as `platform` while its own label stays `verified`. */
 export interface CallableFunctionPlatformMark {
   /** The admin's userId. */
   setBy: string;
   setAt: Date;
+  /** Kept on the mark, so every write that drops the mark drops the audience with it. */
+  audience?: CallableFunctionPlatformAudience;
 }
 
 export const CALLABLE_FUNCTION_EXAMPLE_LIMITS = {
@@ -157,8 +163,11 @@ export interface ICallableFunctionGrants {
   userIds: string[];
 }
 
-/** How a caller reaches a function: as its owner or through one arm of its grants. */
-export type CallableFunctionAccess = 'owner' | 'person' | 'project' | 'organization';
+/**
+ * How a caller reaches a function: as its owner, through one arm of its grants, or as a signed-in person while an
+ * admin offers it to everyone ({@link isOfferedToEverySignedInPerson}).
+ */
+export type CallableFunctionAccess = 'owner' | 'person' | 'project' | 'organization' | 'signed_in';
 
 /** Computed at read by {@link effectiveCallableFunctionStatus}, so deleting the artifact needs no sweep. */
 export type CallableFunctionStatus = CallableFunctionState | 'disabled' | 'source_deleted';
@@ -342,6 +351,16 @@ export function shownCallableFunctionTrustLabel(
 ): CallableFunctionTrustLabel | null {
   if (fn.state !== 'live' || !fn.trustLabel) return null;
   return fn.trustLabel === 'verified' && fn.platform ? 'platform' : fn.trustLabel;
+}
+
+/**
+ * True only while the record itself is live and shows `platform` with the `signed_in` audience: never on a kept
+ * promotion, so an edit that returns the function to draft ends the offer.
+ */
+export function isOfferedToEverySignedInPerson(
+  fn: Partial<Pick<ICallableFunction, 'state' | 'trustLabel' | 'platform'>>
+): boolean {
+  return fn.state === 'live' && fn.trustLabel === 'verified' && fn.platform?.audience === 'signed_in';
 }
 
 /**
@@ -766,5 +785,13 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
   setPlatformMark(id: string, mark: CallableFunctionPlatformMark): Promise<ICallableFunctionDocument | null>;
   /** Admin only: removes the mark; null when there was none. */
   clearPlatformMark(id: string): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Admin only: sets or, with null, removes the mark's audience. Setting needs the mark on a live, `verified`
+   * function at the moment of the write; null when that fails or there is no audience to remove.
+   */
+  setPlatformAudience(
+    id: string,
+    audience: CallableFunctionPlatformAudience | null
+  ): Promise<ICallableFunctionDocument | null>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }
