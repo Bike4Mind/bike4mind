@@ -89,8 +89,10 @@ const SLEEP_ROUTE = '/api/test/preview-sleep';
 
 // Wakes a weekend-sleeping preview before the suite runs (route: apps/client/pages/api/test/preview-sleep.ts).
 // Messages never carry the secret, the WAF token or a response body.
+// deadlineMs keeps the whole check, request time included, inside the workflow step's timeout-minutes: 10.
 async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', fetchImpl = fetch,
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 48, intervalMs = 10000 }) {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, attempts = 48, intervalMs = 10000,
+  requestTimeoutMs = 15000, deadlineMs = 8 * 60 * 1000 }) {
   if (!secret) {
     log.notice('No E2E secret for this preview; skipping the wake check.');
     return 'skipped';
@@ -99,7 +101,7 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
   const url = `${apiUrl.replace(/\/$/, '')}${SLEEP_ROUTE}`;
   const headers = { 'x-e2e-cleanup-secret': secret, ...(wafToken ? { 'x-e2e-waf-bypass': wafToken } : {}) };
   const unsupported = () => {
-    log.notice('preview sleep route not available on this preview; continuing');
+    log.notice('preview sleep route not available on this preview (deployed before it, or sleep disabled); continuing');
     return 'unsupported';
   };
   const refused = status => new Error(status === 401
@@ -108,7 +110,7 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
   // 'unsupported' on 404; null on anything retryable (network error, 5xx, malformed body).
   const readStatus = async () => {
     let res;
-    try { res = await fetchImpl(url, { headers }); } catch { return null; }
+    try { res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(requestTimeoutMs) }); } catch { return null; }
     if (res.status === 404) return 'unsupported';
     if (res.status === 401 || res.status === 403) throw refused(res.status);
     if (!res.ok) return null;
@@ -117,6 +119,7 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
   };
   const ready = state => state && state !== 'unsupported' && !state.asleep && !state.waking;
 
+  const started = now();
   let state = await readStatus();
   if (state === 'unsupported') return unsupported();
   if (ready(state)) return 'awake';
@@ -124,7 +127,9 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (state?.asleep && !posted) {
       let res;
-      try { res = await fetchImpl(url, { method: 'POST', headers }); } catch {
+      try {
+        res = await fetchImpl(url, { method: 'POST', headers, signal: AbortSignal.timeout(requestTimeoutMs) });
+      } catch {
         throw new Error('Waking the preview failed: the wake request did not complete.');
       }
       if (res.status === 404) return unsupported();
@@ -133,12 +138,18 @@ async function ensureAwake({ apiUrl, secret, wafToken, log, stage = 'preview', f
       posted = true;
       log.notice('preview was asleep; waking');
     }
+    if (now() - started + intervalMs > deadlineMs) break;
     await wait(intervalMs);
     state = await readStatus();
     if (state === 'unsupported') return unsupported();
     if (ready(state)) return 'woken';
   }
-  throw new Error(`Preview stage ${stage} is still asleep/waking after ${Math.round((attempts * intervalMs) / 1000)}s; ` +
+  const elapsed = Math.round((now() - started) / 1000);
+  if (state === null) {
+    throw new Error(`Preview stage ${stage} status is unknown after ${elapsed}s: the last status check failed ` +
+      '(network error, timeout, non-2xx or malformed body); no tests started.');
+  }
+  throw new Error(`Preview stage ${stage} is still asleep/waking after ${elapsed}s; ` +
     'services did not become ready, no tests started.');
 }
 

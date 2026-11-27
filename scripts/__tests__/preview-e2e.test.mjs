@@ -195,14 +195,16 @@ function wake(responses, overrides = {}) {
   const calls = [];
   const notices = [];
   const queue = [...responses];
+  let clock = 0;
   const fetchImpl = async (url, init) => {
-    calls.push({ url, method: init.method ?? 'GET', headers: init.headers });
+    calls.push({ url, method: init.method ?? 'GET', headers: init.headers, signal: init.signal });
     const next = queue.shift();
     if (next instanceof Error) throw next;
     return next;
   };
   const run = ensureAwake({ apiUrl: 'https://api.example.com/', secret: SECRET, wafToken: WAF, stage: 'pr7',
-    log: { notice: message => notices.push(message) }, fetchImpl, wait: async () => {}, attempts: 3, intervalMs: 10000,
+    log: { notice: message => notices.push(message) }, fetchImpl, wait: async ms => { clock += ms; }, now: () => clock,
+    attempts: 3, intervalMs: 10000,
     ...overrides });
   return { run, calls, notices, posts: () => calls.filter(call => call.method === 'POST').length };
 }
@@ -241,12 +243,35 @@ test('ensureAwake fails with the asleep message once the budget runs out', async
   assert.equal(w.posts(), 1);
 });
 
-test('ensureAwake treats a 404 on GET or POST as an older preview and continues', async () => {
+test('ensureAwake treats a 404 on GET or POST (older or sleep-disabled preview) as unsupported', async () => {
   for (const responses of [[json(404, {})], [asleep, json(404, {})]]) {
     const w = wake(responses);
     assert.equal(await w.run, 'unsupported');
-    assert.deepEqual(w.notices, ['preview sleep route not available on this preview; continuing']);
+    assert.deepEqual(w.notices,
+      ['preview sleep route not available on this preview (deployed before it, or sleep disabled); continuing']);
   }
+});
+
+test('ensureAwake stops at the wall-clock deadline and reports the elapsed time', async () => {
+  const w = wake([asleep, json(202, {}), asleep, asleep, asleep], { attempts: 48, deadlineMs: 25000 });
+  await assert.rejects(w.run, /still asleep\/waking after 20s/);
+  assert.equal(w.calls.filter(call => call.method === 'GET').length, 3);
+});
+
+test('ensureAwake reports an unknown status when the last poll failed', async () => {
+  const w = wake([json(502, {}), new Error('fetch failed'), json(502, {}), json(503, {})]);
+  await assert.rejects(w.run, error => {
+    assert.match(error.message, /Preview stage pr7 status is unknown after 30s: .*no tests started/);
+    assert.doesNotMatch(error.message, /still asleep/);
+    return true;
+  });
+});
+
+test('ensureAwake bounds every request with an abort signal', async () => {
+  const w = wake([asleep, json(202, {}), awake]);
+  await w.run;
+  assert.equal(w.calls.length, 3);
+  for (const call of w.calls) assert.ok(call.signal instanceof AbortSignal);
 });
 
 test('ensureAwake throws a clear error on 401 and 403', async () => {

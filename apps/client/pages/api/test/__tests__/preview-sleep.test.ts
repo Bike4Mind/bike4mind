@@ -83,15 +83,19 @@ describe('/api/test/preview-sleep', () => {
     expect(h.wakePreview).not.toHaveBeenCalled();
   });
 
-  it.each([
+  const badSecrets = [
     ['missing', null],
     ['empty', ''],
     ['array-valued', ['right-secret', 'right-secret']],
     ['wrong', 'wrong-secret'],
-  ])('401s a %s secret after the rate limiter has counted it', async (_label, secret) => {
-    const res = await call('POST', secret);
+  ] as const;
+  it.each(
+    (['GET', 'POST'] as const).flatMap(method => badSecrets.map(([label, secret]) => [method, label, secret] as const))
+  )('401s %s with a %s secret after the rate limiter has counted it', async (method, _label, secret) => {
+    const res = await call(method, secret);
     expect(res.statusCode).toBe(401);
     expect(h.rateLimitMiddleware).toHaveBeenCalledTimes(1);
+    expect(h.getPreviewSleepStatus).not.toHaveBeenCalled();
     expect(h.wakePreview).not.toHaveBeenCalled();
   });
 
