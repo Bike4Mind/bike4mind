@@ -134,7 +134,7 @@ private struct BriefScreen: View {
       VStack(spacing: Tokens.Spacing.m) {
         if case .failed(let error) = model.state {
           Label("Couldn't check on the brief", systemImage: "wifi.exclamationmark")
-            .font(.headline)
+            .font(Tokens.Typography.headline)
           Text(error.message)
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.Palette.secondaryText)
@@ -142,7 +142,7 @@ private struct BriefScreen: View {
           checkAgainButton
         } else if model.composeTimedOut {
           Label("Still working on it", systemImage: "clock")
-            .font(.headline)
+            .font(Tokens.Typography.headline)
           Text("This is taking longer than usual. Check again in a moment.")
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.Palette.secondaryText)
@@ -185,7 +185,7 @@ private struct BriefScreen: View {
           }
           if let headline = brief.headline, !headline.isEmpty {
             Text(headline)
-              .font(.title2.weight(.semibold))
+              .font(Tokens.Typography.title)
               .foregroundStyle(Tokens.Palette.primaryText)
               .accessibilityAddTraits(.isHeader)
               .accessibilityIdentifier("brief-headline")
@@ -480,7 +480,7 @@ private struct BriefScreen: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
       Text(title)
-        .font(.headline)
+        .font(Tokens.Typography.headline)
         .foregroundStyle(Tokens.Palette.primaryText)
         .accessibilityAddTraits(.isHeader)
       content()

@@ -139,7 +139,7 @@ private struct SessionRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       Text(session.title)
-        .font(.headline)
+        .font(Tokens.Typography.headline)
         .foregroundStyle(Tokens.Palette.primaryText)
         .lineLimit(2)
       // At accessibility text sizes the time and model stack instead of truncating.
