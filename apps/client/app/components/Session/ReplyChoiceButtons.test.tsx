@@ -82,6 +82,15 @@ describe('ReplyChoiceButtons', () => {
     expect(sendPrompt).not.toHaveBeenCalled();
     input.remove();
 
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    const dialogButton = document.createElement('button');
+    dialog.appendChild(dialogButton);
+    document.body.appendChild(dialog);
+    fireEvent.keyDown(dialogButton, { key: '1' });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    dialog.remove();
+
     fireEvent.keyDown(document.body, { key: '3' });
     expect(sendPrompt).not.toHaveBeenCalled();
     fireEvent.keyDown(document.body, { key: '2' });

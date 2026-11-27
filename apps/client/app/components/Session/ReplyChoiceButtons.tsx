@@ -33,10 +33,15 @@ const Glyph: FC<{ path: ReactNode; size?: number }> = ({ path, size = 16 }) => (
 
 const CHECK = <path d="M5 12.5l4.5 4.5L19 7.5" />;
 
-/** True while the user is typing somewhere, so a digit belongs to that field, not to the choices. */
-const isTypingTarget = (target: EventTarget | null) =>
+/**
+ * True while a digit belongs to something else: a field being typed in, or an open dialog or menu
+ * (whose focus trap holds the target) that a stray digit must not answer for the reply behind it.
+ */
+const digitBelongsElsewhere = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
-  (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+  (target.isContentEditable ||
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+    target.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') != null);
 
 /**
  * The numbered next steps a reply offered. A click (or its digit key) sends the option's visible
@@ -82,7 +87,8 @@ const ReplyChoiceButtons: FC<ReplyChoiceButtonsProps> = ({ questId, sessionId, s
   useEffect(() => {
     if (!live) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat || isTypingTarget(event.target)) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+      if (digitBelongsElsewhere(event.target)) return;
       const index = Number(event.key) - 1;
       if (!Number.isInteger(index) || index < 0 || index >= options.length) return;
       event.preventDefault();
