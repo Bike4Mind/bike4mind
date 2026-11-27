@@ -175,12 +175,15 @@ describe('shared preview key policy', () => {
     });
   });
 
-  it('still denies an untagged caller and has the same statements as the dedicated policy', async () => {
+  it('still denies an untagged caller and has the dedicated statements plus the stage-binding deny', async () => {
     const statements = await previewStatements();
     const tagDeny = statements.find(s => s.Sid === 'DenyDecryptOutsideApp');
     // StringNotLike is true when the tag is absent, so an untagged principal is denied.
     expect(tagDeny).toMatchObject({ Effect: 'Deny', Principal: '*', Action: ['kms:Decrypt'] });
-    expect(statements.map(s => s.Sid)).toEqual((await statementsOfDedicated()).map(s => s.Sid));
+    expect(statements.map(s => s.Sid)).toEqual([
+      ...(await statementsOfDedicated()).map(s => s.Sid),
+      'DenyDecryptOtherStageContext',
+    ]);
   });
 
   it('equals the dedicated policy with only the stage conditions swapped for the pr glob', async () => {
@@ -191,7 +194,22 @@ describe('shared preview key policy', () => {
       if (s.Sid === 'DenyDecryptOutsideApp') return { ...s, Condition: tagSwap };
       return s;
     });
-    expect(await previewStatements()).toEqual(expected);
+    expect((await previewStatements()).slice(0, -1)).toEqual(expected);
+  });
+
+  it('adds a Decrypt-only deny binding the context stage to the caller stage tag', async () => {
+    const statements = await previewStatements();
+    expect(statements).toHaveLength((await statementsOfDedicated()).length + 1);
+    expect(statements.at(-1)).toEqual({
+      Sid: 'DenyDecryptOtherStageContext',
+      Effect: 'Deny',
+      Principal: '*',
+      Action: ['kms:Decrypt'],
+      Resource: '*',
+      Condition: {
+        StringNotEquals: { 'kms:EncryptionContext:stage': '${aws:PrincipalTag/b4m:secrets-at-rest-stage}' },
+      },
+    });
   });
 
   async function statementsOfDedicated() {

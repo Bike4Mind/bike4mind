@@ -8,7 +8,8 @@
  * the probe live in infra/secretsAtRestKeyAccess.ts.
  *
  * The preview key's owner should carry secretsAtRestPreviewKeyPolicy (the same policy, pinned to any
- * stage matching `pr*` rather than one) and the same alarms.
+ * stage matching `pr*` rather than one, plus a Decrypt deny binding the context stage to the caller's stage
+ * tag) and the same alarms. Changing it means the owner re-applies the shared key's policy.
  */
 
 import { isPreviewStage, runsScheduledJobs } from './constants';
@@ -113,7 +114,27 @@ export function secretsAtRestKeyPolicy(input: { partition: string; accountId: st
 
 /** For the shared preview key: no single stage is pinned, any `pr*` stage's tagged roles qualify. */
 export function secretsAtRestPreviewKeyPolicy(input: { partition: string; accountId: string }) {
-  return buildKeyPolicy(input, { operator: 'StringNotLike', value: PREVIEW_STAGE_PATTERN });
+  const policy = buildKeyPolicy(input, { operator: 'StringNotLike', value: PREVIEW_STAGE_PATTERN });
+  return {
+    ...policy,
+    Statement: [
+      ...policy.Statement,
+      {
+        // The pr* glob admits every preview stage, so also bind the context stage to the caller's own
+        // stage tag: one preview's roles cannot unwrap another preview's blob.
+        Sid: 'DenyDecryptOtherStageContext',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: ['kms:Decrypt'],
+        Resource: '*',
+        Condition: {
+          StringNotEquals: {
+            'kms:EncryptionContext:stage': `\${aws:PrincipalTag/${SECRETS_AT_REST_ROLE_TAG}}`,
+          },
+        },
+      },
+    ],
+  };
 }
 
 /**
