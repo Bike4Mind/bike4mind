@@ -33,9 +33,10 @@ export async function installWafBypass(context: BrowserContext, options: { slowL
   const headers = wafBypassHeaders();
   if (!headers[WAF_BYPASS_HEADER]) return;
   const origin = apiOrigin();
+  const pace = options.slowLink ? linkPacer(options.slowLink) : undefined;
   await context.route(
     url => url.origin === origin,
-    route => continueWithBypass(route, origin, headers, options.slowLink)
+    route => continueWithBypass(route, origin, headers, pace)
   );
 }
 
@@ -72,7 +73,7 @@ async function continueWithBypass(
   route: Route,
   origin: string,
   bypass: Record<string, string>,
-  slowLink?: SlowLink
+  pace?: Pacer
 ): Promise<void> {
   const request = route.request();
   let url = request.url();
@@ -81,10 +82,7 @@ async function continueWithBypass(
   let postData: Buffer | undefined = request.postDataBuffer() ?? undefined;
   try {
     for (let followed = 0; ; followed++) {
-      const response = await paced(
-        route.fetch({ url, method, headers, postData, maxRedirects: 0, timeout: 0 }),
-        slowLink
-      );
+      const response = await paced(route.fetch({ url, method, headers, postData, maxRedirects: 0, timeout: 0 }), pace);
       const status = response.status();
       const location = response.headers()['location'];
       if (
@@ -112,7 +110,7 @@ async function continueWithBypass(
         return await route.fulfill({
           response: await paced(
             route.fetch({ url: next.href, method, postData, headers: offOrigin, timeout: 0 }),
-            slowLink
+            pace
           ),
         });
       }
@@ -124,12 +122,21 @@ async function continueWithBypass(
   }
 }
 
-async function paced(pending: Promise<APIResponse>, slowLink?: SlowLink): Promise<APIResponse> {
+type Pacer = (bytes: number) => Promise<void>;
+
+/** Concurrent responses share one link's bandwidth, as under the CDP throttle; latency overlaps. */
+function linkPacer(link: SlowLink): Pacer {
+  let busyUntil = 0;
+  return bytes => {
+    const now = Date.now();
+    busyUntil = Math.max(now, busyUntil) + (bytes / link.downloadThroughput) * 1000;
+    return new Promise(resolve => setTimeout(resolve, busyUntil - now + link.latency));
+  };
+}
+
+async function paced(pending: Promise<APIResponse>, pace?: Pacer): Promise<APIResponse> {
   const response = await pending;
-  if (!slowLink) return response;
-  const bytes = (await response.body()).length;
-  const ms = slowLink.latency + (bytes / slowLink.downloadThroughput) * 1000;
-  await new Promise(resolve => setTimeout(resolve, ms));
+  if (pace) await pace((await response.body()).length);
   return response;
 }
 

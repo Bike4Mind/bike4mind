@@ -254,6 +254,17 @@ describe('E2E Turnstile request bypass', () => {
       expect(Date.now() - started).toBeGreaterThanOrEqual(125);
     });
 
+    it('makes concurrent responses share the slow link bandwidth', async () => {
+      const harness = createRoutingHarness({
+        [`${A}/x`]: { status: 200, bytes: 500 },
+        [`${A}/y`]: { status: 200, bytes: 500 },
+      });
+      await installWafBypass(harness.context, { slowLink: { latency: 0, downloadThroughput: 10_000 } });
+      const started = Date.now();
+      await Promise.all([harness.send(`${A}/x`), harness.send(`${A}/y`)]);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(95);
+    });
+
     it('keeps the header on a same-origin hop of a subresource', async () => {
       const result = await send({ [`${A}/a`]: { status: 307, location: '/b' } }, `${A}/a`);
       expect(result.sent.map(s => [s.url, s.headers['x-e2e-waf-bypass'], s.maxRedirects])).toEqual([
