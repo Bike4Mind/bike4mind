@@ -21,7 +21,7 @@ import {
   useSharedCallableFunctions,
 } from '@client/app/hooks/data/callableFunctions';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { groupFunctionLibrary, type FunctionLibraryRow, type FunctionLibraryState } from './functionLibrary';
+import { groupFunctionLibrary, type FunctionLibraryRow, type FunctionLibraryState } from './libraryGrouping';
 
 const STATE: Record<FunctionLibraryState, { label: string; color: 'success' | 'neutral' | 'warning' }> = {
   live: { label: 'Live', color: 'success' },
