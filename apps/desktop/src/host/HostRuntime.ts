@@ -287,7 +287,7 @@ export class HostRuntime {
 
   /** The held context notices in force for a session; see ContextNotices. */
   contextNotices(sessionId: string): ActiveContextNotice[] {
-    return this.service.contextNotices.active(sessionId);
+    return this.service.contextNoticesOf(sessionId);
   }
 
   createSession(mode?: Exclude<ChatSessionMode, 'code'>) {

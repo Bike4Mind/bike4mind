@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { CONTEXT_NOTICE_KINDS } from '../chat';
 import { sessionPageRequestSchema } from '../sessionPage';
 import { eventCursorSchema } from './cursor';
 import { hostProtocolVersionSchema, hostCapabilitiesSchema } from './version';
@@ -71,7 +72,7 @@ const requestRespondParams = z.discriminatedUnion('kind', [
   }),
 ]);
 
-const contextNoticeKindSchema = z.enum(['context-size', 'no-tools', 'run-budget']);
+const contextNoticeKindSchema = z.enum(CONTEXT_NOTICE_KINDS);
 
 export const hostMethods = {
   'host/initialize': {
@@ -223,13 +224,6 @@ export const hostMethods = {
   },
 } as const satisfies Record<string, { params: ZodType; result: ZodType }>;
 
-/*
- * session/event goes only to the connections subscribed to its session, in seq order; `epoch` with
- * `seq` is the event's cursor (epoch since 1.3; a 1.2 host leaves it out). The rest go to every
- * connection. The queue and task-decision notifications carry their whole current state, so the
- * next one repairs a missed one, and a client re-reads both (queue/list, taskDecision/list) after
- * a resync.
- */
 /** The context-notice and context-notice-cleared stream events (ChatStreamEvent). */
 const contextNoticeEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -241,6 +235,13 @@ const contextNoticeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('context-notice-cleared'), sessionId: z.string(), kind: contextNoticeKindSchema }),
 ]);
 
+/*
+ * session/event goes only to the connections subscribed to its session, in seq order; `epoch` with
+ * `seq` is the event's cursor (epoch since 1.3; a 1.2 host leaves it out). The rest go to every
+ * connection. The queue and task-decision notifications carry their whole current state, so the
+ * next one repairs a missed one, and a client re-reads both (queue/list, taskDecision/list) after
+ * a resync.
+ */
 export const hostNotifications = {
   'session/event': {
     params: z.object({

@@ -1647,7 +1647,8 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
+export const CONTEXT_NOTICE_KINDS = ['context-size', 'no-tools', 'run-budget'] as const;
+export type ContextNoticeKind = (typeof CONTEXT_NOTICE_KINDS)[number];
 
 /**
  * The kinds that are state rather than a turn's passing message: the host withdraws them with

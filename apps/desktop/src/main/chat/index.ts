@@ -503,7 +503,7 @@ export function registerChat(
   }
 
   // Windows get stream events from the host protocol (HostServer); this is main's own reaction to them.
-  const broadcast = (event: ChatStreamEvent) => {
+  const observeStreamEvent = (event: ChatStreamEvent) => {
     logDownstream('session/event', event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
     if (event.type === 'tool-end' && event.call.media?.length) {
@@ -602,7 +602,7 @@ export function registerChat(
   );
 
   const events: HostEventSink = {
-    streamEvent: broadcast,
+    streamEvent: observeStreamEvent,
     sessionSummary: summary => logDownstream('session/summaryChanged', summary),
     sessionStatus: (event, statusChanged) => {
       logDownstream('session/statusChanged', event);

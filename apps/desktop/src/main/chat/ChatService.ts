@@ -94,6 +94,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
+  ActiveContextNotice,
   ContextNoticeKind,
   ChatChildReport,
   ChatChildWaiting,
@@ -1047,7 +1048,13 @@ export class ChatService {
   private readonly livePlans = new Map<string, PlanProgress | null>();
 
   /** Context notices go out through this, so the ones in force stay readable; see session/get. */
-  readonly contextNotices = new ContextNotices(event => this.emit(event));
+  private readonly contextNotices = new ContextNotices(event => this.emit(event));
+
+  /** The held context notices in force for a session; see ContextNotices. */
+  contextNoticesOf(sessionId: string): ActiveContextNotice[] {
+    return this.contextNotices.active(sessionId);
+  }
+
   /** The sorted listing later pages are cut from; see listSessionPage. */
   private pageSnapshot: { at: number; sessions: ChatSessionSummary[] } | null = null;
 
