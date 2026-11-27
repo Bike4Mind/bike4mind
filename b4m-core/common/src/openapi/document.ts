@@ -413,6 +413,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Artifacts',
       description: 'Diagrams, charts, code and documents kept in sessions, with their version history.',
     },
+    {
+      name: 'Published pages',
+      description:
+        'Bundles published as web pages: upload and finalize, manage visibility, share links, comments and downloads.',
+    },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     {
       name: 'Videos',
