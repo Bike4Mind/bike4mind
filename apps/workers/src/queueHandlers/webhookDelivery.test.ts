@@ -7,6 +7,7 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   claimDedup: vi.fn(),
+  casDeleteDedup: vi.fn(),
   createOrUpdate: vi.fn(),
   createIfNotExists: vi.fn(),
   findSubscription: vi.fn(),
@@ -19,7 +20,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { claimDedup: h.claimDedup, createOrUpdate: h.createOrUpdate },
+  cacheRepository: { claimDedup: h.claimDedup, casDeleteDedup: h.casDeleteDedup, createOrUpdate: h.createOrUpdate },
   webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
   webhookSubscriptionRepository: {
     findById: h.findSubscription,
@@ -154,5 +155,54 @@ describe('webhookDelivery dispatch', () => {
     expect(cancel).toHaveBeenCalled();
     expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+  });
+  describe('dedup claim on a failed attempt', () => {
+    const claimOwner = () => h.claimDedup.mock.calls[0][1].owner as string;
+
+    it.each([
+      ['a 5xx', () => h.fetchMock.mockResolvedValue({ ok: false, status: 503, headers: new Headers() })],
+      ['a 429', () => h.fetchMock.mockResolvedValue({ ok: false, status: 429, headers: new Headers() })],
+      ['a network error', () => h.fetchMock.mockRejectedValue(new TypeError('fetch failed'))],
+      [
+        'a DB error recording the failure',
+        () => {
+          h.fetchMock.mockResolvedValue({ ok: false, status: 500, headers: new Headers() });
+          h.createIfNotExists.mockRejectedValueOnce(new Error('db down'));
+        },
+      ],
+    ])('releases its own claim before throwing on %s', async (_label, arrange) => {
+      arrange();
+
+      await expect(runDispatch()).rejects.toThrow();
+
+      expect(claimOwner()).toEqual(expect.any(String));
+      expect(h.casDeleteDedup).toHaveBeenCalledWith('webhook-delivery-evt-1-sub-1', 'owner', claimOwner());
+    });
+
+    it('keeps the claim when the endpoint accepted the POST but a later write failed', async () => {
+      h.createIfNotExists.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(runDispatch()).rejects.toThrow('db down');
+
+      expect(h.createOrUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ result: expect.objectContaining({ status: 'completed' }) })
+      );
+      expect(h.casDeleteDedup).not.toHaveBeenCalled();
+    });
+
+    it('still throws the original error when releasing the claim fails', async () => {
+      h.fetchMock.mockResolvedValue({ ok: false, status: 502, headers: new Headers() });
+      h.casDeleteDedup.mockRejectedValueOnce(new Error('cache down'));
+
+      await expect(runDispatch()).rejects.toThrow('HTTP 502');
+    });
+
+    it('does not release the claim on a permanent failure, which is acked', async () => {
+      h.fetchMock.mockResolvedValue({ ok: false, status: 404, headers: new Headers() });
+
+      await expect(runDispatch()).resolves.toBeUndefined();
+
+      expect(h.casDeleteDedup).not.toHaveBeenCalled();
+    });
   });
 });

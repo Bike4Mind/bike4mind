@@ -14,6 +14,7 @@
  * - 10-second timeout per delivery attempt
  */
 
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
@@ -82,7 +83,7 @@ const DEDUP_TTL_MS = 60 * 60 * 1000;
 /**
  * Maximum retries before giving up
  */
-const MAX_RETRIES = 5;
+export const MAX_RETRIES = 5;
 
 /**
  * Circuit breaker threshold (consecutive failures)
@@ -127,9 +128,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // Uses findOneAndUpdate with $setOnInsert to prevent race conditions
   // Only the first Lambda to reach this point will successfully claim the key
   const dedupKey = `${DEDUP_KEY_PREFIX}${payload.eventId}-${payload.subscriptionId}`;
+  const claimOwner = randomUUID();
   const claimResult = await cacheRepository.claimDedup(
     dedupKey,
-    { status: 'pending', startedAt: new Date().toISOString(), eventType: payload.eventType },
+    { status: 'pending', owner: claimOwner, startedAt: new Date().toISOString(), eventType: payload.eventType },
     DEDUP_TTL_MS
   );
 
@@ -142,6 +144,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  const attempt = { sent: false };
+  try {
+    await deliverClaimed(payload, startTime, dedupKey, logger, attempt);
+  } catch (error) {
+    // A throw hands the message back to SQS, and a held claim would make that receive ack without
+    // sending. Once the endpoint has accepted the POST the claim stays, so a redelivery is deduped.
+    if (!attempt.sent) {
+      await releaseClaim(dedupKey, claimOwner, logger);
+    }
+    throw error;
+  }
+});
+
+async function deliverClaimed(
+  payload: WebhookDeliveryPayload,
+  startTime: number,
+  dedupKey: string,
+  logger: Logger,
+  attempt: { sent: boolean }
+): Promise<void> {
   // 3. Check if subscription is auto-disabled (circuit breaker)
   const subscription = await webhookSubscriptionRepository.findById(payload.subscriptionId);
   if (!subscription) {
@@ -258,19 +280,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // 8. Handle response codes
     if (response.ok) {
+      attempt.sent = true;
       logger.info('Delivery successful', {
         statusCode: response.status,
         processingDurationMs,
       });
 
-      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status);
-
-      // Update cache entry to show successful completion
       await cacheRepository.createOrUpdate({
         key: dedupKey,
         result: { status: 'completed', processedAt: new Date().toISOString(), eventType: payload.eventType },
         expiresAt: new Date(Date.now() + DEDUP_TTL_MS),
       });
+
+      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status);
 
       // Reset consecutive failures on success
       await resetConsecutiveFailures(payload.subscriptionId, logger);
@@ -386,7 +408,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     throw new RetryableError(errorMessage);
   }
-});
+}
+
+/**
+ * Drop this receive's `pending` claim so the SQS redelivery can claim it and retry. The owner guard
+ * leaves any newer claim alone. If the delete fails the claim lapses at its TTL instead.
+ */
+async function releaseClaim(dedupKey: string, owner: string, logger: Logger): Promise<void> {
+  try {
+    await cacheRepository.casDeleteDedup(dedupKey, 'owner', owner);
+  } catch (error) {
+    logger.warn('Failed to release webhook delivery claim; a redelivery before it expires is skipped', { error });
+  }
+}
 
 /**
  * Record delivery attempt in database and emit CloudWatch metrics

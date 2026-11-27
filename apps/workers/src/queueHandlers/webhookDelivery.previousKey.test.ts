@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     claimDedup: vi.fn(async () => ({ claimed: true })),
+    casDeleteDedup: vi.fn(),
     createOrUpdate: vi.fn(),
   },
   webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
