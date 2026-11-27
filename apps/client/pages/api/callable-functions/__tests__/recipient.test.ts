@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/server-utils/callableFunctions/sharing', () => ({
+  CALLABLE_FUNCTION_RECIPIENT_RATE_LIMIT: { limit: 20, windowMs: 60_000, bucket: 'callable-functions-recipient' },
   findCallableFunctionRecipient: h.findCallableFunctionRecipient,
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', async () => {

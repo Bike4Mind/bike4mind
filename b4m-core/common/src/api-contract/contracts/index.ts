@@ -81,6 +81,25 @@ import {
   invokeFunctionContract,
   listFunctionsContract,
 } from './functions.contract';
+import {
+  createFunctionContract,
+  deleteFunctionContract,
+  findFunctionRecipientContract,
+  getAuthoredFunctionContract,
+  getFunctionCallSummaryContract,
+  getFunctionShareContract,
+  listAuthoredFunctionsContract,
+  pinFunctionDataContract,
+  promoteFunctionContract,
+  runFunctionTestsContract,
+  saveFunctionCodeContract,
+  setFunctionExamplesContract,
+  setFunctionSourcesContract,
+  shareFunctionContract,
+  unpinFunctionDataContract,
+  unshareFunctionContract,
+  updateFunctionContract,
+} from './functionsAuthoring.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -410,4 +429,21 @@ export const CONTRACTS: readonly EndpointContract[] = [
   invokeFunctionContract,
   getFunctionCallContract,
   cancelFunctionCallContract,
+  createFunctionContract,
+  listAuthoredFunctionsContract,
+  getAuthoredFunctionContract,
+  saveFunctionCodeContract,
+  updateFunctionContract,
+  deleteFunctionContract,
+  setFunctionExamplesContract,
+  runFunctionTestsContract,
+  pinFunctionDataContract,
+  unpinFunctionDataContract,
+  setFunctionSourcesContract,
+  promoteFunctionContract,
+  getFunctionShareContract,
+  shareFunctionContract,
+  unshareFunctionContract,
+  findFunctionRecipientContract,
+  getFunctionCallSummaryContract,
 ];

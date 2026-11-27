@@ -815,6 +815,29 @@ describe('userApiKeyService - createUserApiKey confined-scope mint guard', () =>
     expect(repo.createIfUnderCap).toHaveBeenCalled();
   });
 
+  it('mints functions:invoke with functions:author, the one pair of confined scopes that may share a key', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR] },
+      { trust: TRUSTED, db: { userApiKeys: repo } }
+    );
+    expect(result.id).toBe('key-1');
+  });
+
+  it.each([ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.WRITE_FILES, ApiKeyScope.SLACK_POST])(
+    'refuses functions:author minted with %s',
+    async second => {
+      await expect(
+        createUserApiKey(
+          'user1',
+          { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_AUTHOR, second] },
+          { trust: TRUSTED, db: { userApiKeys: repo } }
+        )
+      ).rejects.toThrow(/confined scope/i);
+      expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.SLACK_POST, ApiKeyScope.ME_READ])(
     'refuses functions:invoke minted with %s',
     async second => {

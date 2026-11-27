@@ -137,6 +137,12 @@ describe('pinCallableFunctionData', () => {
     expect(h.setDataPins.mock.calls[0]![3]).toEqual([expect.objectContaining({ sourceFileId: 'file1' })]);
   });
 
+  it('looks the file up by its id with surrounding spaces trimmed, as the app route trims it', async () => {
+    const { storage } = memoryStorage();
+    await pinCallableFunctionData(OWNER, FN_ID, { fileId: ' file1 ', name: 'points.csv' }, { storage, limits: LIMITS });
+    expect(h.access).toHaveBeenCalledWith(OWNER, 'file1', expect.anything());
+  });
+
   it('refuses a file the owner cannot read', async () => {
     h.access.mockRejectedValue(Object.assign(new Error('File not found'), { statusCode: 404 }));
     const { storage } = memoryStorage();

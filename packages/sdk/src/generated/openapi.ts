@@ -3071,7 +3071,11 @@ export interface paths {
      */
     get: operations['listFunctions'];
     put?: never;
-    post?: never;
+    /**
+     * Create a draft function
+     * @description Saves `code` as a new Python artifact of the key owner and pins it as a draft function. Run its tests and promote it to make it live. The name in `contract` is fixed from here on.
+     */
+    post: operations['createFunction'];
     delete?: never;
     options?: never;
     head?: never;
@@ -3092,10 +3096,18 @@ export interface paths {
     get: operations['getFunction'];
     put?: never;
     post?: never;
-    delete?: never;
+    /**
+     * Delete your function
+     * @description Deletes the function with its pinned code, data files, and shares. Its artifact and the files its data came from stay.
+     */
+    delete: operations['deleteFunction'];
     options?: never;
     head?: never;
-    patch?: never;
+    /**
+     * Turn your function on or off, or set its chat approval
+     * @description Sets one setting. `enabled: false` turns the function off: nobody can call it, and it stays saved and shared for when you turn it back on.
+     */
+    patch: operations['updateFunction'];
     trace?: never;
   };
   '/api/v1/functions/{id}/invoke': {
@@ -3152,6 +3164,254 @@ export interface paths {
      * @description Cancels an asynchronous call that is `queued` or `running` and returns it as `finished` with `outcome: "cancelled"`. A queued call never runs. A running call is left to end, but what it returns is discarded and never polled. A call that already finished is returned unchanged. Only the person whose key made the call can cancel it.
      */
     post: operations['cancelFunctionCall'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/mine': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List your functions in every state
+     * @description Lists the key owner's own functions: drafts, live, and turned off, without their code. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listAuthoredFunctions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/source': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read your function with its code
+     * @description Returns one of your own functions in any state with its pinned code, its stored contract, its examples, data, sources, and share, and the run of its last promotion.
+     */
+    get: operations['getAuthoredFunction'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/code': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Save new code for your function
+     * @description Writes `code` as a new version of the function artifact and pins it, which returns the function to draft. A live function stays callable at its last promotion until you promote it again. The name cannot change, and a contract that would break callers of the promoted one is refused.
+     */
+    put: operations['saveFunctionCode'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/examples': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Replace the worked examples of your function
+     * @description Saves every worked example, each checked against the contract as a declared test is. A promotion runs them on the server, and one passing cited example makes the function `verified`. Changing the examples of a live function makes it `unverified` until the next promotion.
+     */
+    put: operations['setFunctionExamples'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/test-runs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Run the tests of your function on the server
+     * @description Runs the tests the pinned code declares on the server, one call each, within 45 s. The tests come from the server's own read of the code. A passing case is kept for the next promotion; cases the budget did not reach come back `not_run`, so send their names in `tests` to run them.
+     */
+    post: operations['runFunctionTests'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/data': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Pin a data file to your function
+     * @description Copies a file you uploaded into the function, read at `/data/<name>` on every call. Pinning returns the function to draft.
+     */
+    post: operations['pinFunctionData'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/data/{name}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Unpin a data file from your function
+     * @description Removes a pinned data file, which returns the function to draft. The file you uploaded stays.
+     */
+    delete: operations['unpinFunctionData'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/sources': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Replace the sources of your function
+     * @description Saves every source: an https URL on an origin an administrator allowed, read at `/data/<name>`. A `live` source is fetched on each call, a `pinned` one once at promotion. A change returns the function to draft.
+     */
+    put: operations['setFunctionSources'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/promote': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Promote your function to live
+     * @description Makes the function live once every declared test and worked example has passed on the server on this pin. Passes from earlier test runs are reused and the rest run within 45 s. Anyone the function is shared with calls the new promotion.
+     */
+    post: operations['promoteFunction'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/share': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the share of your function
+     * @description Returns who the function is shared with, and the display names of the people named.
+     */
+    get: operations['getFunctionShare'];
+    /**
+     * Share your function
+     * @description Replaces the share of a live function: people by id, and a project or an organization you belong to. Each person reviews the function before calling it, and calls its last promotion. Removing someone also removes their review.
+     */
+    put: operations['shareFunction'];
+    post?: never;
+    /**
+     * Stop sharing your function
+     * @description Removes every person, project, and organization from the share, and their reviews.
+     */
+    delete: operations['unshareFunction'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/recipient': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Find a person to share your function with
+     * @description Returns the id and display name of the account holding exactly `email`, to name in a share. Limited to 20 lookups a minute.
+     */
+    get: operations['findFunctionRecipient'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/calls': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Summarize the calls of your function
+     * @description Counts the calls of the last 30 days by outcome and lists the latest few, yours and those of the people it is shared with. Never the inputs or outputs, and never who a recipient is.
+     */
+    get: operations['getFunctionCallSummary'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -16741,6 +17001,1942 @@ export interface components {
         path: string;
         message: string;
       }[];
+    };
+    createFunctionResponse201: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+        /** @description The pinned Python source. */
+        code: string;
+        /** @description The `FUNCTION` contract as stored. */
+        contract: {
+          [key: string]: unknown;
+        };
+        /** @description The run the last promotion made. */
+        last_server_run: {
+          at: string;
+          passed: number;
+          failed: number;
+          results: {
+            name: string;
+            passed: boolean;
+            /** @description How the case ended: `ok`, `error`, `timeout`, `not_run`, and so on. */
+            outcome: string;
+            reason?: string;
+            duration_ms?: number;
+            /** @description The call-log row the case wrote. */
+            call_id?: string;
+            /** @enum {string} */
+            kind: 'test' | 'example';
+          }[];
+          /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+          stamp?: {
+            function_id: string;
+            slug: string;
+            pin_version: number;
+            pin_seq: number | null;
+            /** @description sha256 hex of the pinned code. */
+            code_hash: string;
+            /** @description sha256 hex of the canonical JSON of the validated inputs. */
+            input_hash: string;
+            runtime: {
+              kind: string;
+              version: string;
+              lock_hash: string | null;
+            };
+            packages: {
+              name: string;
+              version: string;
+            }[];
+            /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+            data: {
+              name: string;
+              mode: string;
+              sha256: string;
+              bytes: number;
+              fetched_at?: string;
+            }[];
+            /** @description Other functions the call used. Always empty today. */
+            uses: unknown[];
+            /** @enum {string|null} */
+            trust_label: 'platform' | 'verified' | 'unverified' | null;
+            /** @enum {string} */
+            surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+            duration_ms: number;
+            called_at: string;
+          };
+        } | null;
+      };
+    };
+    createFunctionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    createFunctionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    createFunctionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @example {
+     *       "code": "FUNCTION = {\"name\": \"beam_midspan_deflection\", \"description\": \"Midspan deflection of a simply supported beam.\", \"inputs\": {...}, \"outputs\": {...}, \"tests\": [...]}\n\ndef run(inputs):\n    ...\n",
+     *       "contract": {
+     *         "name": "beam_midspan_deflection",
+     *         "description": "Midspan deflection of a simply supported beam."
+     *       }
+     *     }
+     */
+    createFunctionRequest: {
+      /** @description The Python source: a `FUNCTION` contract and a `run` function, at most 256 KB. */
+      code: string;
+      /** @description The `FUNCTION` object in `code`, as JSON. The server checks it, and checks it against the code before a test run or a promotion. */
+      contract: {
+        [key: string]: unknown;
+      };
+    };
+    listAuthoredFunctionsResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      }[];
+      next_cursor: string | null;
+    };
+    getAuthoredFunctionResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+        /** @description The pinned Python source. */
+        code: string;
+        /** @description The `FUNCTION` contract as stored. */
+        contract: {
+          [key: string]: unknown;
+        };
+        /** @description The run the last promotion made. */
+        last_server_run: {
+          at: string;
+          passed: number;
+          failed: number;
+          results: {
+            name: string;
+            passed: boolean;
+            /** @description How the case ended: `ok`, `error`, `timeout`, `not_run`, and so on. */
+            outcome: string;
+            reason?: string;
+            duration_ms?: number;
+            /** @description The call-log row the case wrote. */
+            call_id?: string;
+            /** @enum {string} */
+            kind: 'test' | 'example';
+          }[];
+          /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+          stamp?: {
+            function_id: string;
+            slug: string;
+            pin_version: number;
+            pin_seq: number | null;
+            /** @description sha256 hex of the pinned code. */
+            code_hash: string;
+            /** @description sha256 hex of the canonical JSON of the validated inputs. */
+            input_hash: string;
+            runtime: {
+              kind: string;
+              version: string;
+              lock_hash: string | null;
+            };
+            packages: {
+              name: string;
+              version: string;
+            }[];
+            /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+            data: {
+              name: string;
+              mode: string;
+              sha256: string;
+              bytes: number;
+              fetched_at?: string;
+            }[];
+            /** @description Other functions the call used. Always empty today. */
+            uses: unknown[];
+            /** @enum {string|null} */
+            trust_label: 'platform' | 'verified' | 'unverified' | null;
+            /** @enum {string} */
+            surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+            duration_ms: number;
+            called_at: string;
+          };
+        } | null;
+      };
+    };
+    saveFunctionCodeResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+        /** @description The pinned Python source. */
+        code: string;
+        /** @description The `FUNCTION` contract as stored. */
+        contract: {
+          [key: string]: unknown;
+        };
+        /** @description The run the last promotion made. */
+        last_server_run: {
+          at: string;
+          passed: number;
+          failed: number;
+          results: {
+            name: string;
+            passed: boolean;
+            /** @description How the case ended: `ok`, `error`, `timeout`, `not_run`, and so on. */
+            outcome: string;
+            reason?: string;
+            duration_ms?: number;
+            /** @description The call-log row the case wrote. */
+            call_id?: string;
+            /** @enum {string} */
+            kind: 'test' | 'example';
+          }[];
+          /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+          stamp?: {
+            function_id: string;
+            slug: string;
+            pin_version: number;
+            pin_seq: number | null;
+            /** @description sha256 hex of the pinned code. */
+            code_hash: string;
+            /** @description sha256 hex of the canonical JSON of the validated inputs. */
+            input_hash: string;
+            runtime: {
+              kind: string;
+              version: string;
+              lock_hash: string | null;
+            };
+            packages: {
+              name: string;
+              version: string;
+            }[];
+            /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+            data: {
+              name: string;
+              mode: string;
+              sha256: string;
+              bytes: number;
+              fetched_at?: string;
+            }[];
+            /** @description Other functions the call used. Always empty today. */
+            uses: unknown[];
+            /** @enum {string|null} */
+            trust_label: 'platform' | 'verified' | 'unverified' | null;
+            /** @enum {string} */
+            surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+            duration_ms: number;
+            called_at: string;
+          };
+        } | null;
+      };
+    };
+    saveFunctionCodeResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    saveFunctionCodeResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    saveFunctionCodeResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @example {
+     *       "code": "FUNCTION = {\"name\": \"beam_midspan_deflection\", \"description\": \"Midspan deflection of a simply supported beam.\", \"inputs\": {...}, \"outputs\": {...}, \"tests\": [...]}\n\ndef run(inputs):\n    ...\n",
+     *       "contract": {
+     *         "name": "beam_midspan_deflection",
+     *         "description": "Midspan deflection of a simply supported beam."
+     *       },
+     *       "pin_version": 3
+     *     }
+     */
+    saveFunctionCodeRequest: {
+      /** @description The Python source: a `FUNCTION` contract and a `run` function, at most 256 KB. */
+      code: string;
+      /** @description The `FUNCTION` object in `code`, as JSON. The server checks it, and checks it against the code before a test run or a promotion. */
+      contract: {
+        [key: string]: unknown;
+      };
+      /** @description The `pin_version` you read. A function changed since is refused with `code: "version_changed"`. */
+      pin_version: number;
+    };
+    updateFunctionResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    updateFunctionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @description One setting per request.
+     * @example {
+     *       "enabled": false
+     *     }
+     */
+    updateFunctionRequest:
+      | {
+          /** @description `false` turns the function off; it stays saved. */
+          enabled: boolean;
+        }
+      | {
+          /**
+           * @description When chat asks before calling the function: `default`, `always_allow`, or `always_ask`.
+           * @enum {string}
+           */
+          approval: 'default' | 'always_allow' | 'always_ask';
+        };
+    setFunctionExamplesResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    setFunctionExamplesResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    setFunctionExamplesResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    setFunctionExamplesResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    setFunctionExamplesRequest: {
+      /** @description Every worked example, replacing the ones saved. */
+      examples: {
+        name: string;
+        input: {
+          [key: string]: unknown;
+        };
+        expected: {
+          [key: string]: unknown;
+        };
+        tolerance?: {
+          abs?: number;
+          rel?: number;
+        };
+        /** @description Where a reader can check `expected`. */
+        citation: string;
+      }[];
+    };
+    runFunctionTestsResponse200: {
+      data: {
+        function_id: string;
+        passed: number;
+        failed: number;
+        /** @description Cases the 45 s budget did not reach; run them by name. */
+        not_run: number;
+        results: {
+          name: string;
+          passed: boolean;
+          /** @description How the case ended: `ok`, `error`, `timeout`, `not_run`, and so on. */
+          outcome: string;
+          reason?: string;
+          duration_ms?: number;
+          /** @description The call-log row the case wrote. */
+          call_id?: string;
+          error_class?: string;
+          problems?: {
+            path: string;
+            message: string;
+          }[];
+          /** @description The first output that differs from `expected`. */
+          mismatch: {
+            path: string;
+            expected?: unknown;
+            actual?: unknown;
+          } | null;
+          /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+          stamp?: {
+            function_id: string;
+            slug: string;
+            pin_version: number;
+            pin_seq: number | null;
+            /** @description sha256 hex of the pinned code. */
+            code_hash: string;
+            /** @description sha256 hex of the canonical JSON of the validated inputs. */
+            input_hash: string;
+            runtime: {
+              kind: string;
+              version: string;
+              lock_hash: string | null;
+            };
+            packages: {
+              name: string;
+              version: string;
+            }[];
+            /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+            data: {
+              name: string;
+              mode: string;
+              sha256: string;
+              bytes: number;
+              fetched_at?: string;
+            }[];
+            /** @description Other functions the call used. Always empty today. */
+            uses: unknown[];
+            /** @enum {string|null} */
+            trust_label: 'platform' | 'verified' | 'unverified' | null;
+            /** @enum {string} */
+            surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+            duration_ms: number;
+            called_at: string;
+          };
+        }[];
+      };
+    };
+    runFunctionTestsResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    runFunctionTestsResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    runFunctionTestsResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    runFunctionTestsResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    runFunctionTestsRequest: {
+      /** @description Names of declared tests to run; every declared test when absent. */
+      tests?: string[];
+    };
+    pinFunctionDataResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    pinFunctionDataResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    pinFunctionDataResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    pinFunctionDataResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @example {
+     *       "file_id": "<file-id>",
+     *       "name": "table.csv"
+     *     }
+     */
+    pinFunctionDataRequest: {
+      /** @description A file you uploaded. */
+      file_id: string;
+      /** @description The name the function reads it under, at `/data/<name>`. */
+      name: string;
+    };
+    unpinFunctionDataResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    setFunctionSourcesResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    setFunctionSourcesResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    setFunctionSourcesResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    setFunctionSourcesResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @example {
+     *       "sources": [
+     *         {
+     *           "name": "feed.json",
+     *           "url": "https://data.example.com/feed.json",
+     *           "mode": "live"
+     *         }
+     *       ]
+     *     }
+     */
+    setFunctionSourcesRequest: {
+      /** @description Every source, replacing the ones saved. Leave one out to remove it. */
+      sources: {
+        name: string;
+        /** @description An https URL on an allowed origin. */
+        url: string;
+        /**
+         * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+         * @enum {string}
+         */
+        mode: 'live' | 'pinned';
+      }[];
+    };
+    promoteFunctionResponse200: {
+      data: {
+        function: {
+          id: string;
+          slug: string;
+          description: string;
+          /**
+           * @description `live` once promoted; any edit returns it to `draft`.
+           * @enum {string}
+           */
+          state: 'draft' | 'live';
+          /**
+           * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+           * @enum {string}
+           */
+          status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+          enabled: boolean;
+          /** @enum {string} */
+          approval: 'default' | 'always_allow' | 'always_ask';
+          /**
+           * @description Null unless live.
+           * @enum {string|null}
+           */
+          trust_label: 'platform' | 'verified' | 'unverified' | null;
+          /** @description The artifact version the function is pinned to. */
+          pin_version: number;
+          /** @description The promotion of this pin; null until promoted. */
+          pin_seq: number | null;
+          /** @description sha256 hex of the pinned code. */
+          code_hash: string;
+          pinned_at: string;
+          artifact_id: string;
+          latest_version: number | null;
+          /** @description The artifact has a version newer than the pin. */
+          update_available: boolean;
+          data: {
+            name: string;
+            sha256: string;
+            bytes: number;
+            pinned_at: string;
+          }[];
+          sources: {
+            name: string;
+            /** @description An https URL on an allowed origin. */
+            url: string;
+            /**
+             * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+             * @enum {string}
+             */
+            mode: 'live' | 'pinned';
+            /** @description What promotion froze for a `pinned` source. */
+            pinned?: {
+              sha256: string;
+              bytes: number;
+              fetched_at: string;
+            };
+          }[];
+          examples: {
+            name: string;
+            input: {
+              [key: string]: unknown;
+            };
+            expected: {
+              [key: string]: unknown;
+            };
+            tolerance?: {
+              abs?: number;
+              rel?: number;
+            };
+            /** @description Where a reader can check `expected`. */
+            citation: string;
+          }[];
+          share: {
+            /**
+             * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+             * @enum {string}
+             */
+            visibility: 'private' | 'project' | 'organization';
+            project_id?: string;
+            organization_id?: string;
+            user_ids: string[];
+          } | null;
+          created_at: string;
+          updated_at: string;
+        };
+        run: {
+          at: string;
+          passed: number;
+          failed: number;
+          results: {
+            name: string;
+            passed: boolean;
+            /** @description How the case ended: `ok`, `error`, `timeout`, `not_run`, and so on. */
+            outcome: string;
+            reason?: string;
+            duration_ms?: number;
+            /** @description The call-log row the case wrote. */
+            call_id?: string;
+            /** @enum {string} */
+            kind: 'test' | 'example';
+          }[];
+          /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+          stamp?: {
+            function_id: string;
+            slug: string;
+            pin_version: number;
+            pin_seq: number | null;
+            /** @description sha256 hex of the pinned code. */
+            code_hash: string;
+            /** @description sha256 hex of the canonical JSON of the validated inputs. */
+            input_hash: string;
+            runtime: {
+              kind: string;
+              version: string;
+              lock_hash: string | null;
+            };
+            packages: {
+              name: string;
+              version: string;
+            }[];
+            /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+            data: {
+              name: string;
+              mode: string;
+              sha256: string;
+              bytes: number;
+              fetched_at?: string;
+            }[];
+            /** @description Other functions the call used. Always empty today. */
+            uses: unknown[];
+            /** @enum {string|null} */
+            trust_label: 'platform' | 'verified' | 'unverified' | null;
+            /** @enum {string} */
+            surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+            duration_ms: number;
+            called_at: string;
+          };
+        };
+      };
+    };
+    promoteFunctionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    promoteFunctionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    promoteFunctionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    promoteFunctionResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    promoteFunctionRequest: Record<string, never>;
+    getFunctionShareResponse200: {
+      data: {
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        /** @description Display names of `user_ids`. */
+        people: {
+          id: string;
+          name: string;
+        }[];
+      };
+    };
+    shareFunctionResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    shareFunctionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    shareFunctionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    shareFunctionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description Why the request was refused, such as `version_changed` or `not_live`. */
+      code?: string;
+      /** @description Each field of the contract or the examples that has a problem. */
+      problems?: {
+        path: string;
+        message: string;
+      }[];
+    };
+    /**
+     * @description The whole share, replacing the one saved. Find a person id with the recipient lookup.
+     * @example {
+     *       "visibility": "private",
+     *       "user_ids": [
+     *         "<user-id>"
+     *       ]
+     *     }
+     */
+    shareFunctionRequest: {
+      /**
+       * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+       * @enum {string}
+       */
+      visibility: 'private' | 'project' | 'organization';
+      project_id?: string;
+      organization_id?: string;
+      user_ids: string[];
+    };
+    unshareFunctionResponse200: {
+      data: {
+        id: string;
+        slug: string;
+        description: string;
+        /**
+         * @description `live` once promoted; any edit returns it to `draft`.
+         * @enum {string}
+         */
+        state: 'draft' | 'live';
+        /**
+         * @description `state`, or `disabled` when turned off, or `source_deleted` when its artifact is gone.
+         * @enum {string}
+         */
+        status: 'draft' | 'live' | 'disabled' | 'source_deleted';
+        enabled: boolean;
+        /** @enum {string} */
+        approval: 'default' | 'always_allow' | 'always_ask';
+        /**
+         * @description Null unless live.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function is pinned to. */
+        pin_version: number;
+        /** @description The promotion of this pin; null until promoted. */
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        pinned_at: string;
+        artifact_id: string;
+        latest_version: number | null;
+        /** @description The artifact has a version newer than the pin. */
+        update_available: boolean;
+        data: {
+          name: string;
+          sha256: string;
+          bytes: number;
+          pinned_at: string;
+        }[];
+        sources: {
+          name: string;
+          /** @description An https URL on an allowed origin. */
+          url: string;
+          /**
+           * @description `live` is fetched on each call; `pinned` is fetched once at promotion.
+           * @enum {string}
+           */
+          mode: 'live' | 'pinned';
+          /** @description What promotion froze for a `pinned` source. */
+          pinned?: {
+            sha256: string;
+            bytes: number;
+            fetched_at: string;
+          };
+        }[];
+        examples: {
+          name: string;
+          input: {
+            [key: string]: unknown;
+          };
+          expected: {
+            [key: string]: unknown;
+          };
+          tolerance?: {
+            abs?: number;
+            rel?: number;
+          };
+          /** @description Where a reader can check `expected`. */
+          citation: string;
+        }[];
+        share: {
+          /**
+           * @description `private` shares with the people in `user_ids` only; `project` and `organization` also share with everyone in the one named.
+           * @enum {string}
+           */
+          visibility: 'private' | 'project' | 'organization';
+          project_id?: string;
+          organization_id?: string;
+          user_ids: string[];
+        } | null;
+        created_at: string;
+        updated_at: string;
+      };
+    };
+    findFunctionRecipientResponse200: {
+      /** @description The account holding that address; null when none does. */
+      data: {
+        id: string;
+        name: string;
+      } | null;
+    };
+    getFunctionCallSummaryResponse200: {
+      data: {
+        since: string;
+        total: number;
+        outcomes: {
+          [key: string]: number;
+        };
+        recent: {
+          id: string;
+          started_at: string;
+          outcome: string;
+          /** @enum {string} */
+          surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+          /** @description Made by someone the function is shared with; who is not shown. */
+          by_recipient: boolean;
+          pin_seq?: number;
+          duration_ms: number;
+          api_key?: {
+            name: string | null;
+          };
+        }[];
+      };
     };
   };
   responses: never;
@@ -49094,6 +51290,206 @@ export interface operations {
       };
     };
   };
+  createFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createFunctionRequest'];
+      };
+    };
+    responses: {
+      /** @description The draft, with its code. */
+      201: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createFunctionResponse201'];
+        };
+      };
+      /** @description The code or its contract was refused: `code` is `source_too_large`, `no_entry_point`, `invalid_contract` (with `problems`), or `invalid_name`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createFunctionResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A function of the key owner already has that name (`functionId` names it), or the owner has as many functions as an account may keep. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createFunctionResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createFunctionResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   getFunction: {
     parameters: {
       query?: never;
@@ -49220,6 +51616,362 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  deleteFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted. */
+      204: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': string;
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  updateFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['updateFunctionRequest'];
+      };
+    };
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['updateFunctionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['updateFunctionResponse422'];
         };
       };
       /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
@@ -49811,6 +52563,2848 @@ export interface operations {
         };
       };
       /** @description No call with that id was made by the key owner, or its result is more than 24 hours old. Another person's call answers this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listAuthoredFunctions: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of functions. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listAuthoredFunctionsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit` is out of range, or `cursor` is malformed. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getAuthoredFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getAuthoredFunctionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  saveFunctionCode: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['saveFunctionCodeRequest'];
+      };
+    };
+    responses: {
+      /** @description The function at its new pin, with its code. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['saveFunctionCodeResponse200'];
+        };
+      };
+      /** @description The code or its contract was refused: `code` is `source_too_large`, `no_entry_point`, `invalid_contract` (with `problems`), or `invalid_name`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['saveFunctionCodeResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The function changed since you read it (`code: "version_changed"`). Read it again and resend with the new `pin_version`. Also: the name changed (`name_changed`), or the contract breaks the promoted one (`breaking_change`, with the changes). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['saveFunctionCodeResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['saveFunctionCodeResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setFunctionExamples: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['setFunctionExamplesRequest'];
+      };
+    };
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionExamplesResponse200'];
+        };
+      };
+      /** @description `code` is `invalid_examples` (with `problems`) or `too_many_examples`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionExamplesResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The function changed since you read it (`code: "version_changed"`). Read it again and resend with the new `pin_version`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionExamplesResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionExamplesResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  runFunctionTests: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['runFunctionTestsRequest'];
+      };
+    };
+    responses: {
+      /** @description Each case and how it ended. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['runFunctionTestsResponse200'];
+        };
+      };
+      /** @description `code` is `no_tests`, or `unknown_test` with the unknown `names`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['runFunctionTestsResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The stored contract does not match the pinned code. Save the code again. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['runFunctionTestsResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. Also: the server could not read the contract from the code. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['runFunctionTestsResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description No function runtime is available here (`runtime_unavailable`), or it is starting (`runtime_starting`). Try again in a minute. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['runFunctionTestsResponse503'];
+        };
+      };
+    };
+  };
+  pinFunctionData: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['pinFunctionDataRequest'];
+      };
+    };
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['pinFunctionDataResponse200'];
+        };
+      };
+      /** @description The name, the file, or its size was refused; `code` names which. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['pinFunctionDataResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The name is taken (`data_name_taken`), the file is still being scanned, or the function has 10 files. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['pinFunctionDataResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['pinFunctionDataResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  unpinFunctionData: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id. */
+        id: string;
+        /** @description The data file name, as `name` in `data`. */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['unpinFunctionDataResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. Also: no data file has that name. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setFunctionSources: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['setFunctionSourcesRequest'];
+      };
+    };
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionSourcesResponse200'];
+        };
+      };
+      /** @description A name, URL, mode, or origin was refused; `code` names which. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionSourcesResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The name is taken (`data_name_taken`), or there are too many sources. The function changed since you read it (`code: "version_changed"`). Read it again and resend with the new `pin_version`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionSourcesResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['setFunctionSourcesResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  promoteFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['promoteFunctionRequest'];
+      };
+    };
+    responses: {
+      /** @description The live function and the run. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['promoteFunctionResponse200'];
+        };
+      };
+      /** @description The function declares no test and has no worked example (`no_cases`). */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['promoteFunctionResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A case failed, cases were left for the budget (`cases_left`; promote again), the runtime changed, the contract breaks the promoted one or does not match the code, a pinned source could not be fetched, or the function changed during the promotion. `code` names which. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['promoteFunctionResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. Also: the server could not read the contract from the code. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['promoteFunctionResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description No function runtime is available here (`runtime_unavailable`), or it is starting (`runtime_starting`). Try again in a minute. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['promoteFunctionResponse503'];
+        };
+      };
+    };
+  };
+  getFunctionShare: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The share; `share` is null when it was never shared. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getFunctionShareResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  shareFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['shareFunctionRequest'];
+      };
+    };
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['shareFunctionResponse200'];
+        };
+      };
+      /** @description `code` is `too_many_people`, `invalid_person`, or `no_recipients`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['shareFunctionResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. Also: the project or organization named. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The function is not live (`not_live`): promote it first. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['shareFunctionResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['shareFunctionResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  unshareFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The function. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['unshareFunctionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  findFunctionRecipient: {
+    parameters: {
+      query: {
+        /** @description The exact address of the person to share with. */
+        email: string;
+      };
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The person, or null. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['findFunctionRecipientResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `email` is missing. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getFunctionCallSummary: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The summary. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getFunctionCallSummaryResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:author`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No function with that id belongs to the key owner. A function shared with them and another person's function answer this same 404. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
