@@ -254,16 +254,31 @@ const handler = baseApi({
 
   // A browse listing mixes the caller's own rows with other people's. The projection above is
   // shaped for the management tab, so on someone else's row it also carries identifiers a viewer
-  // has no claim to: the owner's user id, the owning org/project id, the previous version's
-  // authoring metadata, which gate kind protects it, and the publisher's source references
-  // (session, message, file and artifact ids). Strip those from rows the caller does
-  // not own; the display fields the browse grid renders are untouched. Admins keep the full rows
-  // - the admin surface is the reason the wide projection exists.
+  // has no claim to (owner and scope ids, version provenance, gate kind, the publisher's source
+  // references). Rows the caller does not own keep only the display fields below, so a field
+  // added to the projection stays owner/admin-only unless it is listed here. Admins keep the full
+  // rows - the admin surface is the reason the wide projection exists.
   //
-  // Deliberately NOT stripped: versionsCount and discoverable. Neither identifies a tenant, both
-  // are read by the owner's own management tab (PublishedArtifactsTabContent, PublishShareModal),
-  // and hiding them would couple those reads to ownerId staying in the projection forever.
-  const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind', 'source'] as const;
+  // versionsCount and discoverable stay: neither identifies a tenant, both are read by the
+  // owner's own management tab (PublishedArtifactsTabContent, PublishShareModal), and hiding them
+  // would couple those reads to ownerId staying in the projection forever.
+  const NON_OWNER_VISIBLE_FIELDS = [
+    '_id',
+    'publicId',
+    'tier',
+    'slug',
+    'title',
+    'description',
+    'tags',
+    'visibility',
+    'commentPolicy',
+    'discoverable',
+    'size',
+    'publishedAt',
+    'updatedAt',
+    'viewCount',
+    'versionsCount',
+  ] as const;
 
   const rows = await Promise.all(
     ((result?.rows ?? []) as Array<Record<string, unknown>>).map(
@@ -286,8 +301,10 @@ const handler = baseApi({
     ? rows
     : rows.map(row => {
         if (row.ownerId === userId) return row;
-        const trimmed = { ...row };
-        for (const field of NON_OWNER_HIDDEN_FIELDS) delete trimmed[field];
+        const trimmed: Record<string, unknown> = {};
+        for (const field of NON_OWNER_VISIBLE_FIELDS) {
+          if (field in row) trimmed[field] = row[field];
+        }
         return trimmed;
       });
 
