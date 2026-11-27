@@ -358,7 +358,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                                 bgcolor: 'reading.accent',
                                 // This selector outranks Joy's hover/active rules, so restate both (darken, not
                                 // brighten, to keep the white icon legible).
-                                '&:hover': { filter: 'brightness(0.92)' },
+                                '@media (hover: hover)': { '&:hover': { filter: 'brightness(0.92)' } },
                                 '&:active': { filter: 'brightness(0.85)' },
                               },
                             },
