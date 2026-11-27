@@ -347,6 +347,19 @@ describe("authoring the key owner's own function", () => {
     expect(person.body).toEqual({ data: { id: 'u3', name: 'Recipient Three' } });
   });
 
+  it('saves worked examples with their name and citation trimmed, as the app saves them', async () => {
+    const example = { input: { span: 2 }, expected: { deflection: 1 } };
+    const res = await call(examplesRoute, {
+      method: 'PUT',
+      query: { id: OWNED_ID },
+      body: { examples: [{ ...example, name: '  two span  ', citation: ' Handbook, table 3 ' }] },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body.data as { examples: unknown[] }).examples).toEqual([
+      { ...example, name: 'two span', citation: 'Handbook, table 3' },
+    ]);
+  });
+
   it('refuses sharing a draft as not_live', async () => {
     h.functions[0]!.state = 'draft';
     const res = await call(shareRoute, {

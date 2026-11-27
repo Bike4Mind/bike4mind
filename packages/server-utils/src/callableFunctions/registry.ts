@@ -338,8 +338,8 @@ export async function setCallableFunctionExamples(
     throw new BadRequestError(`At most ${maxExamples} worked examples are allowed.`, { code: 'too_many_examples' });
   }
   const problems: FunctionContractProblem[] = [];
-  examples.forEach((example, index) => {
-    const citation = example.citation.trim();
+  const next = examples.map(example => ({ ...example, name: example.name.trim(), citation: example.citation.trim() }));
+  next.forEach(({ citation }, index) => {
     if (!citation || citation.length > maxCitationLength) {
       problems.push({
         path: `examples.${index}.citation`,
@@ -348,7 +348,7 @@ export async function setCallableFunctionExamples(
     }
   });
   // Checked as declared tests of the stored contract, so an example obeys the same rules as a test in the code.
-  const cases = examples.map(({ name, input, expected, tolerance }) => ({
+  const cases = next.map(({ name, input, expected, tolerance }) => ({
     name,
     input,
     expected,
@@ -371,7 +371,6 @@ export async function setCallableFunctionExamples(
   if (problems.length > 0) {
     throw new BadRequestError('The worked examples have problems.', { code: 'invalid_examples', problems });
   }
-  const next = examples.map(example => ({ ...example, citation: example.citation.trim() }));
   // A live tool's label stands for the examples it was promoted with; changed ones have not run on the server.
   const unverify = current.state === 'live' && canonicalJson(next) !== canonicalJson(current.examples ?? []);
   const saved = await callableFunctionRepository.setExamples(id, owner, { updatedAt: current.updatedAt }, next, {
