@@ -300,6 +300,39 @@ describe('a function offered to every signed-in person', () => {
     expect(await summarizeCallableFunctionCalls(OWNER, id)).toBeTruthy();
   });
 
+  it('names no data file to a person the audience alone reaches, and still does to a share recipient', async () => {
+    const id = await seedVerifiedFunction('beam_midspan_deflection', { visibility: 'private', userIds: [PERSON.id] });
+    const pin = { name: 'points.csv', sha256: 'a'.repeat(64), bytes: 12, sourceFileId: 'file-1', pinnedAt: new Date() };
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { 'pin.dataPins': [pin], 'promoted.pin.dataPins': [pin] } }
+    );
+    await offerToEveryone(id);
+    await review(SIGNED_IN, id);
+    await review(PERSON, id);
+
+    const [offered] = await listSharedCallableFunctions(SIGNED_IN);
+    expect(offered).toMatchObject({ sharedVia: 'signed_in', dataPins: [] });
+    expect(JSON.stringify(offered)).not.toContain('points.csv');
+    expect((await listSharedCallableFunctions(PERSON))[0]).toMatchObject({
+      sharedVia: 'person',
+      dataPins: ['points.csv'],
+    });
+
+    const callWithData = (caller: { id: string }) =>
+      dispatchFunctionCall(
+        { caller, functionId: id, args: ARGS, surface: 'rest' },
+        { runner, dataReachable: true, signData: async () => [] }
+      );
+    const audienceCall = await callWithData(SIGNED_IN);
+    expect(audienceCall).toMatchObject({
+      outcome: 'ok',
+      stamp: { data: [{ name: '', mode: 'pinned', sha256: pin.sha256, bytes: 12 }] },
+    });
+    expect(JSON.stringify(audienceCall)).not.toContain('points.csv');
+    expect(await callWithData(PERSON)).toMatchObject({ outcome: 'ok', stamp: { data: [{ name: 'points.csv' }] } });
+  });
+
   it('makes no one a member of the project or organization the function is also shared with', async () => {
     const offered = await seedVerifiedFunction('beam_midspan_deflection', {
       visibility: 'project',

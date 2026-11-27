@@ -416,7 +416,10 @@ export interface ICallableFunctionShared {
    * absent when there is none or it predates keeping the reviewed interface.
    */
   changes?: FunctionContractChange[];
-  /** Names only of the data files and sources the live pin reads: never their bytes or a link to them. */
+  /**
+   * Names only of the data files and sources the live pin reads: never their bytes or a link to them, and no data
+   * file names at all for `signed_in`.
+   */
   dataPins: string[];
   sources: string[];
   updatedAt: Date;
@@ -517,7 +520,8 @@ export function toCallableFunctionShared(
         }
       : null,
     ...(changes ? { changes } : {}),
-    dataPins: (doc.pin.dataPins ?? []).map(({ name }) => name),
+    // The audience reaches anyone signed in, so it shows the interface without naming the owner's data files.
+    dataPins: sharedVia === 'signed_in' ? [] : (doc.pin.dataPins ?? []).map(({ name }) => name),
     sources: (doc.sources ?? []).map(({ name }) => name),
     pin: {
       version: doc.pin.version,
@@ -553,7 +557,7 @@ export function callableFunctionTrustLabel(
  * slug, description, pin, and contract move together through `repin`; `pin.seq`, `pin.runtime`, the state, the
  * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`;
  * the case results only through `recordCaseResults`; the grants only through `setGrants`; the platform mark only
- * through `setPlatformMark` and `clearPlatformMark`.
+ * through `setPlatformMark`, `setPlatformAudience`, and `clearPlatformMark`.
  */
 export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'ownerType',

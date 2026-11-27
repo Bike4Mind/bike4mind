@@ -526,7 +526,9 @@ describe('CallableFunctionModel', () => {
       const created = await callableFunctionRepository.create(fn());
       const offer = async () => {
         await callableFunctionRepository.setPlatformMark(created.id, mark);
-        return (await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in'))!;
+        const offered = await callableFunctionRepository.setPlatformAudience(created.id, 'signed_in');
+        expect(offered?.platform?.audience).toBe('signed_in');
+        return offered!;
       };
       const live = await promoteAs(created, 'verified');
       await offer();
@@ -557,6 +559,29 @@ describe('CallableFunctionModel', () => {
       });
       expect(repinned?.platform).toBeUndefined();
       expect((await promoteAs(repinned!, 'verified', 3)).platform).toBeUndefined();
+
+      const unverifiedAgain = await promoteAs(await offer(), 'unverified', 4);
+      expect(unverifiedAgain.platform).toBeUndefined();
+
+      await promoteAs(unverifiedAgain, 'verified', 5);
+      const beforeData = await offer();
+      const pinned = await callableFunctionRepository.setDataPins(
+        created.id,
+        OWNER,
+        { updatedAt: beforeData.updatedAt },
+        [DATA_PIN]
+      );
+      expect(pinned?.platform).toBeUndefined();
+
+      await promoteAs(pinned!, 'verified', 6);
+      const beforeSources = await offer();
+      const resourced = await callableFunctionRepository.setSources(
+        created.id,
+        OWNER,
+        { updatedAt: beforeSources.updatedAt },
+        [{ name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' }]
+      );
+      expect(resourced?.platform).toBeUndefined();
     });
 
     it('lists an offered function for anyone but its owner, only while the record is live and offered', async () => {

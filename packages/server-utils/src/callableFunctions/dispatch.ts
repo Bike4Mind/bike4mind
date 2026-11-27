@@ -186,10 +186,13 @@ export function buildCallableFunctionStamp(input: {
   calledAt: Date;
   /** What the call's sources resolved to, after the pinned files. */
   sources?: CallableFunctionStampData[];
+  /** For a caller the signed-in audience alone reaches: each file keeps its hash and size, never its name. */
+  hideDataNames?: boolean;
 }): CallableFunctionStamp {
   const packages = [...(input.run.runtime?.packages ?? [])].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   );
+  const data = [...callableFunctionStampData(input.fn.pin.dataPins), ...(input.sources ?? [])];
   return {
     function_id: input.fn.id,
     slug: input.fn.slug,
@@ -199,7 +202,7 @@ export function buildCallableFunctionStamp(input: {
     input_hash: input.inputHash,
     runtime: { kind: RUNTIME_KIND, version: PYODIDE_VERSION, lock_hash: input.run.runtime?.lockHash ?? null },
     packages,
-    data: [...callableFunctionStampData(input.fn.pin.dataPins), ...(input.sources ?? [])],
+    data: input.hideDataNames ? data.map(entry => ({ ...entry, name: '' })) : data,
     uses: [],
     trust_label: shownCallableFunctionTrustLabel(input.fn),
     surface: input.surface,
@@ -612,7 +615,15 @@ export async function dispatchFunctionCall(
     );
     row.runtime = runtimeRow(run);
     if (run.initMs !== undefined) row.initMs = run.initMs;
-    const stamp = buildCallableFunctionStamp({ fn, inputHash, run, surface, calledAt: startedAt, sources });
+    const stamp = buildCallableFunctionStamp({
+      fn,
+      inputHash,
+      run,
+      surface,
+      calledAt: startedAt,
+      sources,
+      hideDataNames: access === 'signed_in',
+    });
     const ran = {
       errorClass: run.errorClass,
       problems: run.problems,
