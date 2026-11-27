@@ -45,6 +45,9 @@ export class SessionActivity {
 
   private readonly unread = new Set<string>();
 
+  /** Turns each session has finished this run; see ChatSessionStatusEvent.settledTurns. */
+  private readonly settled = new Map<string, number>();
+
   /**
    * Wake-on-exit background commands still running, per session. Orthogonal to the status: a
    * session whose turn ended is 'done' and may still be waiting on these (see BackgroundProcessRegistry).
@@ -110,6 +113,7 @@ export class SessionActivity {
   replyEnded(sessionId: string, unread = false): void {
     this.transition(sessionId, () => {
       this.replying.delete(sessionId);
+      this.settled.set(sessionId, (this.settled.get(sessionId) ?? 0) + 1);
       if (unread) this.unread.add(sessionId);
     });
   }
@@ -175,6 +179,7 @@ export class SessionActivity {
     this.deciding.delete(sessionId);
     this.unread.delete(sessionId);
     this.background.delete(sessionId);
+    this.settled.delete(sessionId);
   }
 
   /** The setup step of a session still being prepared, with no reply streaming yet; else undefined. */
@@ -187,12 +192,14 @@ export class SessionActivity {
     const step = this.setupStep(sessionId, status);
     const unreadReply = status === 'needs-action' && this.runtimeStatusOf(sessionId) === 'done';
     const jobs = this.background.get(sessionId);
+    const settledTurns = this.settled.get(sessionId);
     return {
       sessionId,
       status,
       ...(unreadReply ? { unreadReply: true } : {}),
       ...(step ? { preparing: step } : {}),
       ...(jobs ? { background: { ...jobs } } : {}),
+      ...(settledTurns ? { settledTurns } : {}),
     };
   }
 
@@ -206,17 +213,19 @@ export class SessionActivity {
     const unreadBefore = this.eventFor(sessionId, before).unreadReply;
     const stepBefore = this.setupStep(sessionId, before);
     const backgroundBefore = this.backgroundKey(sessionId);
+    const settledBefore = this.settled.get(sessionId);
     mutate();
     const after = this.statusOf(sessionId);
     // Only a real change goes out: a turn running four tools would otherwise push four
     // identical 'needs-action' events, and every open window would re-render on each one.
-    // The unread flag, the setup step and the background jobs count as changes too.
+    // The unread flag, the setup step, the background jobs and a settled turn count as changes too.
     const statusChanged = after !== before;
     if (
       statusChanged ||
       this.eventFor(sessionId, after).unreadReply !== unreadBefore ||
       this.setupStep(sessionId, after) !== stepBefore ||
-      this.backgroundKey(sessionId) !== backgroundBefore
+      this.backgroundKey(sessionId) !== backgroundBefore ||
+      this.settled.get(sessionId) !== settledBefore
     ) {
       this.onChange(this.eventFor(sessionId, after), statusChanged);
     }

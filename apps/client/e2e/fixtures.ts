@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/rules-of-hooks */
-import { test as base, expect, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
+import { expect, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
+import { test as base } from './waf-test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
@@ -22,7 +23,7 @@ import { TeamsPage } from './pages/TeamsPage';
 import { StudioPage } from './pages/StudioPage';
 import { getTestUsers } from './helpers/test-users';
 import { projectNameToSpecKey, renewExpiringTokens } from './helpers/token-renewal';
-import { installWafBypass } from './helpers/waf-bypass';
+import { installWafBypass, newWafRequestContext } from './helpers/waf-bypass';
 import { bypassTurnstile } from './helpers/turnstile';
 
 type VerifyAnswersOptions = {
@@ -158,8 +159,8 @@ export async function openPageAs(
   contextOptions: BrowserContextOptions = {}
 ): Promise<{ page: Page; close: () => Promise<void> }> {
   const context = await browser.newContext({ ...contextOptions, baseURL });
+  await installWafBypass(context);
   const page = await context.newPage();
-  await installWafBypass(page);
   await prepareAppPage(page, () => auth);
   return { page, close: () => context.close() };
 }
@@ -167,7 +168,7 @@ export async function openPageAs(
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   freshTokensAtWorkerStart: [
     async ({ playwright }, use, workerInfo) => {
-      await renewExpiringTokens(() => playwright.request.newContext(), workerInfo.project.name);
+      await renewExpiringTokens(() => newWafRequestContext(playwright.request), workerInfo.project.name);
       await use();
     },
     { scope: 'worker', auto: true },
@@ -175,7 +176,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 
   freshTokens: [
     async ({ playwright }, use, testInfo) => {
-      await renewExpiringTokens(() => playwright.request.newContext(), testInfo.project.name);
+      await renewExpiringTokens(() => newWafRequestContext(playwright.request), testInfo.project.name);
       await use();
     },
     { auto: true },
@@ -191,7 +192,6 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
   },
 
   page: async ({ page, authState }, use) => {
-    await installWafBypass(page);
     await prepareAppPage(page, () => authState.current);
     await use(page);
   },

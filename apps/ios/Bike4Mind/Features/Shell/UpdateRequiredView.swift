@@ -19,7 +19,7 @@ struct UpdateRequiredView: View {
           .foregroundStyle(Tokens.Palette.brand)
           .accessibilityHidden(true)
         Text("Update required")
-          .font(.title2.bold())
+          .font(Tokens.Typography.title)
           .foregroundStyle(Tokens.Palette.primaryText)
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
