@@ -2,7 +2,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@client/lib/entitlements/managedUserTags', () => ({ isManagedTag: (tag: string) => tag === 'managed' }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
   dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
 }));
 
