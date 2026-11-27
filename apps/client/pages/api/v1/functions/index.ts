@@ -6,7 +6,7 @@ import { paginateById } from '@server/utils/cursorPagination';
 import {
   assertFunctionsEnabled,
   functionsRateLimit,
-  listLiveFunctions,
+  listReachableFunctions,
   toPublicFunction,
 } from '@server/callableFunctions/publicFunctions';
 import { toAuthoredFunctionDetail } from '@server/callableFunctions/authoredFunctions';
@@ -18,7 +18,7 @@ const listRoute = nextRouteForContract(listFunctionsContract, {
 }).get(async (req, res) => {
   await assertFunctionsEnabled(req.user);
   const { limit, cursor } = req.validatedQuery;
-  const rows = (await listLiveFunctions(req.user)).map(toPublicFunction);
+  const rows = (await listReachableFunctions(req.user)).map(toPublicFunction);
   const page = paginateById(rows, { limit, cursor, scope: CURSOR_SCOPE });
   return res.json({ data: page.items, next_cursor: page.nextCursor });
 });

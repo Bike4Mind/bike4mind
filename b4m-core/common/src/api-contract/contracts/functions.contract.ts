@@ -1,26 +1,30 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { REQUEST_TIMEOUT_ERROR_CODE } from '../../apiErrorCodes';
+import { FUNCTION_REVIEW_REQUIRED_ERROR_CODE, REQUEST_TIMEOUT_ERROR_CODE } from '../../apiErrorCodes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import {
   FunctionCallIdParamSchema,
   FunctionIdParamSchema,
+  FunctionReviewErrorSchema,
   GetFunctionCallResponseSchema,
   GetFunctionResponseSchema,
   InvokeFunctionFailedErrorSchema,
+  InvokeFunctionForbiddenErrorSchema,
   InvokeFunctionInputErrorSchema,
   InvokeFunctionQueuedResponseSchema,
   InvokeFunctionRequestSchema,
   InvokeFunctionResponseSchema,
   InvokeFunctionTimeoutErrorSchema,
   ListFunctionsResponseSchema,
+  ReviewFunctionRequestSchema,
 } from '../../schemas/functionsPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
- * The key owner's live functions over the public API: list, read, and call. Every route names the one confined
- * scope `functions:invoke`, since a confined key cannot hold a second. Routes: apps/client/pages/api/v1/functions.
+ * The live functions the key owner reaches over the public API: their own and those shared with them. List, read,
+ * review, and call. Every route names the confined scope `functions:invoke`. Routes:
+ * apps/client/pages/api/v1/functions.
  */
 
 const SCOPES = [ApiKeyScope.FUNCTIONS_INVOKE];
@@ -30,8 +34,12 @@ const FORBIDDEN =
   'their organizations.';
 
 const NOT_FOUND =
-  'No live function with that id belongs to the key owner. A draft, a turned-off function, one whose artifact ' +
-  "was deleted, and another person's function all answer this same 404.";
+  "No live function with that id is the key owner's or shared with them. A draft, a turned-off function, one " +
+  "whose artifact was deleted, and another person's function not shared with them all answer this same 404.";
+
+const REVIEW_NOT_FOUND =
+  'No live function with that id is shared with the key owner. Their own function, a function not shared with ' +
+  'them, and a missing id all answer this same 404.';
 
 const RATE_LIMITED = 'Per-user rate limit exceeded. Honor `Retry-After`.';
 
@@ -53,9 +61,11 @@ export const listFunctionsContract = defineEndpoint({
   operationId: 'listFunctions',
   summary: 'List live functions',
   description:
-    "Lists the key owner's live functions: Python artifacts saved as functions and promoted after their tests " +
-    'passed on the server. Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` ' +
-    'back as `cursor` until it is `null`.',
+    'Lists the live functions the key owner reaches: Python artifacts saved as functions and promoted after their ' +
+    'tests passed on the server. `group` says whose each one is. A function shared with the key owner is listed ' +
+    'before they review it, with `review_status: "needs_review"`, and can be called once it reads `allowed`. ' +
+    'Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` back as `cursor` until ' +
+    'it is `null`.',
   tags: ['Functions'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,
@@ -77,7 +87,9 @@ export const getFunctionContract = defineEndpoint({
   summary: 'Get a live function',
   description:
     'Returns one live function with its contract: `input_schema` and `output_schema` are the JSON Schemas its ' +
-    'inputs and outputs must fit, with each number field naming its `unit`.',
+    'inputs and outputs must fit, with each number field naming its `unit`. A function shared with the key owner ' +
+    'reads the same before and after their review, with who shared it and the `review_hash` an allow sends back. ' +
+    'Never the code or its data.',
   tags: ['Functions'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,
@@ -126,7 +138,13 @@ export const invokeFunctionContract = defineEndpoint({
           '`status: "finished"`; check `outcome` before reading `output`.',
       },
     },
-    403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: {
+      description:
+        `${FORBIDDEN} Or, with \`errorCode: "${FUNCTION_REVIEW_REQUIRED_ERROR_CODE}"\`, the function was shared ` +
+        'with the key owner and its `review_status` is not `allowed`: allow it with ' +
+        '`POST /api/v1/functions/{id}/review`, then call again.',
+      schema: InvokeFunctionForbiddenErrorSchema,
+    },
     404: { description: NOT_FOUND, schema: ApiErrorSchema },
     413: { description: 'The request body or `input` is larger than a call accepts.', schema: ApiErrorSchema },
     422: {
@@ -157,6 +175,46 @@ export const invokeFunctionContract = defineEndpoint({
     },
   },
   codeSample: { ...codeSample, body: INVOKE_EXAMPLE },
+});
+
+const REVIEW_EXAMPLE = {
+  action: 'allow',
+  review_hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+};
+
+export const reviewFunctionContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/functions/{id}/review',
+  operationId: 'reviewFunction',
+  summary: 'Allow a function shared with you, or withdraw the allow',
+  description:
+    "Records the key owner's review of a function another person shared with them, as the review in the app " +
+    'does. `action: "allow"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. ' +
+    '`action: "withdraw"` takes the allow back, so calls are refused with `review_required` until they allow it ' +
+    'again. An allow keeps the mode the key owner chose in the app for when chat and agent runs ask before a ' +
+    'call; this route does not set it. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a ' +
+    "shared function can be reviewed: the key owner's own needs none.",
+  tags: ['Functions'],
+  auth: 'apiKeyOrJwt',
+  scopes: SCOPES,
+  pathParams: FunctionIdParamSchema,
+  request: ReviewFunctionRequestSchema,
+  requestExample: REVIEW_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The function after the review.', schema: GetFunctionResponseSchema },
+    403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: { description: REVIEW_NOT_FOUND, schema: ApiErrorSchema },
+    409: {
+      description:
+        'The interface changed since `review_hash` was read (`code: "review_conflict"`): read the function again ' +
+        'and allow the new hash. Or a withdraw of a function never allowed (`code: "not_reviewed"`).',
+      schema: FunctionReviewErrorSchema,
+    },
+    422: { description: 'The body does not fit the request schema.', schema: ApiErrorSchema },
+    429: { description: RATE_LIMITED, schema: ApiErrorSchema },
+  },
+  codeSample: { ...codeSample, body: REVIEW_EXAMPLE },
 });
 
 export const getFunctionCallContract = defineEndpoint({

@@ -80,6 +80,7 @@ import {
   getFunctionContract,
   invokeFunctionContract,
   listFunctionsContract,
+  reviewFunctionContract,
 } from './functions.contract';
 import {
   createFunctionContract,
@@ -426,6 +427,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deletePersonaContract,
   listFunctionsContract,
   getFunctionContract,
+  reviewFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
   cancelFunctionCallContract,

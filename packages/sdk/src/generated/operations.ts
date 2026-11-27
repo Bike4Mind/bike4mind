@@ -693,6 +693,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
+  reviewFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/review',
+  },
   reviewSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',

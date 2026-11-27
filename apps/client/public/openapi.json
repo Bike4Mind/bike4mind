@@ -37699,10 +37699,32 @@
                 },
                 "slug": {
                   "type": "string",
-                  "description": "The function's name, fixed when it was saved."
+                  "description": "The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id."
                 },
                 "description": {
                   "type": "string"
+                },
+                "group": {
+                  "type": "string",
+                  "enum": [
+                    "own",
+                    "shared",
+                    "platform"
+                  ],
+                  "description": "`own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now."
+                },
+                "review_status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "needs_review",
+                    "allowed",
+                    "withdrawn",
+                    null
+                  ],
+                  "description": "Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`."
                 },
                 "trust_label": {
                   "type": [
@@ -37736,6 +37758,8 @@
                 "id",
                 "slug",
                 "description",
+                "group",
+                "review_status",
                 "trust_label",
                 "pin_version",
                 "pin_seq",
@@ -37766,10 +37790,32 @@
               },
               "slug": {
                 "type": "string",
-                "description": "The function's name, fixed when it was saved."
+                "description": "The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id."
               },
               "description": {
                 "type": "string"
+              },
+              "group": {
+                "type": "string",
+                "enum": [
+                  "own",
+                  "shared",
+                  "platform"
+                ],
+                "description": "`own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now."
+              },
+              "review_status": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "needs_review",
+                  "allowed",
+                  "withdrawn",
+                  null
+                ],
+                "description": "Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`."
               },
               "trust_label": {
                 "type": [
@@ -37807,24 +37853,268 @@
                 "type": "object",
                 "additionalProperties": {},
                 "description": "A JSON Schema object: `type: \"object\"`, `properties`, `required` and `additionalProperties: false`. Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless)."
+              },
+              "shared_by": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "description": "Who shared the function, by display name. Null on the key owner's own."
+              },
+              "shared_via": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "person",
+                  "project",
+                  "organization",
+                  null
+                ],
+                "description": "How the share reaches the key owner: named, or through a project or organization they belong to."
+              },
+              "review_hash": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own."
               }
             },
             "required": [
               "id",
               "slug",
               "description",
+              "group",
+              "review_status",
               "trust_label",
               "pin_version",
               "pin_seq",
               "updated_at",
               "input_schema",
-              "output_schema"
+              "output_schema",
+              "shared_by",
+              "shared_via",
+              "review_hash"
             ]
           }
         },
         "required": [
           "data"
         ]
+      },
+      "reviewFunctionResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "slug": {
+                "type": "string",
+                "description": "The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id."
+              },
+              "description": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string",
+                "enum": [
+                  "own",
+                  "shared",
+                  "platform"
+                ],
+                "description": "`own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now."
+              },
+              "review_status": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "needs_review",
+                  "allowed",
+                  "withdrawn",
+                  null
+                ],
+                "description": "Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`."
+              },
+              "trust_label": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "platform",
+                  "verified",
+                  "unverified",
+                  null
+                ],
+                "description": "`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind."
+              },
+              "pin_version": {
+                "type": "integer",
+                "description": "The artifact version the function runs."
+              },
+              "pin_seq": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "The promotion that made this pin live: 1 for the first."
+              },
+              "updated_at": {
+                "type": "string"
+              },
+              "input_schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "A JSON Schema object: `type: \"object\"`, `properties`, `required` and `additionalProperties: false`. Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless)."
+              },
+              "output_schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "A JSON Schema object: `type: \"object\"`, `properties`, `required` and `additionalProperties: false`. Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless)."
+              },
+              "shared_by": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "description": "Who shared the function, by display name. Null on the key owner's own."
+              },
+              "shared_via": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "person",
+                  "project",
+                  "organization",
+                  null
+                ],
+                "description": "How the share reaches the key owner: named, or through a project or organization they belong to."
+              },
+              "review_hash": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own."
+              }
+            },
+            "required": [
+              "id",
+              "slug",
+              "description",
+              "group",
+              "review_status",
+              "trust_label",
+              "pin_version",
+              "pin_seq",
+              "updated_at",
+              "input_schema",
+              "output_schema",
+              "shared_by",
+              "shared_via",
+              "review_hash"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "reviewFunctionResponse409": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "review_conflict",
+              "not_reviewed"
+            ],
+            "description": "`review_conflict`: the interface changed since `review_hash` was read. `not_reviewed`: nothing to withdraw."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "reviewFunctionRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "allow"
+                ]
+              },
+              "review_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "`review_hash` as `GET /api/v1/functions/{id}` returned it."
+              }
+            },
+            "required": [
+              "action",
+              "review_hash"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "withdraw"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "example": {
+          "action": "allow",
+          "review_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
       },
       "invokeFunctionResponse200": {
         "type": "object",
@@ -38005,6 +38295,73 @@
         "required": [
           "call_id",
           "status"
+        ]
+      },
+      "invokeFunctionResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "account_suspended",
+              "review_required"
+            ]
+          },
+          "suspension": {
+            "type": "object",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "multiple_accounts",
+                  "automated_misuse",
+                  "payment_fraud",
+                  "prohibited_content",
+                  "terms_violation"
+                ],
+                "description": "Which Terms of Service rule the account was suspended under. New categories may be added."
+              },
+              "terms_url": {
+                "type": "string",
+                "description": "The policy page for this category. Absent on self-hosted deployments."
+              },
+              "appeal_url": {
+                "type": "string",
+                "description": "Where to appeal the suspension. Absent on self-hosted deployments."
+              }
+            },
+            "required": [
+              "reason_category"
+            ]
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "invokeFunctionResponse422": {
@@ -120555,7 +120912,7 @@
       "get": {
         "operationId": "listFunctions",
         "summary": "List live functions",
-        "description": "Lists the key owner's live functions: Python artifacts saved as functions and promoted after their tests passed on the server. Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`.",
+        "description": "Lists the live functions the key owner reaches: Python artifacts saved as functions and promoted after their tests passed on the server. `group` says whose each one is. A function shared with the key owner is listed before they review it, with `review_status: \"needs_review\"`, and can be called once it reads `allowed`. Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`.",
         "tags": [
           "Functions"
         ],
@@ -121397,7 +121754,7 @@
       "get": {
         "operationId": "getFunction",
         "summary": "Get a live function",
-        "description": "Returns one live function with its contract: `input_schema` and `output_schema` are the JSON Schemas its inputs and outputs must fit, with each number field naming its `unit`.",
+        "description": "Returns one live function with its contract: `input_schema` and `output_schema` are the JSON Schemas its inputs and outputs must fit, with each number field naming its `unit`. A function shared with the key owner reads the same before and after their review, with who shared it and the `review_hash` an allow sends back. Never the code or its data.",
         "tags": [
           "Functions"
         ],
@@ -121549,7 +121906,7 @@
             }
           },
           "404": {
-            "description": "No live function with that id belongs to the key owner. A draft, a turned-off function, one whose artifact was deleted, and another person's function all answer this same 404.",
+            "description": "No live function with that id is the key owner's or shared with them. A draft, a turned-off function, one whose artifact was deleted, and another person's function not shared with them all answer this same 404.",
             "content": {
               "application/json": {
                 "schema": {
@@ -122654,6 +123011,488 @@
         ]
       }
     },
+    "/api/v1/functions/{id}/review": {
+      "post": {
+        "operationId": "reviewFunction",
+        "summary": "Allow a function shared with you, or withdraw the allow",
+        "description": "Records the key owner's review of a function another person shared with them, as the review in the app does. `action: \"allow\"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. `action: \"withdraw\"` takes the allow back, so calls are refused with `review_required` until they allow it again. An allow keeps the mode the key owner chose in the app for when chat and agent runs ask before a call; this route does not set it. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a shared function can be reviewed: the key owner's own needs none.",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The function id, as `id` in the list."
+            },
+            "required": true,
+            "description": "The function id, as `id` in the list.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/reviewFunctionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The function after the review.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/reviewFunctionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live function with that id is shared with the key owner. Their own function, a function not shared with them, and a missing id all answer this same 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The interface changed since `review_hash` was read (`code: \"review_conflict\"`): read the function again and allow the new hash. Or a withdraw of a function never allowed (`code: \"not_reviewed\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/reviewFunctionResponse409"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body does not fit the request schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded. Honor `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "functions:invoke"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/functions/<id>/review\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"action\": \"allow\",\n  \"review_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/functions/<id>/review\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"action\": \"allow\",\n  \"review_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/functions/<id>/review\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"action\": \"allow\",\n        \"review_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n    },\n)"
+          }
+        ]
+      }
+    },
     "/api/v1/functions/{id}/invoke": {
       "post": {
         "operationId": "invokeFunction",
@@ -122825,11 +123664,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations.",
+            "description": "The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations. Or, with `errorCode: \"review_required\"`, the function was shared with the key owner and its `review_status` is not `allowed`: allow it with `POST /api/v1/functions/{id}/review`, then call again.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/invokeFunctionResponse403"
                 }
               }
             },
@@ -122879,7 +123718,7 @@
             }
           },
           "404": {
-            "description": "No live function with that id belongs to the key owner. A draft, a turned-off function, one whose artifact was deleted, and another person's function all answer this same 404.",
+            "description": "No live function with that id is the key owner's or shared with them. A draft, a turned-off function, one whose artifact was deleted, and another person's function not shared with them all answer this same 404.",
             "content": {
               "application/json": {
                 "schema": {

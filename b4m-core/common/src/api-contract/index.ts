@@ -220,6 +220,7 @@ export {
 export {
   listFunctionsContract,
   getFunctionContract,
+  reviewFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
   cancelFunctionCallContract,

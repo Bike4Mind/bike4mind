@@ -35,6 +35,7 @@ vi.mock('./access', () => ({
 }));
 
 import { resolveOrganizationCallableFunctionsEnabled } from './access';
+import { findCallerFunction, listCallerFunctions } from './callerFunctions';
 import { dispatchFunctionCall } from './dispatch';
 import {
   canCallFunction,
@@ -498,6 +499,58 @@ describe('revoking', () => {
 
     await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
     expect(await CallableFunctionReview.countDocuments({ functionId: id, userId: PROJECT_MEMBER.id })).toBe(0);
+  });
+});
+
+describe('the caller list and lookup behind the public routes, unreviewed entries included', () => {
+  const reach = async (caller: { id: string }, id: string) => {
+    const listed = await listCallerFunctions(caller, { includeUnreviewed: true });
+    const lookup = await findCallerFunction(caller, { id });
+    return {
+      listed: listed.map(entry => [entry.fn.id, entry.access]),
+      found: 'found' in lookup ? lookup.found.access : lookup.refused,
+    };
+  };
+  const leave = (model: typeof Project | typeof Organization, id: string) => () =>
+    model.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { users: [] } });
+
+  it.each<[string, ICallableFunctionGrants, { id: string }, string, (id: string) => Promise<unknown>]>([
+    [
+      'a person the owner drops from the share',
+      { visibility: 'private', userIds: [PERSON.id] },
+      PERSON,
+      'person',
+      id => shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [STRANGER.id] }),
+    ],
+    [
+      'a person after the owner stops sharing',
+      { visibility: 'private', userIds: [PERSON.id] },
+      PERSON,
+      'person',
+      id => revokeCallableFunctionShare(OWNER, id),
+    ],
+    [
+      'a project member who leaves the project',
+      { visibility: 'project', projectId: PROJECT_ID, userIds: [] },
+      PROJECT_MEMBER,
+      'project',
+      leave(Project, PROJECT_ID),
+    ],
+    [
+      'an organization member who leaves the organization',
+      { visibility: 'organization', organizationId: ORG_ID, userIds: [] },
+      ORG_MEMBER,
+      'organization',
+      leave(Organization, ORG_ID),
+    ],
+  ])('reaches %s until that access ends, an allow on file or not', async (_name, grants, recipient, access, end) => {
+    const id = await seedLiveFunction(grants);
+    expect(await reach(recipient, id)).toEqual({ listed: [[id, access]], found: access });
+    expect(await reach(STRANGER, id)).toEqual({ listed: [], found: 'not_found' });
+
+    await reviewSharedCallableFunction(recipient, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    await end(id);
+    expect(await reach(recipient, id)).toEqual({ listed: [], found: 'not_found' });
   });
 });
 

@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1314 routes: 158 contracted, 11 aliases of another route, 380 with no static caller in `apps/client/app`.
+1315 routes: 159 contracted, 11 aliases of another route, 381 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 156 | 152 | 133 | 16 | 0 | 7 | 143 |
+| v1 | 157 | 153 | 134 | 16 | 0 | 7 | 144 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 6 | 1 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1937,6 +1937,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/functions/[id]/invoke` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/promote` | POST | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/recipient` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/review` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/share` | GET, PUT, DELETE | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/source` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/sources` | PUT | jwt+key | `functions:author` | - | yes | - | 0 |

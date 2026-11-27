@@ -1,18 +1,18 @@
 ---
 title: Functions
-description: List, read, and call your live functions over the API, get each result with a stamp of what it ran on, and write, test, promote, and share your functions.
+description: List, read, review, and call the live functions you own or that were shared with you, get each result with a stamp of what it ran on, and write, test, promote, and share your functions.
 sidebar_position: 7
 ---
 
 # Functions
 
-A function is a Python artifact you saved as a function and promoted to live after its tests passed on the server. You list your live functions with `GET /api/v1/functions`, read one with `GET /api/v1/functions/{id}`, and call one with `POST /api/v1/functions/{id}/invoke`. You can also [author a function](#author-a-function) from nothing to live and shared without opening the app. Use your deployment's base URL; the hosted URL is `https://app.bike4mind.com/api/v1`.
+A function is a Python artifact you saved as a function and promoted to live after its tests passed on the server. You list the live functions you reach with `GET /api/v1/functions`, read one with `GET /api/v1/functions/{id}`, and call one with `POST /api/v1/functions/{id}/invoke`. A function someone shared with you is [reviewed](#review-a-function-shared-with-you) with `POST /api/v1/functions/{id}/review` before you call it. You can also [author a function](#author-a-function) from nothing to live and shared without opening the app. Use your deployment's base URL; the hosted URL is `https://app.bike4mind.com/api/v1`.
 
 ## Create a Functions key
 
 In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope: it reaches only the calling routes on this page and the [MCP endpoint](./functions-mcp.md). Tick **Also write, test, promote, and share your functions** to add `functions:author`, which reaches only the [authoring routes](#author-a-function). The two may share a key, and a request to mint either together with any other scope is refused. `functions:author` calls nothing, and `functions:invoke` authors nothing. The Functions level appears only while callable functions are turned on for your account.
 
-Each call answers for the key's owner. A key reaches only the live functions its owner owns. A draft, a turned-off function, a function whose artifact was deleted, and another person's function all answer `404`, the same as an id that does not exist.
+Each call answers for the key's owner. A key reaches the live functions its owner owns and the live functions other people shared with them. A draft, a turned-off function, a function whose artifact was deleted, and another person's function that was not shared with you all answer `404`, the same as an id that does not exist.
 
 ## List your live functions
 
@@ -21,7 +21,17 @@ curl https://app.bike4mind.com/api/v1/functions \
   -H 'Authorization: Bearer <your-api-key>'
 ```
 
-The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `slug`, `description`, `trust_label`, `pin_version`, `pin_seq`, and `updated_at`. Pass `limit` and the previous `next_cursor` as `cursor` to read the next page; `next_cursor` is `null` on the last page.
+The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `slug`, `description`, `group`, `review_status`, `trust_label`, `pin_version`, `pin_seq`, and `updated_at`. Pass `limit` and the previous `next_cursor` as `cursor` to read the next page; `next_cursor` is `null` on the last page.
+
+`group` says whose the function is:
+
+| Group      | Meaning                                                                              |
+| ---------- | ------------------------------------------------------------------------------------ |
+| `own`      | You own it.                                                                          |
+| `shared`   | Another person shared it with you, by name or through a project or organization.     |
+| `platform` | Reserved for a function the platform publishes to everyone. No entry carries it now. |
+
+`review_status` is `null` on your own functions. On a function shared with you it is `needs_review` until you allow it, `allowed` once you have, and `withdrawn` after you take the allow back. A function whose interface changed since you allowed it reads `needs_review` again. Only an `allowed` function can be called. When two functions you reach have the same name, the shared one's `slug` ends in `_` and the last six characters of its id.
 
 ### Trust labels
 
@@ -52,7 +62,22 @@ curl https://app.bike4mind.com/api/v1/functions/<function-id> \
   -H 'Authorization: Bearer <your-api-key>'
 ```
 
-The response is `{ "data": { ... } }` with the list fields plus `input_schema` and `output_schema`, the JSON Schemas of the function's inputs and outputs. The pinned code is not returned.
+The response is `{ "data": { ... } }` with the list fields plus `input_schema` and `output_schema`, the JSON Schemas of the function's inputs and outputs, and three fields about a share: `shared_by` (the `name` of who shared it), `shared_via` (`person`, `project`, or `organization`), and `review_hash`. All three are `null` on your own functions. A function shared with you reads the same before and after you review it. The pinned code, its data files, and its sources are never returned.
+
+## Review a function shared with you
+
+A function someone shares with you is listed with `review_status: "needs_review"`, and a call to it answers `403` with `errorCode: "review_required"` until you allow it. Read it first, then send back the `review_hash` you were shown:
+
+```bash
+curl https://app.bike4mind.com/api/v1/functions/<function-id>/review \
+  -H 'Authorization: Bearer <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"allow","review_hash":"<review_hash>"}'
+```
+
+The answer is the function as a read returns it, now with `review_status: "allowed"`, and your next call runs. An allow keeps the mode you chose in the app for when chat and agent runs ask before calling it, or the default on a first allow; the API does not change it, and calls over this API never ask. Send `{"action":"withdraw"}` to take the allow back; calls are refused with `review_required` again until you allow it once more. This is the same review as **Allow calls** in the app, and either one shows in the other.
+
+The route needs `functions:invoke`. Only a function shared with you can be reviewed: your own function, a function not shared with you, and an id that does not exist answer `404`. If the function's interface changed after you read it, an allow answers `409` with `code: "review_conflict"`; read it again and allow the new `review_hash`. A withdraw of a function you never allowed answers `409` with `code: "not_reviewed"`.
 
 ## Call a function
 
@@ -170,8 +195,9 @@ A refused request carries `error` and, where the reason is one you can act on, `
 
 Errors use the shared error envelope described in [Errors](./errors.md).
 
-- `403`: the key does not hold the scope the route names (`functions:invoke` to list, read, and call; `functions:author` to author), or callable functions are turned off for your account.
-- `404`: the function is not one of your live functions (for an authoring route, not one of your functions), or a polled or cancelled call is not yours or has expired.
+- `403`: the key does not hold the scope the route names (`functions:invoke` to list, read, review, and call; `functions:author` to author), or callable functions are turned off for your account. A call to a function shared with you that you have not allowed, or whose allow you withdrew, answers `403` with `errorCode: "review_required"`; [review it](#review-a-function-shared-with-you) and call again.
+- `404`: the function is not one of your live functions or one shared with you (for an authoring route, not one of your functions), or a polled or cancelled call is not yours or has expired.
+- `409`: a review's `review_hash` no longer matches the function (`code: "review_conflict"`), or there is no allow to withdraw (`code: "not_reviewed"`).
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.

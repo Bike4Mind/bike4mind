@@ -3067,7 +3067,7 @@ export interface paths {
     };
     /**
      * List live functions
-     * @description Lists the key owner's live functions: Python artifacts saved as functions and promoted after their tests passed on the server. Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`.
+     * @description Lists the live functions the key owner reaches: Python artifacts saved as functions and promoted after their tests passed on the server. `group` says whose each one is. A function shared with the key owner is listed before they review it, with `review_status: "needs_review"`, and can be called once it reads `allowed`. Drafts and turned-off functions are not listed. Cursor-paginated: pass `next_cursor` back as `cursor` until it is `null`.
      */
     get: operations['listFunctions'];
     put?: never;
@@ -3091,7 +3091,7 @@ export interface paths {
     };
     /**
      * Get a live function
-     * @description Returns one live function with its contract: `input_schema` and `output_schema` are the JSON Schemas its inputs and outputs must fit, with each number field naming its `unit`.
+     * @description Returns one live function with its contract: `input_schema` and `output_schema` are the JSON Schemas its inputs and outputs must fit, with each number field naming its `unit`. A function shared with the key owner reads the same before and after their review, with who shared it and the `review_hash` an allow sends back. Never the code or its data.
      */
     get: operations['getFunction'];
     put?: never;
@@ -3108,6 +3108,26 @@ export interface paths {
      * @description Sets one setting. `enabled: false` turns the function off: nobody can call it, and it stays saved and shared for when you turn it back on.
      */
     patch: operations['updateFunction'];
+    trace?: never;
+  };
+  '/api/v1/functions/{id}/review': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Allow a function shared with you, or withdraw the allow
+     * @description Records the key owner's review of a function another person shared with them, as the review in the app does. `action: "allow"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. `action: "withdraw"` takes the allow back, so calls are refused with `review_required` until they allow it again. An allow keeps the mode the key owner chose in the app for when chat and agent runs ask before a call; this route does not set it. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a shared function can be reviewed: the key owner's own needs none.
+     */
+    post: operations['reviewFunction'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   '/api/v1/functions/{id}/invoke': {
@@ -16632,9 +16652,19 @@ export interface components {
     listFunctionsResponse200: {
       data: {
         id: string;
-        /** @description The function's name, fixed when it was saved. */
+        /** @description The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id. */
         slug: string;
         description: string;
+        /**
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @enum {string}
+         */
+        group: 'own' | 'shared' | 'platform';
+        /**
+         * @description Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`.
+         * @enum {string|null}
+         */
+        review_status: 'needs_review' | 'allowed' | 'withdrawn' | null;
         /**
          * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind.
          * @enum {string|null}
@@ -16651,9 +16681,19 @@ export interface components {
     getFunctionResponse200: {
       data: {
         id: string;
-        /** @description The function's name, fixed when it was saved. */
+        /** @description The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id. */
         slug: string;
         description: string;
+        /**
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @enum {string}
+         */
+        group: 'own' | 'shared' | 'platform';
+        /**
+         * @description Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`.
+         * @enum {string|null}
+         */
+        review_status: 'needs_review' | 'allowed' | 'withdrawn' | null;
         /**
          * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind.
          * @enum {string|null}
@@ -16672,8 +16712,97 @@ export interface components {
         output_schema: {
           [key: string]: unknown;
         };
+        /** @description Who shared the function, by display name. Null on the key owner's own. */
+        shared_by: {
+          name: string;
+        } | null;
+        /**
+         * @description How the share reaches the key owner: named, or through a project or organization they belong to.
+         * @enum {string|null}
+         */
+        shared_via: 'person' | 'project' | 'organization' | null;
+        /** @description The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own. */
+        review_hash: string | null;
       };
     };
+    reviewFunctionResponse200: {
+      data: {
+        id: string;
+        /** @description The function's name, fixed when it was saved. When two functions the key owner reaches share a name, a shared one ends in `_` and the last six characters of its id. */
+        slug: string;
+        description: string;
+        /**
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @enum {string}
+         */
+        group: 'own' | 'shared' | 'platform';
+        /**
+         * @description Null on the key owner's own functions. On another's: `needs_review` until the key owner allows it, and again after its interface changes; `allowed` once they have; `withdrawn` after they took the allow back. Only `allowed` can be called. See `POST /api/v1/functions/{id}/review`.
+         * @enum {string|null}
+         */
+        review_status: 'needs_review' | 'allowed' | 'withdrawn' | null;
+        /**
+         * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind.
+         * @enum {string|null}
+         */
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
+        /** @description The artifact version the function runs. */
+        pin_version: number;
+        /** @description The promotion that made this pin live: 1 for the first. */
+        pin_seq: number | null;
+        updated_at: string;
+        /** @description A JSON Schema object: `type: "object"`, `properties`, `required` and `additionalProperties: false`. Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless). */
+        input_schema: {
+          [key: string]: unknown;
+        };
+        /** @description A JSON Schema object: `type: "object"`, `properties`, `required` and `additionalProperties: false`. Each number field carries `unit`, an extension keyword naming its unit (`1` when dimensionless). */
+        output_schema: {
+          [key: string]: unknown;
+        };
+        /** @description Who shared the function, by display name. Null on the key owner's own. */
+        shared_by: {
+          name: string;
+        } | null;
+        /**
+         * @description How the share reaches the key owner: named, or through a project or organization they belong to.
+         * @enum {string|null}
+         */
+        shared_via: 'person' | 'project' | 'organization' | null;
+        /** @description The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own. */
+        review_hash: string | null;
+      };
+    };
+    reviewFunctionResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description `review_conflict`: the interface changed since `review_hash` was read. `not_reviewed`: nothing to withdraw.
+       * @enum {string}
+       */
+      code?: 'review_conflict' | 'not_reviewed';
+    };
+    /**
+     * @example {
+     *       "action": "allow",
+     *       "review_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+     *     }
+     */
+    reviewFunctionRequest:
+      | {
+          /** @enum {string} */
+          action: 'allow';
+          /** @description `review_hash` as `GET /api/v1/functions/{id}` returned it. */
+          review_hash: string;
+        }
+      | {
+          /** @enum {string} */
+          action: 'withdraw';
+        };
     invokeFunctionResponse200: {
       /** @description The outputs, checked against `output_schema`. */
       output: {
@@ -16721,6 +16850,33 @@ export interface components {
       call_id: string;
       /** @enum {string} */
       status: 'queued';
+    };
+    invokeFunctionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'account_suspended' | 'review_required';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
     };
     invokeFunctionResponse422: {
       error: string;
@@ -51559,7 +51715,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description No live function with that id belongs to the key owner. A draft, a turned-off function, one whose artifact was deleted, and another person's function all answer this same 404. */
+      /** @description No live function with that id is the key owner's or shared with them. A draft, a turned-off function, one whose artifact was deleted, and another person's function not shared with them all answer this same 404. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -52022,6 +52178,209 @@ export interface operations {
       };
     };
   };
+  reviewFunction: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The function id, as `id` in the list. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['reviewFunctionRequest'];
+      };
+    };
+    responses: {
+      /** @description The function after the review. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['reviewFunctionResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No live function with that id is shared with the key owner. Their own function, a function not shared with them, and a missing id all answer this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The interface changed since `review_hash` was read (`code: "review_conflict"`): read the function again and allow the new hash. Or a withdraw of a function never allowed (`code: "not_reviewed"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['reviewFunctionResponse409'];
+        };
+      };
+      /** @description The body does not fit the request schema. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   invokeFunction: {
     parameters: {
       query?: never;
@@ -52095,7 +52454,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations. */
+      /** @description The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations. Or, with `errorCode: "review_required"`, the function was shared with the key owner and its `review_status` is not `allowed`: allow it with `POST /api/v1/functions/{id}/review`, then call again. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -52115,10 +52474,10 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['invokeFunctionResponse403'];
         };
       };
-      /** @description No live function with that id belongs to the key owner. A draft, a turned-off function, one whose artifact was deleted, and another person's function all answer this same 404. */
+      /** @description No live function with that id is the key owner's or shared with them. A draft, a turned-off function, one whose artifact was deleted, and another person's function not shared with them all answer this same 404. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

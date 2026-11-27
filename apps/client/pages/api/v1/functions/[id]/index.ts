@@ -8,7 +8,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import {
   assertFunctionsEnabled,
   functionsRateLimit,
-  loadLiveFunction,
+  resolveCallableFunction,
   toPublicFunctionDetail,
 } from '@server/callableFunctions/publicFunctions';
 import { toAuthoredFunction } from '@server/callableFunctions/authoredFunctions';
@@ -17,8 +17,8 @@ const getRoute = nextRouteForContract(getFunctionContract, {
   rateLimit: functionsRateLimit('/api/v1/functions/[id]'),
 }).get(async (req, res) => {
   await assertFunctionsEnabled(req.user);
-  const fn = await loadLiveFunction(req.user, req.validatedParams.id);
-  return res.json({ data: toPublicFunctionDetail(fn) });
+  const fn = await resolveCallableFunction(req.user, req.validatedParams.id);
+  return res.json({ data: await toPublicFunctionDetail(fn) });
 });
 
 const updateRoute = nextRouteForContract(updateFunctionContract, {

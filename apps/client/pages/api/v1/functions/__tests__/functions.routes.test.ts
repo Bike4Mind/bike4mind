@@ -13,6 +13,7 @@ import {
   invokeFunctionContract,
   isZodError,
   listFunctionsContract,
+  reviewFunctionContract,
   reviewHash,
   type FunctionContract,
 } from '@bike4mind/common';
@@ -153,6 +154,22 @@ vi.mock('@bike4mind/database', async () => ({
       h.reviews.find(r => r.functionId === functionId && r.userId === userId) ?? null,
     findForUser: async (userId: string, ids: string[]) =>
       h.reviews.filter(r => r.userId === userId && ids.includes(r.functionId as string)),
+    saveReview: async (review: Record<string, unknown>) => {
+      const saved = { ...review, enabled: true, reviewedAt: new Date() };
+      h.reviews = [...h.reviews.filter(r => r.functionId !== review.functionId || r.userId !== review.userId), saved];
+      return saved;
+    },
+    updateSettings: async (functionId: string, userId: string, settings: Record<string, unknown>) => {
+      const index = h.reviews.findIndex(r => r.functionId === functionId && r.userId === userId);
+      if (index < 0) return null;
+      h.reviews[index] = { ...h.reviews[index], ...settings };
+      return h.reviews[index];
+    },
+  },
+  // The email is returned whatever the projection, so a test can show the answers never carry it.
+  userRepository: {
+    find: async (filter: { _id: { $in: string[] } }) =>
+      filter._id.$in.filter(id => id === 'u2').map(id => ({ _id: id, name: 'Owner Two', email: OWNER_EMAIL })),
   },
   projectRepository: { find: async () => [] },
   organizationRepository: { findMembershipOrgIds: async () => [] },
@@ -208,6 +225,7 @@ const { default: getRoute } = await import('@pages/api/v1/functions/[id]/index')
 const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/v1/functions/[id]/invoke');
 const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
 const { default: cancelRoute } = await import('@pages/api/v1/functions/calls/[call_id]/cancel');
+const { default: reviewRoute } = await import('@pages/api/v1/functions/[id]/review');
 const { queueFunctionCall } = await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const {
   FUNCTION_INVOKE_BUDGET_MS,
@@ -249,6 +267,7 @@ const LIVE_ID = '6b0000000000000000000001';
 const DRAFT_ID = '6b0000000000000000000002';
 const OTHERS_ID = '6b0000000000000000000003';
 const MISSING_ID = '6b0000000000000000000009';
+const OWNER_EMAIL = 'owner.two@example.com';
 
 const fnDoc = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -300,7 +319,12 @@ async function call(handler: unknown, { method = 'GET', query = {}, body, user =
     await (handler as AnyHandler)(req, res);
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? (isZodError(error) ? 422 : 500);
-    return { status, body: { error: (error as Error).message } as Record<string, unknown> };
+    // The service's refusal reason, as errorHandler spreads it into the body.
+    const info = (error as { additionalInfo?: { code?: string } }).additionalInfo;
+    return {
+      status,
+      body: { error: (error as Error).message, ...(info?.code ? { code: info.code } : {}) } as Record<string, unknown>,
+    };
   }
   const text = res._getData();
   return {
@@ -346,6 +370,7 @@ describe('scopes and limits', () => {
     ['listFunctions', listFunctionsContract],
     ['getFunction', getFunctionContract],
     ['invokeFunction', invokeFunctionContract],
+    ['reviewFunction', reviewFunctionContract],
     ['getFunctionCall', getFunctionCallContract],
     ['cancelFunctionCall', cancelFunctionCallContract],
   ] as const;
@@ -373,6 +398,7 @@ describe('scopes and limits', () => {
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_INVOKE],
     ]);
   });
 
@@ -394,6 +420,7 @@ describe('scopes and limits', () => {
       '/api/v1/functions/[id]/invoke',
       '/api/v1/functions/calls/[call_id]',
       '/api/v1/functions/calls/[call_id]/cancel',
+      '/api/v1/functions/[id]/review',
     ]);
   });
 
@@ -427,6 +454,7 @@ describe('scopes and limits', () => {
     ['list', () => call(listRoute, {})],
     ['read', () => call(getRoute, { query: { id: LIVE_ID } })],
     ['invoke', () => invoke(LIVE_ID, { input: { load: 1, span: 2 } })],
+    ['review', () => call(reviewRoute, { method: 'POST', query: { id: LIVE_ID }, body: { action: 'withdraw' } })],
   ])('answers 403 when callable functions are off: %s', async (_name, run) => {
     h.enabled.value = false;
     expect(await run()).toEqual({
@@ -447,6 +475,8 @@ describe('list', () => {
           id: LIVE_ID,
           slug: 'beam_midspan_deflection',
           description: CONTRACT.description,
+          group: 'own',
+          review_status: null,
           trust_label: 'verified',
           pin_version: 5,
           pin_seq: 2,
@@ -492,6 +522,8 @@ describe('read', () => {
     expect(data.output_schema).toEqual(CONTRACT.outputs);
     expect(JSON.stringify(res.body)).not.toContain('def run');
     expect(data).not.toHaveProperty('tests');
+    expect(data).toMatchObject({ group: 'own', review_status: null, shared_by: null, shared_via: null });
+    expect(data.review_hash).toBeNull();
   });
 });
 
@@ -570,18 +602,40 @@ describe('a function shared with the caller', () => {
     });
   const as = { user: RECIPIENT, keyId: 'k3' };
 
-  it('is refused before review, listed and run as the recipient after it, and gone once revoked', async () => {
+  const REVIEW_REQUIRED = {
+    status: 403,
+    body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+  };
+
+  it('is listed and read before review, refused with review_required, run after it, and gone once revoked', async () => {
     shareWithRecipient();
-    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
-    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toMatchObject({ status: 404 });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other', group: 'shared', review_status: 'needs_review' }),
+    ]);
+    const unread = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect(unread.status).toBe(200);
+    expect(unread.body.data).toMatchObject({
+      id: OTHERS_ID,
+      description: CONTRACT.description,
+      group: 'shared',
+      review_status: 'needs_review',
+      trust_label: 'verified',
+      input_schema: CONTRACT.inputs,
+      output_schema: CONTRACT.outputs,
+      shared_by: { name: 'Owner Two' },
+      shared_via: 'person',
+      review_hash: await reviewHash(CONTRACT),
+    });
     const before = await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
-    expect(before).toEqual({ status: 403, body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE } });
+    expect(before).toEqual(REVIEW_REQUIRED);
     expect(h.runner).not.toHaveBeenCalled();
     expect(h.calls.at(-1)).toMatchObject({ callerUserId: RECIPIENT, ownerUserId: 'u2', reason: 'review_required' });
 
     await review();
     const list = await call(listRoute, { user: RECIPIENT });
-    expect(list.body.data).toEqual([expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other' })]);
+    expect(list.body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other', group: 'shared', review_status: 'allowed' }),
+    ]);
     const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
     expect((read.body.data as Record<string, unknown>).input_schema).toEqual(CONTRACT.inputs);
     expect(JSON.stringify(read.body)).not.toContain('def run');
@@ -603,6 +657,238 @@ describe('a function shared with the caller', () => {
       body: { error: 'Function not found' },
     });
     expect(h.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('neither lists nor reads a function shared with someone else, or one shared with no one', async () => {
+    shareWithRecipient();
+    const missing = { status: 404, body: { error: 'Function not found' } };
+    expect((await call(listRoute, { user: 'u4' })).body.data).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: 'u4' })).toEqual(missing);
+
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2' });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toEqual(missing);
+  });
+
+  it('lists, reads, and answers a review with no code, data, source, owner email, or call, before and after it', async () => {
+    shareWithRecipient();
+    const shared = h.functions[2]!;
+    const pin = shared.pin as Record<string, unknown>;
+    const dataPin = { name: 'table.csv', sha256: 'd'.repeat(64), bytes: 10, sourceFileId: 'file-1', pinnedAt: T0 };
+    h.functions[2] = {
+      ...shared,
+      pin: { ...pin, dataPins: [dataPin] },
+      sources: [{ name: 'feed.json', url: 'https://data.example.com/feed.json', mode: 'live' }],
+    };
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+    const callId = `6c${String(h.calls.length).padStart(22, '0')}`;
+    const listAndRead = async () => [
+      await call(listRoute, { user: RECIPIENT }),
+      await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT }),
+    ];
+    const before = await listAndRead();
+    const allowed = await call(reviewRoute, {
+      method: 'POST',
+      query: { id: OTHERS_ID },
+      body: { action: 'allow', review_hash: await reviewHash(CONTRACT) },
+      user: RECIPIENT,
+    });
+    const after = await listAndRead();
+
+    const listKeys = [
+      'description',
+      'group',
+      'id',
+      'pin_seq',
+      'pin_version',
+      'review_status',
+      'slug',
+      'trust_label',
+      'updated_at',
+    ];
+    const detailKeys = [...listKeys, 'input_schema', 'output_schema', 'review_hash', 'shared_by', 'shared_via'].sort();
+    for (const [list, read] of [before, after]) {
+      expect(Object.keys((list!.body.data as Record<string, unknown>[])[0]!).sort()).toEqual(listKeys);
+      expect(Object.keys(read!.body.data as Record<string, unknown>).sort()).toEqual(detailKeys);
+      expect((read!.body.data as Record<string, unknown>).shared_by).toEqual({ name: 'Owner Two' });
+    }
+    expect(Object.keys(allowed.body.data as Record<string, unknown>).sort()).toEqual(detailKeys);
+    expect(
+      [before[1], allowed, after[1]].map(res => (res!.body.data as { review_status: string }).review_status)
+    ).toEqual(['needs_review', 'allowed', 'allowed']);
+    const hidden = ['def run', 'table.csv', 'feed.json', 'data.example.com', 'file-1', 'd'.repeat(64), 'artifact-'];
+    for (const res of [...before, allowed, ...after]) {
+      expect(res!.status).toBe(200);
+      for (const word of [...hidden, OWNER_EMAIL, callId]) expect(JSON.stringify(res!.body)).not.toContain(word);
+    }
+  });
+
+  it('tells review_required apart from not allowed and not found, on a synchronous and an asynchronous call', async () => {
+    shareWithRecipient();
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 }, mode: 'async' }, as)).toEqual(REVIEW_REQUIRED);
+    expect(h.sent).toEqual([]);
+    expect(await invoke(DRAFT_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
+    h.enabled.value = false;
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 403,
+      body: { error: 'Callable functions are turned off for this account.' },
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+  });
+
+  it('answers review_required with its code when the dispatcher refuses the call', () => {
+    expect(invokeAnswer({ outcome: 'refused', reason: 'review_required', durationMs: 0, callId: 'c' })).toEqual(
+      REVIEW_REQUIRED
+    );
+  });
+});
+
+describe('review', () => {
+  const RECIPIENT = 'u3';
+  const UNSHARED_ID = '6b0000000000000000000007';
+  const as = { user: RECIPIENT, keyId: 'k3' };
+  const share = () => {
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      grants: { visibility: 'private', userIds: [RECIPIENT] },
+    });
+  };
+  const review = (id: string, body: unknown, user = RECIPIENT) =>
+    call(reviewRoute, { method: 'POST', query: { id }, body, user });
+  const allow = async (id = OTHERS_ID, user = RECIPIENT) =>
+    review(id, { action: 'allow', review_hash: await reviewHash(CONTRACT) }, user);
+  const run = () => invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+
+  beforeEach(() => {
+    share();
+    h.functions.push(fnDoc(UNSHARED_ID, { slug: 'beam_unshared', ownerKey: 'u2', userId: 'u2' }));
+    h.artifacts.push({ id: `artifact-${UNSHARED_ID}`, userId: 'u2', version: 5, deletedAt: null });
+  });
+
+  it('allows a shared function with the hash its read returned, so the next call runs', async () => {
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    const hash = (read.body.data as { review_hash: string }).review_hash;
+    const res = await review(OTHERS_ID, { action: 'allow', review_hash: hash });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      id: OTHERS_ID,
+      group: 'shared',
+      review_status: 'allowed',
+      shared_by: { name: 'Owner Two' },
+      review_hash: hash,
+      input_schema: CONTRACT.inputs,
+    });
+    expect(h.reviews).toEqual([
+      expect.objectContaining({ functionId: OTHERS_ID, userId: RECIPIENT, reviewHash: hash, approval: 'default' }),
+    ]);
+    expect(await run()).toMatchObject({ status: 200, body: { output: { deflection: 0.0081 } } });
+  });
+
+  it('keeps the approval mode chosen in the app across a withdraw and a re-allow', async () => {
+    const hash = await reviewHash(CONTRACT);
+    h.reviews.push({
+      functionId: OTHERS_ID,
+      userId: RECIPIENT,
+      reviewHash: hash,
+      approval: 'always_ask',
+      enabled: true,
+    });
+    expect((await review(OTHERS_ID, { action: 'withdraw' })).status).toBe(200);
+    expect(h.reviews).toEqual([expect.objectContaining({ approval: 'always_ask', enabled: false })]);
+    expect((await allow()).status).toBe(200);
+    expect(h.reviews).toEqual([expect.objectContaining({ approval: 'always_ask', enabled: true, reviewHash: hash })]);
+  });
+
+  it('sends an allowed function back to needs_review when its interface changes, and refuses the old hash', async () => {
+    const old = await reviewHash(CONTRACT);
+    await allow();
+    const changed = { ...CONTRACT, description: 'Midspan deflection of a beam, in meters.' };
+    h.functions[2] = { ...h.functions[2]!, contract: changed, description: changed.description };
+    const current = await reviewHash(changed);
+    expect(current).not.toBe(old);
+
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, review_status: 'needs_review' }),
+    ]);
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect(read.body.data).toMatchObject({ review_status: 'needs_review', review_hash: current });
+    expect(await run()).toEqual({
+      status: 403,
+      body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+
+    expect(await review(OTHERS_ID, { action: 'allow', review_hash: old })).toMatchObject({
+      status: 409,
+      body: { code: 'review_conflict' },
+    });
+    expect(h.reviews).toEqual([expect.objectContaining({ reviewHash: old })]);
+    expect((await review(OTHERS_ID, { action: 'allow', review_hash: current })).body.data).toMatchObject({
+      review_status: 'allowed',
+    });
+    expect(await run()).toMatchObject({ status: 200 });
+  });
+
+  it('withdraws the allow, so calls are refused with review_required until it is allowed again', async () => {
+    await allow();
+    const res = await review(OTHERS_ID, { action: 'withdraw' });
+    expect(res).toMatchObject({ status: 200, body: { data: { id: OTHERS_ID, review_status: 'withdrawn' } } });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, review_status: 'withdrawn' }),
+    ]);
+    expect(await run()).toEqual({
+      status: 403,
+      body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+    });
+    expect((await allow()).body.data).toMatchObject({ review_status: 'allowed' });
+    expect(await run()).toMatchObject({ status: 200 });
+    expect(h.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an allow of an interface that changed since it was read, and a withdraw of nothing', async () => {
+    expect(await review(OTHERS_ID, { action: 'allow', review_hash: 'f'.repeat(64) })).toMatchObject({
+      status: 409,
+      body: { code: 'review_conflict' },
+    });
+    expect(await review(OTHERS_ID, { action: 'withdraw' })).toMatchObject({
+      status: 409,
+      body: { code: 'not_reviewed' },
+    });
+    expect(h.reviews).toEqual([]);
+  });
+
+  it.each([
+    ["the key owner's own function", LIVE_ID, 'u1'],
+    ["the key owner's own draft", DRAFT_ID, 'u1'],
+    ["another person's function shared with someone else", OTHERS_ID, 'u4'],
+    ["another person's function shared with no one", UNSHARED_ID, RECIPIENT],
+    ['a missing id', MISSING_ID, RECIPIENT],
+    ['a malformed id', 'not-an-id', RECIPIENT],
+  ])('answers 404 to an allow or a withdraw of %s and saves nothing', async (_name, id, user) => {
+    for (const body of [{ action: 'allow', review_hash: await reviewHash(CONTRACT) }, { action: 'withdraw' }]) {
+      expect(await review(id, body, user)).toEqual({ status: 404, body: { error: 'Function not found' } });
+    }
+    expect(h.reviews).toEqual([]);
+  });
+
+  it.each([
+    ['an allow without review_hash', { action: 'allow' }],
+    ['a review_hash that is not a sha256', { action: 'allow', review_hash: 'abc' }],
+    ['an unknown action', { action: 'approve' }],
+    ['an extra field', { action: 'withdraw', enabled: false }],
+    [
+      'an approval mode, which only the app sets',
+      { action: 'allow', review_hash: 'a'.repeat(64), approval: 'always_allow' },
+    ],
+  ])('answers 422 to %s', async (_name, body) => {
+    expect((await review(OTHERS_ID, body)).status).toBe(422);
+    expect(h.reviews).toEqual([]);
   });
 });
 
