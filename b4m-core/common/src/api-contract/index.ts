@@ -11,6 +11,7 @@ export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
+export { createSessionTurnContract } from './contracts/sessionTurns.contract';
 export {
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
@@ -51,6 +52,10 @@ export {
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
 } from './contracts/assistantInstructions.contract';
+export {
+  getInterruptionFeedbackContract,
+  putInterruptionFeedbackContract,
+} from './contracts/interruptionFeedback.contract';
 export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
@@ -216,7 +221,28 @@ export {
 export {
   listFunctionsContract,
   getFunctionContract,
+  reviewFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
 } from './contracts/functions.contract';
+export {
+  createFunctionContract,
+  listAuthoredFunctionsContract,
+  getAuthoredFunctionContract,
+  saveFunctionCodeContract,
+  updateFunctionContract,
+  deleteFunctionContract,
+  setFunctionExamplesContract,
+  runFunctionTestsContract,
+  pinFunctionDataContract,
+  unpinFunctionDataContract,
+  setFunctionSourcesContract,
+  promoteFunctionContract,
+  getFunctionShareContract,
+  shareFunctionContract,
+  unshareFunctionContract,
+  findFunctionRecipientContract,
+  getFunctionCallSummaryContract,
+} from './contracts/functionsAuthoring.contract';
 export { CONTRACTS } from './contracts';

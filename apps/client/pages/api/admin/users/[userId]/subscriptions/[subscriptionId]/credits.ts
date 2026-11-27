@@ -11,7 +11,8 @@ import {
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
+import { assertDelegateCanChangeSubscription, belongsToOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
@@ -54,12 +55,25 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       throw new NotFoundError('Subscription not found');
     }
     await assertDelegateCanChangeSubscription(req.user, subscription, 'change the credits of');
+    const organization =
+      subscription.ownerType === SubscriptionOwnerType.Organization
+        ? await organizationRepository.findById(subscription.ownerId)
+        : null;
     // Same owner rule as the comp route: the user, or the organization's billing owner.
     const ownerUserId =
-      subscription.ownerType === SubscriptionOwnerType.Organization
-        ? (await organizationRepository.findById(subscription.ownerId))?.userId
-        : subscription.ownerId;
-    if (ownerUserId && isSelfOrImpersonator(req.user, ownerUserId)) {
+      subscription.ownerType === SubscriptionOwnerType.Organization ? organization?.userId : subscription.ownerId;
+    const selfGrant = organization
+      ? belongsToOrganization(req.user, organization)
+      : isSelfOrImpersonator(req.user, subscription.ownerId);
+    // Only a strict lowering of an existing override leaves an org's credits no higher.
+    const isRaiseOrClear =
+      creditsPerCycle === null ||
+      subscription.customCreditsPerCycle == null ||
+      creditsPerCycle > subscription.customCreditsPerCycle;
+    if (
+      (ownerUserId && isSelfOrImpersonator(req.user, ownerUserId)) ||
+      (organization && isRaiseOrClear && isHeldSelfGrant(req.user, selfGrant))
+    ) {
       await denySelfAdminAction(req, {
         action: 'user.credits.denied',
         attempted: 'user.credits.adjusted',
@@ -100,6 +114,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           subscriptionId,
           previousCreditsPerCycle,
           creditsPerCycle: effectiveCreditsPerCycle,
+          selfGrant,
         },
       });
     };
@@ -153,7 +168,6 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     // Handle team/organization subscription
     if (subscription.ownerType === SubscriptionOwnerType.Organization) {
       // This is a team subscription - update customCreditsPerCycle
-      const organization = await organizationRepository.findById(subscription.ownerId);
       if (!organization) {
         throw new NotFoundError('Organization not found for this subscription');
       }

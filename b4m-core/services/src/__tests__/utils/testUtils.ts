@@ -61,9 +61,12 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
   listAccessibleAfterId: vi.fn(),
+  findAccessibleReferencing: vi.fn().mockResolvedValue([]),
+  findParticipatingReferencing: vi.fn().mockResolvedValue([]),
   removeSession: vi.fn(),
   pullFileReferences: vi.fn(),
-  findAllBySessionId: vi.fn(),
+  pullSessionReferences: vi.fn(),
+  findAllBySessionId: vi.fn().mockResolvedValue([]),
 });
 
 export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
@@ -95,6 +98,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   deleteManyInIds: vi.fn(),
   softDeleteByIdsForUserBatch: vi.fn(),
   findAllByIds: vi.fn(),
+  findSharingGrantFilesBySession: vi.fn().mockResolvedValue([]),
   findPageByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
   findExistingIdsIncludingDeletedByIds: vi.fn(),
@@ -221,6 +225,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     pullKnowledgeIdsForUsers: vi.fn(),
     searchByUserId: vi.fn(),
     listByUserId: vi.fn(),
+    listChangesByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),
     findPageByIds: vi.fn(),

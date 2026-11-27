@@ -109,8 +109,11 @@ export const secrets = {
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
   // KMS-wrapped per-stage data key (base64). Minted by packages/scripts/src/create-wrapped-stage-data-key.ts
   SECRET_DATA_KEY_WRAPPED: new sst.Secret('SECRET_DATA_KEY_WRAPPED', 'not-configured'),
-  // Wraps memory principal keys; generate once (openssl rand -hex 32) and never rotate in place
+  // Wraps memory principal keys (openssl rand -hex 32). Rotate only by the procedure in
+  // docs/security/credential-storage.md: a plain replacement makes every wrapped key unreadable.
   MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
+  // The outgoing MEMORY_KEY_SECRET while rotating; 'not-configured' otherwise
+  MEMORY_KEY_SECRET_PREVIOUS: new sst.Secret('MEMORY_KEY_SECRET_PREVIOUS', 'not-configured'),
   // Previous encryption key for key rotation - set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
   // Root secret for HMAC signatures (per-purpose keys are derived from it). Unset: signatures use

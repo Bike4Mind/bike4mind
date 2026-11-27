@@ -61,60 +61,35 @@ function createLabeledPayload(
   } as GitHubPullRequestPayload;
 }
 
-describe('PullRequestHandler - labeled (SRE fix verdict, #271)', () => {
+describe('PullRequestHandler - SRE tracking docs', () => {
   let handler: PullRequestHandler;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockNotify.mockResolvedValue({ notifiedUserIds: [], failedNotifications: [] });
-    mockSetFixVerdict.mockResolvedValue({ id: 'tracking-1', fixPrNumber: 42 });
+    mockFindByPrNumber.mockResolvedValue({ id: 'tracking-1', affectedUserIds: ['u1'], errorMessage: 'boom' });
     const notifier = new GitHubSlackNotifier({} as never);
     handler = new PullRequestHandler(notifier);
   });
 
-  it('maps sre-fix-correct on an SRE PR to a "correct" verdict keyed by PR number', async () => {
-    await handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct', prNumber: 77, sender: 'alice' }));
-
-    expect(mockSetFixVerdict).toHaveBeenCalledTimes(1);
-    // Scoped by repoSlug: PR numbers are unique per-repo, not globally.
-    expect(mockSetFixVerdict).toHaveBeenCalledWith(
-      77,
-      expect.objectContaining({ value: 'correct', by: 'alice', at: expect.any(Date) }),
-      'owner/repo'
-    );
-  });
-
-  it('maps sre-fix-incorrect to an "incorrect" verdict (opposite label overrides via last-write-wins)', async () => {
-    await handler.handle(createLabeledPayload({ labelName: 'sre-fix-incorrect', prNumber: 77 }));
-
-    expect(mockSetFixVerdict).toHaveBeenCalledWith(77, expect.objectContaining({ value: 'incorrect' }), 'owner/repo');
-  });
-
-  it('ignores non-verdict labels (no persistence)', async () => {
-    await handler.handle(createLabeledPayload({ labelName: 'bug' }));
+  it('does not record a verdict from a tenant webhook', async () => {
+    await handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct', prNumber: 77 }), undefined, {
+      orgId: 'org-1',
+    });
     expect(mockSetFixVerdict).not.toHaveBeenCalled();
   });
 
-  it('ignores a labeled event with no label (webhook shape drift - no persistence)', async () => {
-    const payload = createLabeledPayload({ labelName: 'sre-fix-correct' });
-    delete (payload as { label?: unknown }).label;
-    await expect(handler.handle(payload)).resolves.toBeDefined();
-    expect(mockSetFixVerdict).not.toHaveBeenCalled();
-  });
+  it('notifies on a merged sre-fix PR without touching its tracking doc', async () => {
+    const payload = createLabeledPayload();
+    payload.action = 'closed';
+    payload.pull_request.merged = true;
+    payload.pull_request.merged_by = { login: 'merger' } as never;
 
-  it('ignores verdict labels on non-SRE PRs (branch is not sre-fix/*)', async () => {
-    await handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct', branchRef: 'feat/some-feature' }));
-    expect(mockSetFixVerdict).not.toHaveBeenCalled();
-  });
+    await handler.handle(payload, undefined, { orgId: 'org-1' });
 
-  it('does not throw when no tracking doc exists for the SRE PR', async () => {
-    mockSetFixVerdict.mockResolvedValueOnce(null);
-    await expect(handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct' }))).resolves.toBeDefined();
-    expect(mockSetFixVerdict).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not throw when persistence rejects', async () => {
-    mockSetFixVerdict.mockRejectedValueOnce(new Error('db down'));
-    await expect(handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct' }))).resolves.toBeDefined();
+    expect(mockNotify).toHaveBeenCalledWith('prMerged', ['sre-agent[bot]'], expect.any(Function), { orgId: 'org-1' });
+    expect(mockFindByPrNumber).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockCreateInboxMessage).not.toHaveBeenCalled();
   });
 });

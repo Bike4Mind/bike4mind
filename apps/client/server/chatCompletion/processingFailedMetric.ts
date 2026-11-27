@@ -8,8 +8,11 @@ import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'processingFailedMetric' } });
 
-/** Completion entry point a failure came from: internal `/process`, the CLI SSE route, or embed chat. */
-export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'embed';
+/**
+ * Completion entry point a failure came from: internal `/process`, the CLI SSE route, embed chat, or
+ * the session turns SSE route.
+ */
+export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'embed' | 'session-turns';
 
 /**
  * Count one completion failure on the operator-facing `ProcessingFailed` metric. Never rejects and

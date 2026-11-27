@@ -176,7 +176,8 @@ describe('stdio solver tools', () => {
     const client = await connect(await buildStdioMcpServer(options));
     const names = await toolNames(client);
 
-    expect(names).toContain('list_notebooks');
+    // The key's scopes also decide the other tools: a notebooks tool needs its own scope, and an unidentified key keeps all.
+    expect(names.includes('list_notebooks')).toBe(scopes.length === 0 || scopes.includes('notebooks:read'));
     expect(names.filter(n => n.startsWith('optihashi_'))).toEqual([]);
   });
 

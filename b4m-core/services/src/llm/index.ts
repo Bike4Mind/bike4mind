@@ -60,7 +60,7 @@ export * from './LakeContradictionReadingService';
 export * from './SmallLLMService';
 export * from './smallLLMHelpers';
 export * from './reranker';
-export { StatusManager } from './StatusManager';
+export { StatusManager, type ClientFrameSender } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
 export {
   serpApiSearch,

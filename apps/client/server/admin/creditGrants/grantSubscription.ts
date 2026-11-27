@@ -16,7 +16,8 @@ import { grantIndividualAdminSubscription } from '@server/subscriptions/grantInd
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { assertDelegateCanCreditUser } from './delegateTargets';
+import { assertDelegateCanCreditUser, organizationMemberIds } from './delegateTargets';
+import { assertApproverOutsideTargets, isApprovedSelfGrant } from './selfGrant';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -69,6 +70,27 @@ export async function validateGrantSubscription({ seats, userId }: GrantSubscrip
   return user;
 }
 
+/**
+ * Accounts the grant credits: the target user plus, for a team grant, the members of the organization it credits
+ * or the billing owner of the one it creates. A missing organization adds none; the grant itself reports it.
+ */
+export async function grantSubscriptionTargetIds({
+  userId,
+  subscriptionType,
+  organizationId,
+  billingOwnerId,
+}: Pick<GrantSubscriptionParams, 'userId' | 'subscriptionType' | 'organizationId' | 'billingOwnerId'>) {
+  const ids = [userId];
+  if (subscriptionType !== 'team') return ids;
+  if (organizationId) {
+    const organization = await organizationRepository.findById(organizationId);
+    if (organization) ids.push(...organizationMemberIds(organization));
+  } else if (billingOwnerId) {
+    ids.push(billingOwnerId);
+  }
+  return ids;
+}
+
 /** Grants the subscription as `req.user`; shared by the route and the approval executor. */
 export async function grantSubscription(req: Request, params: GrantSubscriptionParams, approval?: AdminApproval) {
   const teamPlan = await getTeamPlanSettings();
@@ -86,10 +108,16 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
   if (params.creditsAtRequest !== undefined && grantSubscriptionCredits(params, teamPlan) !== params.creditsAtRequest) {
     throw new ConflictError('The credits this grant adds changed since it was requested. Submit a new request.');
   }
-  const selfGrant =
-    isSelfOrImpersonator(req.user!, userId) || (approval?.requestedBy.selfIds.includes(userId) ?? false);
+  const targetIds = await grantSubscriptionTargetIds(params);
+  const selfGrant = targetIds.some(
+    id => isSelfOrImpersonator(req.user!, id) || (approval?.requestedBy.selfIds.includes(id) ?? false)
+  );
   const user = await validateGrantSubscription(params, teamPlan);
-  await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
+  if (!isApprovedSelfGrant(approval, targetIds)) {
+    await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
+  } else if (subscriptionType === 'team') {
+    assertApproverOutsideTargets(req.user!, targetIds);
+  }
 
   const now = dayjs();
   const periodStartsAt = now.toDate();

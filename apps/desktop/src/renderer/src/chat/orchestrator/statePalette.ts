@@ -1,6 +1,6 @@
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import type { AgentState } from '@shared/agentState';
-import type { SkinSummary, SkinTokens } from '@shared/mods';
+import type { SceneSkin, SkinSummary, SkinTokens } from '@shared/mods';
 import { NEEDS_YOU_AMBER, contrastRatio, looksLikeNeedsYou } from '@shared/needsYouColor';
 
 /**
@@ -34,8 +34,6 @@ const stateVariable = (state: SkinnableState): string => `--b4m-skin-state-${sta
 const softVariable = (state: SkinnableState): string => `--b4m-skin-state-${state}-soft`;
 export const SKIN_STAGE_VARIABLE = '--b4m-skin-stage';
 export const SKIN_CARD_VARIABLE = '--b4m-skin-card';
-/** Read by name in aquarium/Aquarium.tsx, which builds on the snapshot contract alone. */
-export const SKIN_AQUARIUM_BACKDROP_VARIABLE = '--b4m-skin-aquarium-backdrop';
 
 export const stateJoyColor = (state: AgentState): ColorPaletteProp => STATE_PALETTE[state].joy;
 
@@ -74,12 +72,13 @@ export interface SkinTheme {
   states: Partial<Record<SkinnableState, string>>;
   surfaces: { stage?: string; card?: string };
   fontFamily?: string;
-  sprites: { tavernBackdrop?: string; aquariumBackdrop?: string };
+  /** Keyed by scene id; scene/sceneSkin.ts merges a block over its scene and validates the result. */
+  scenes: Readonly<Record<string, SceneSkin>>;
   /** No `needs-you` key, by construction: that sound stays the built-in chime. */
   sounds: { finale?: string };
 }
 
-export const DEFAULT_SKIN_THEME: SkinTheme = { id: null, states: {}, surfaces: {}, sprites: {}, sounds: {} };
+export const DEFAULT_SKIN_THEME: SkinTheme = { id: null, states: {}, surfaces: {}, scenes: {}, sounds: {} };
 
 /**
  * A skin's tokens over the shared palette. This is where the lock lives: whatever a skin says for
@@ -89,7 +88,7 @@ export const DEFAULT_SKIN_THEME: SkinTheme = { id: null, states: {}, surfaces: {
  */
 export function mergeSkinTheme(skin: SkinSummary | undefined): SkinTheme {
   if (!skin || skin.status !== 'ok') return DEFAULT_SKIN_THEME;
-  const { states = {}, surfaces = {}, type = {}, sprites = {}, sounds = {} } = skin.tokens;
+  const { states = {}, surfaces = {}, type = {}, scenes = {}, sounds = {} } = skin.tokens;
   const skinnedStates: SkinTheme['states'] = {};
   for (const [state, color] of Object.entries(states) as [AgentState, string | undefined][]) {
     if (color !== undefined && isSkinnable(state) && !looksLikeNeedsYou(color)) skinnedStates[state] = color;
@@ -102,7 +101,8 @@ export function mergeSkinTheme(skin: SkinSummary | undefined): SkinTheme {
     states: skinnedStates,
     surfaces: skinnedSurfaces,
     ...(type.family ? { fontFamily: FONT_STACKS[type.family] } : {}),
-    sprites: { ...sprites },
+    // Kept by reference: sceneSkin.ts caches each merged scene on its block, so a re-list re-merges once.
+    scenes,
     sounds: sounds.finale ? { finale: sounds.finale } : {},
   };
 }
@@ -124,8 +124,5 @@ export function skinCssVariables(theme: SkinTheme, mode: 'light' | 'dark'): Reco
   }
   if (theme.surfaces.stage && readable(theme.surfaces.stage)) variables[SKIN_STAGE_VARIABLE] = theme.surfaces.stage;
   if (theme.surfaces.card && readable(theme.surfaces.card)) variables[SKIN_CARD_VARIABLE] = theme.surfaces.card;
-  if (theme.sprites.aquariumBackdrop) {
-    variables[SKIN_AQUARIUM_BACKDROP_VARIABLE] = `url(${JSON.stringify(theme.sprites.aquariumBackdrop)})`;
-  }
   return variables;
 }

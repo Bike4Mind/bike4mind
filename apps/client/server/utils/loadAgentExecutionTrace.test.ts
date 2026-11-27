@@ -114,6 +114,82 @@ describe('loadAgentExecutionTrace authorization', () => {
   });
 });
 
+describe('loadAgentExecutionTrace viewer redaction', () => {
+  const steps = [
+    {
+      type: 'action',
+      content: 'read_file',
+      metadata: { toolName: 'read_file', toolInput: { path: 'owner-only-argument' }, timestamp: 1, iteration: 0 },
+    },
+    {
+      type: 'observation',
+      content: 'verbatim tool output',
+      metadata: { toolName: 'read_file', confidenceReason: 'owner-only reasoning', timestamp: 2 },
+    },
+    { type: 'final_answer', content: 'summary', metadata: { timestamp: 3 } },
+  ];
+  const completed = {
+    ...baseExecution,
+    status: 'completed' as const,
+    result: { answer: 'summary', steps, totalIterations: 1 },
+  };
+
+  it('keeps observation content for the session owner', async () => {
+    mockFindExecution.mockResolvedValue(completed);
+
+    const trace = await loadAgentExecutionTrace('exec1', 'u1');
+
+    expect(trace?.isOwner).toBe(true);
+    expect(trace?.steps[1].content).toBe('verbatim tool output');
+  });
+
+  it('blanks observation content for a share holder while keeping the rest of the trace', async () => {
+    mockFindExecution.mockResolvedValue(completed);
+    mockFindSession.mockResolvedValue({ id: 's1', userId: 'owner', users: [{ userId: 'viewer' }] });
+
+    const trace = await loadAgentExecutionTrace('exec1', 'viewer');
+
+    expect(trace?.isOwner).toBe(false);
+    expect(trace?.steps.map(step => step.type)).toEqual(['action', 'observation', 'final_answer']);
+    expect(trace?.steps[1].content).toBe('');
+    expect(trace?.steps[0].content).toBe('read_file');
+    expect(trace?.steps[0].metadata).toEqual({ toolName: 'read_file', timestamp: 1, iteration: 0 });
+    expect(trace?.steps[1].metadata).toEqual({ toolName: 'read_file', timestamp: 2 });
+    expect(trace?.answer).toBe('summary');
+  });
+
+  it('keeps tool input and confidence text for the session owner', async () => {
+    mockFindExecution.mockResolvedValue(completed);
+
+    const trace = await loadAgentExecutionTrace('exec1', 'u1');
+
+    expect(trace?.steps[0].metadata?.toolInput).toEqual({ path: 'owner-only-argument' });
+    expect(trace?.steps[1].metadata?.confidenceReason).toBe('owner-only reasoning');
+  });
+
+  it('applies the same redaction to the live checkpoint of an in-flight run', async () => {
+    mockFindExecution.mockResolvedValue({
+      ...baseExecution,
+      status: 'running' as const,
+      checkpoint: { steps, iteration: 1 },
+    });
+    mockFindSession.mockResolvedValue({ id: 's1', userId: 'owner', users: [{ userId: 'viewer' }] });
+
+    const trace = await loadAgentExecutionTrace('exec1', 'viewer');
+
+    expect(JSON.stringify(trace?.steps)).not.toContain('verbatim tool output');
+    expect(JSON.stringify(trace?.steps)).not.toContain('owner-only-argument');
+    expect(JSON.stringify(trace?.steps)).not.toContain('owner-only reasoning');
+  });
+
+  it('keeps observation content for the user who started the run', async () => {
+    mockFindExecution.mockResolvedValue({ ...completed, userId: 'editor' });
+    mockFindSession.mockResolvedValue({ id: 's1', userId: 'owner', users: [{ userId: 'editor' }] });
+
+    expect((await loadAgentExecutionTrace('exec1', 'editor'))?.steps[1].content).toBe('verbatim tool output');
+  });
+});
+
 describe('loadAgentExecutionTrace step progress', () => {
   it('is null for a run without a captured plan, so clients fall back to indeterminate progress', async () => {
     mockFindExecution.mockResolvedValue({ ...baseExecution, status: 'running' as const });

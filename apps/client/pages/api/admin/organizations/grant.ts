@@ -5,7 +5,8 @@ import { GrantOrgSchema, grantOrg, validateGrantOrg } from '@server/admin/credit
 import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
@@ -14,9 +15,10 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { name, ownerEmail, seats, initialCredits, reason };
     const request = req as unknown as Request;
-    const gate = await creditGrantNeedsApproval(initialCredits, req.user.id);
+    const owner = await validateGrantOrg(params);
+    const heldSelfGrant = isHeldSelfGrant(req.user, isSelfOrImpersonator(req.user, owner.id));
+    const gate = await creditGrantNeedsApproval(initialCredits, req.user.id, { heldSelfGrant });
     if (gate.policy) {
-      const owner = await validateGrantOrg(params);
       await assertDelegateCanCreditUser(req.user, owner.id, 'grant an organization to');
       const pending = await requestApproval(
         request,
@@ -25,8 +27,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           params,
           summary: `Grant org ${name} with ${initialCredits} credits`,
           reason,
-          requiredPermission: 'credits:adjust',
-          requiresFullAdmin: false,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
         gate.policy
       );

@@ -102,7 +102,6 @@ describe('snapshotView', () => {
 
   it.each([
     ['tile-wall', 'orchestrator-tile-a'],
-    ['aquarium', 'orchestrator-fish-a'],
     ['swimlanes', 'orchestrator-swimlanes-lane-a'],
     ['constellation', 'orchestrator-constellation-node-a'],
     ['transit', 'orchestrator-transit-agent-a'],

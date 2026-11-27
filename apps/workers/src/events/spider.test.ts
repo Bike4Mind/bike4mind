@@ -127,8 +127,8 @@ describe('Spider - determineSessionOperations', () => {
       expect(result.summarize).toBe(true);
     });
 
-    // The backoff bounds a notebook the model can never tag: the handler bills before it parses,
-    // so without this the same notebook buys a completion on every run.
+    // The backoff bounds a notebook the model can never tag: a parse failure still spends (and
+    // bills) a completion, so without this the same notebook buys one on every run.
     it('should skip tagging inside the retry backoff', () => {
       const session = createMockSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS / 2) });
       const result = determineSessionOperations(session, allOperations);
@@ -656,5 +656,20 @@ describe('Spider - Edge Cases', () => {
     expect(deps.publishCuration).not.toHaveBeenCalled();
     expect(deps.publishSummarize).not.toHaveBeenCalled();
     expect(deps.publishTag).not.toHaveBeenCalled();
+  });
+
+  it('keeps notebook names out of the logs', async () => {
+    const config = createJobConfig();
+
+    await processSession(createMockSession({ name: 'Private Project Name' }), config, deps);
+    const nameless = createMockSession({ name: 'Private Project Name' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (nameless as any).id = null;
+    await processSession(nameless, config, deps);
+
+    expect(deps.publishCuration).toHaveBeenCalled();
+    const logger = vi.mocked(deps.logger);
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('Private Project Name');
   });
 });

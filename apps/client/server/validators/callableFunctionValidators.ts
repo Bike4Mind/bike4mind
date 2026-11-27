@@ -1,7 +1,10 @@
 import {
   CALLABLE_FUNCTION_APPROVAL_MODES,
+  CALLABLE_FUNCTION_DATA_LIMITS,
   CALLABLE_FUNCTION_EXAMPLE_LIMITS,
   CALLABLE_FUNCTION_GRANT_LIMITS,
+  CALLABLE_FUNCTION_SOURCE_MODES,
+  CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS,
   CallableFunctionGrantVisibilitySchema,
   FUNCTION_CONTRACT_LIMITS,
   MCP_TOOL_APPROVAL_MODES,
@@ -22,13 +25,7 @@ export const callableFunctionCreateBodySchema = z
   .object({ artifactId: z.string().trim().min(1).max(200), ...pinFields })
   .strict();
 
-export const callableFunctionPinBodySchema = z
-  .object({
-    ...pinFields,
-    /** Update a promoted tool even though the new contract breaks its promoted one; it returns to draft. */
-    acceptBreaking: z.literal(true).optional(),
-  })
-  .strict();
+export const callableFunctionPinBodySchema = z.object(pinFields).strict();
 
 /** One setting per request: turn the tool on or off, or set when chat asks before a call. */
 export const callableFunctionPatchBodySchema = z.union([
@@ -39,6 +36,23 @@ export const callableFunctionPatchBodySchema = z.union([
 /** Shape only: the registry checks the name pattern, the owner's access to the file, and the limits. */
 export const callableFunctionDataPinBodySchema = z
   .object({ fileId: z.string().trim().min(1).max(200), name: z.string().min(1).max(64) })
+  .strict();
+
+/** Shape only: the registry checks names, and each URL's origin. */
+export const callableFunctionSourcesBodySchema = z
+  .object({
+    sources: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(64),
+            url: z.string().min(1).max(CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS),
+            mode: z.enum(CALLABLE_FUNCTION_SOURCE_MODES),
+          })
+          .strict()
+      )
+      .max(CALLABLE_FUNCTION_DATA_LIMITS.maxSources),
+  })
   .strict();
 
 /**

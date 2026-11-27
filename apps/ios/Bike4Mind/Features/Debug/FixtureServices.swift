@@ -26,6 +26,7 @@
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let busyBlocks: any BusyBlocksAPI = FixtureBusyBlocksAPI()
+    static let interruptionFeedback: any InterruptionFeedbackAPI = FixtureInterruptionFeedbackAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -355,6 +356,18 @@
       }
     }
 
+    private actor FixtureInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+      private var stored = InterruptionFeedback()
+
+      func feedback() async throws -> InterruptionFeedback { stored }
+
+      func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+        if let value = patch.agentCompleted { stored.agentCompleted = value }
+        if let value = patch.agentFailed { stored.agentFailed = value }
+        return stored
+      }
+    }
+
     private struct NoopPushTokenAPI: PushTokenAPI {
       func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {}
       func unregisterPushToken(_ token: String) async throws {}
@@ -399,6 +412,15 @@
         guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
         return session
       }
+
+      func renameSession(id: String, name: String) async throws -> SessionSummary {
+        let current = try await session(id: id)
+        return SessionSummary(
+          id: id, name: name, lastUsedModel: current.lastUsedModel, firstCreated: current.firstCreated,
+          lastUpdated: Date())
+      }
+
+      func deleteSession(id: String) async throws {}
 
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]

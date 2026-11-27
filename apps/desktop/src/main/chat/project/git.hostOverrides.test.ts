@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_GIT_CONFIG_ARGS } from '../../git/hostGitArgs';
 
@@ -12,13 +15,26 @@ vi.mock('../tools/userPath', async importOriginal => ({
 
 import { fetchRemoteFor, git } from './git';
 
+type Callback = (
+  error: NodeJS.ErrnoException | null,
+  stdout: string | { stdout: string; stderr: string },
+  stderr?: string
+) => void;
+
+/** Answers the config read with `config`, the submodule listing with none, and any other call with no output. */
+const answer = (config: string) => (_cmd: string, args: string[], _opts: unknown, cb: Callback) => {
+  if (args[0] === 'config') return cb(null, config);
+  if (args.includes('ls-files')) return cb(null, '');
+  return cb(null, { stdout: '', stderr: '' });
+};
+const subcommands = () =>
+  execFile.mock.calls.map(([, args]) => args.find((arg: string) => !arg.startsWith('-') && !arg.includes('=')));
+
 describe('git host overrides', () => {
   beforeEach(() => {
     program.git = 'C:\\Git\\cmd\\git.exe';
     execFile.mockReset();
-    execFile.mockImplementation((_cmd, args, _opts, cb) =>
-      args[0] === 'config' ? cb(null, '') : cb(null, { stdout: '', stderr: '' })
-    );
+    execFile.mockImplementation(answer(''));
   });
 
   it('prefixes the config overrides on every call, running git from its resolved path', async () => {
@@ -28,12 +44,10 @@ describe('git host overrides', () => {
   });
 
   it('pins the drivers the repository sets before a call that reads work-tree files', async () => {
-    execFile.mockImplementation((_cmd, args, _opts, cb) =>
-      args[0] === 'config' ? cb(null, 'local\0filter.x.clean\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
-    );
+    execFile.mockImplementation(answer('local\0filter.x.clean\ntouch marker\0'));
     await git('/repo', ['status', '--porcelain']);
-    expect(execFile.mock.calls.map(([, args]) => args[0])).toEqual(['config', '-c']);
-    expect(execFile.mock.calls[1][1]).toEqual([
+    expect(subcommands().sort()).toEqual(['config', 'ls-files', 'status']);
+    expect(execFile.mock.calls.at(-1)?.[1]).toEqual([
       ...HOST_GIT_CONFIG_ARGS,
       '-c',
       'filter.x.clean=',
@@ -43,13 +57,45 @@ describe('git host overrides', () => {
   });
 
   it('refuses a branch switch, without running it, while a filter only the repository sets is emptied', async () => {
-    execFile.mockImplementation((_cmd, args, _opts, cb) =>
-      args[0] === 'config' ? cb(null, 'local\0filter.x.smudge\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
-    );
+    execFile.mockImplementation(answer('local\0filter.x.smudge\ntouch marker\0'));
     await expect(git('/repo-filter', ['switch', '--quiet', 'main'])).rejects.toThrow(
       expect.objectContaining({ name: 'GitError', message: expect.stringContaining('file filter') })
     );
-    expect(execFile.mock.calls.map(([, args]) => args[0])).toEqual(['config']);
+    expect(subcommands().sort()).toEqual(['config', 'ls-files']);
+  });
+
+  it('fails closed when the checked-out submodule listing cannot be read', async () => {
+    execFile.mockImplementation((file: string, args: string[], options: unknown, callback: Callback) => {
+      if (args.includes('ls-files'))
+        return callback(Object.assign(new Error('listing denied'), { code: 'EACCES' }), '', 'denied');
+      return answer('')(file, args, options, callback);
+    });
+    await expect(git('/repo-list-denied', ['status', '--porcelain'])).rejects.toThrow(
+      expect.objectContaining({ name: 'GitError' })
+    );
+    expect(subcommands()).not.toContain('status');
+  });
+
+  it('fails closed when a listed checked-out submodule config cannot be read', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'host-git-read-'));
+    const child = join(directory, 's');
+    mkdirSync(child);
+    writeFileSync(join(child, '.git'), 'gitdir: fixture\n');
+    try {
+      execFile.mockImplementation((file: string, args: string[], options: { cwd?: string }, callback: Callback) => {
+        if (args[0] === 'config' && options.cwd === child)
+          return callback(Object.assign(new Error('config denied'), { code: 'EACCES' }), '', 'denied');
+        if (args.includes('ls-files'))
+          return callback(null, options.cwd === directory ? `160000 ${'a'.repeat(40)} 0\ts\0` : '');
+        return answer('')(file, args, options, callback);
+      });
+      await expect(git(directory, ['status', '--porcelain'])).rejects.toThrow(
+        expect.objectContaining({ name: 'GitError' })
+      );
+      expect(subcommands()).not.toContain('status');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('adds the network overrides to fetch', async () => {

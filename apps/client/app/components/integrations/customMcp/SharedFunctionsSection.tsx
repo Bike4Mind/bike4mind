@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { isAxiosError } from 'axios';
 import { Box, Button, Chip, Option, Select, Sheet, Stack, Switch, Typography } from '@mui/joy';
-import type { CallableFunctionApprovalMode, ICallableFunctionShared } from '@bike4mind/common';
+import type { SxProps } from '@mui/joy/styles/types';
+import {
+  CALLABLE_FUNCTION_TRUST_LABEL_TEXT,
+  describeFunctionContractChange,
+  type CallableFunctionApprovalMode,
+  type ICallableFunctionShared,
+} from '@bike4mind/common';
 import {
   useCallableFunctionsEnabled,
   useReviewSharedCallableFunction,
@@ -14,6 +20,7 @@ const VIA: Record<ICallableFunctionShared['sharedVia'], string> = {
   person: 'Shared with you',
   project: 'Shared with a project you are in',
   organization: 'Shared with your organization',
+  signed_in: 'Offered to everyone signed in',
 };
 
 const STATUS: Record<ICallableFunctionShared['status'], { label: string; color: 'warning' | 'success' | 'neutral' }> = {
@@ -28,19 +35,21 @@ const APPROVAL_LABELS: Record<CallableFunctionApprovalMode, string> = {
   always_ask: 'Always ask',
 };
 
-const LABEL_TEXT: Record<'verified' | 'unverified', string> = {
-  verified: 'Verified: a worked example passed on the server when it was promoted.',
-  unverified: 'Unverified: no worked example was checked when it was promoted.',
-};
-
 const errorMessage = (error: unknown, fallback: string): string =>
   isAxiosError(error) && (error.response?.data as { code?: unknown } | undefined)?.code === 'review_conflict'
     ? 'The tool changed while you were reviewing it. Review it again.'
     : fallback;
 
-function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
+/** One shared function and the recipient's review of it; also the recipient's view in the functions library. */
+export function SharedFunctionCard({
+  fn,
+  defaultOpen = false,
+}: {
+  fn: ICallableFunctionShared;
+  defaultOpen?: boolean;
+}) {
   const pending = fn.status === 'pending_review';
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [draftApproval, setDraftApproval] = useState<CallableFunctionApprovalMode>(fn.review?.approval ?? 'default');
   const [error, setError] = useState<string | null>(null);
   const review = useReviewSharedCallableFunction();
@@ -92,6 +101,35 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
             ? 'You turned it off.'
             : 'You reviewed it.'}
       </Typography>
+      {pending && fn.changes && fn.changes.length > 0 && (
+        <Stack gap="2px" sx={{ mt: 0.5 }} data-testid="shared-function-changes">
+          <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+            Changed since your review:
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {fn.changes.map(change => {
+              const { subject, field, words } = describeFunctionContractChange(change);
+              return (
+                <Typography
+                  component="li"
+                  level="body-sm"
+                  key={`${change.path}:${change.kind}`}
+                  data-testid="shared-function-change"
+                >
+                  {subject}
+                  {field && (
+                    <>
+                      {' '}
+                      <code>{field}</code>
+                    </>
+                  )}{' '}
+                  {words}
+                </Typography>
+              );
+            })}
+          </Box>
+        </Stack>
+      )}
       {open && (
         <Stack gap="12px" sx={{ mt: 1.5 }} data-testid="shared-function-review-card">
           <Stack gap="4px">
@@ -105,7 +143,7 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
           <Stack gap="4px">
             <Typography level="title-sm">Label</Typography>
             <Typography level="body-sm" data-testid="shared-function-label">
-              {fn.trustLabel ? LABEL_TEXT[fn.trustLabel] : 'None.'}
+              {fn.trustLabel ? CALLABLE_FUNCTION_TRUST_LABEL_TEXT[fn.trustLabel] : 'None.'}
             </Typography>
           </Stack>
           <Stack gap="4px">
@@ -188,15 +226,20 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
   );
 }
 
-/** Functions other people shared with this person: each runs for them only after they review its interface. */
-export default function SharedFunctionsSection() {
+/**
+ * Functions other people shared with this person: each runs for them only after they review its interface. Shown
+ * on the Integrations page whenever callable functions are on, whatever the MCP settings are.
+ */
+export default function SharedFunctionsSection({ sx }: { sx?: SxProps }) {
   const enabled = useCallableFunctionsEnabled();
-  const { data } = useSharedCallableFunctions();
+  const { data } = useSharedCallableFunctions(enabled);
   if (!enabled || !data || data.length === 0) return null;
+  // An offer alone (the public API's `platform` group) follows the shares, each part in the server's order.
+  const ordered = [...data].sort((a, b) => Number(a.sharedVia === 'signed_in') - Number(b.sharedVia === 'signed_in'));
   return (
-    <Stack gap="8px" data-testid="shared-functions-section">
+    <Stack gap="8px" sx={sx} data-testid="shared-functions-section">
       <Typography level="title-sm">Functions shared with you</Typography>
-      {data.map(fn => (
+      {ordered.map(fn => (
         <SharedFunctionCard key={`${fn.id}:${fn.reviewHash}`} fn={fn} />
       ))}
     </Stack>

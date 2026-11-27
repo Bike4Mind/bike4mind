@@ -749,6 +749,28 @@ export interface SessionListFilters {
   hasImages?: boolean;
 }
 
+/** Largest page GET /api/sessions serves; a larger `pagination[limit]` is clamped, not rejected. */
+export const MAX_SESSION_LIST_LIMIT = 100;
+
+/** Orders searchByUserId can resume by keyset. Any other `orderBy.field` pages by offset only. */
+export const SESSION_LIST_KEYSET_FIELDS = ['lastUpdated', '_id'] as const;
+export type SessionListKeysetField = (typeof SESSION_LIST_KEYSET_FIELDS)[number];
+
+export function isSessionListKeysetField(field: string): field is SessionListKeysetField {
+  return (SESSION_LIST_KEYSET_FIELDS as readonly string[]).includes(field);
+}
+
+/** The last row a searchByUserId page served. `at` is its sort value when ordered by lastUpdated. */
+export type SessionListKeyset = { id: string; at?: Date };
+
+export interface SessionListPageOptions {
+  /** Resume after this row (keyset) instead of skipping to `pagination.page`. */
+  after?: SessionListKeyset;
+}
+
+/** `last` is set when another page exists and the order supports keyset paging. */
+export type SessionListPage = { data: ISessionDocument[]; hasMore: boolean; last?: SessionListKeyset };
+
 /** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
 export type ListSessionsByUserQuery = {
   userId: string;
@@ -760,6 +782,16 @@ export type ListSessionsByUserQuery = {
   /** Exclusive: only sessions whose id sorts before this one (the previous page's last id). */
   beforeId?: string;
   limit: number;
+};
+
+/**
+ * listChangesByUserId: the same own-list filters, but every session changed at or after `since`,
+ * deleted ones included, ordered by (updatedAt, _id) ascending.
+ */
+export type ListSessionChangesByUserQuery = Omit<ListSessionsByUserQuery, 'beforeId'> & {
+  since: Date;
+  /** Exclusive keyset position: the previous page's last (updatedAt, _id). */
+  after?: { at: Date; id: string };
 };
 
 /** Set by the server on a session walking a core tutorial; no request schema carries it. */
@@ -1050,11 +1082,11 @@ export interface ISession {
 /**
  * How long a notebook whose tagging completion produced no usable tags stays ineligible.
  *
- * The tagging handler bills `recordSessionOperationalUsage` BEFORE it parses, so a notebook the
- * model can never produce tags for costs one operations-model call per grooming run. Stamping
- * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
- * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
- * one notebook. A cooldown bounds the spend without that, the same trade
+ * A parse failure still spends (and bills) an operations-model call, so a notebook the model can
+ * never produce tags for costs one call per grooming run. Stamping `taggedAt` on that failure
+ * would bound the spend but close the gate forever on a notebook that was never tagged: no
+ * operator or automated path clears `taggedAt`, only a user re-importing that one notebook. A
+ * cooldown bounds the spend without that, the same trade
  * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
  * give-up state is unrecoverable when there is no operator re-run route.
  *
@@ -1223,8 +1255,9 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     userId: string,
     options: SearchOptions<ISessionDocument>,
     surface?: string,
-    filters?: SessionListFilters
-  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+    filters?: SessionListFilters,
+    page?: SessionListPageOptions
+  ) => Promise<SessionListPage>;
 
   /**
    * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
@@ -1232,6 +1265,8 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
    */
   listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
+
+  listChangesByUserId: (query: ListSessionChangesByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;

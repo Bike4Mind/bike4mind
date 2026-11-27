@@ -77,7 +77,8 @@ switching sections. It saves through each editor's existing mutation, removes on
 successful changes and retains failed/unattempted changes for retry. File uploads
 and scoped override commands keep their existing explicit command flows.
 The setting field editors (`AdminSettingInputField`, `AdminSchemaSettingField`,
-`AdminStringListSettingField`, `AdminRecommendedModelsSetting`) have no Save of their
+`AdminStringListSettingField`, `AdminRecommendedModelsSetting`,
+`AdminOperationsModelSetting`, `AdminGenerationModelsSetting`) have no Save of their
 own: they stage through `useRequiredSettingsDraft` and throw outside a provider.
 
 ## Audited writes

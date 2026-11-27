@@ -60,8 +60,8 @@ Desktop version and whether it was an installed build or a development run.
 | `pnpm dev`            | Dev server + Electron, with HMR                    |
 | `pnpm build`          | Bundles main, preload and renderer into `out/`     |
 | `pnpm start`          | Launches Electron against an existing `out/` build |
-| `pnpm typecheck`      | `tsc` over both tsconfig projects                  |
-| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc`                      |
+| `pnpm typecheck`      | `tsgo` over both tsconfig projects                 |
+| `pnpm typecheck:tsc`  | `tsc` over both tsconfig projects                  |
 | `pnpm test`           | vitest                                             |
 | `pnpm package`        | Installers for the host platform, into `release/`  |
 

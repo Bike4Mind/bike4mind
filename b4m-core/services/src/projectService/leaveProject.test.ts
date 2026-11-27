@@ -80,6 +80,7 @@ describe('projectService - leaveProject', () => {
       id: project.id,
       fileIds: project.fileIds,
       sessionIds: project.sessionIds,
+      systemPrompts: [],
     });
   });
 
@@ -97,6 +98,7 @@ describe('projectService - leaveProject', () => {
       id: project.id,
       fileIds: project.fileIds,
       sessionIds: project.sessionIds,
+      systemPrompts: [],
     });
   });
 

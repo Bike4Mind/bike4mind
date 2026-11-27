@@ -326,6 +326,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
+  hostedOnly(
+    'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
+    '1509db58716ac7ef24d43c1a3f1bee9334f5ea9f18403fc1815ce458a8a2d0b5',
+    'Isolates hosted callable function source fetches outside the VPC with no secrets; self-host runs the same pinned fetch in-process when no fetch function is named.'
+  ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
   gap(
     'function:infra/database.ts:DatabaseMigrator',
@@ -920,7 +925,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:accountCampaignSweep',
-    '91f216c1167faa53a3a3f263bada6004ec296646cddba8eac0a90869d53c1b5b'
+    'fbf102bff1f9fb5a03579c16cfb667e3fa6ac242a68535d2e33de491e50def17',
+    ['cloudwatch:PutMetricData']
   ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', 'affe75eb1ea58ec7de19131925c6c8907a82f258f187996331f5df4183eb3ab0', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
@@ -1295,7 +1301,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   }),
   gap(
     'schedule:infra/cron.ts:abuseAssessmentSweep',
-    'ea8660b95977904b15a42e29c55cf99aa096ca8bb712e5c49606ecc007f57c34'
+    'd6e32f3fbe83d61fe3b30767b34354f69c92ec481e30bc81c02b6d2f1c1f8b45',
+    ['cloudwatch:PutMetricData']
   ),
   gap('schedule:infra/cron.ts:usagePatternSignals', '066edef1ae0b959ca2c6049626beb3c8630d5c22f99aed2b3bca1430f1f05766'),
   wired(
@@ -1329,7 +1336,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'b9163f7011d2ab55b80affad5148b37bb258eb77cd00edcb371ddc4f14161aa1',
+    '53b1b91e62b4075dad8f00a47ad94029a6b8e0e0c3a9d5ab18556f3bf714a612',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

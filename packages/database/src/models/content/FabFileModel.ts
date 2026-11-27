@@ -1230,9 +1230,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /** Without this guard a CastError here is remapped by the API error handler into a confusing 404 on the notebook file list. */
-  async findAllByIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
+  async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
+    const query = this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
+    if (options?.includeDeleted) query.setOptions({ includeDeleted: true });
+    const result = await query;
     return result.map(d => d.toJSON());
+  }
+
+  async findSharingGrantFilesBySession(sessionId: string, userId?: string) {
+    const sessionReference = /^[0-9a-f]{24}$/i.test(sessionId) ? new RegExp(`^${sessionId}$`, 'i') : sessionId;
+    const row = { sessionId: sessionReference, ...(userId ? { userId } : {}) };
+    const result = await this.fabFileModel.find({ users: { $elemMatch: row } }).setOptions({ includeDeleted: true });
+    return result.map(file => file.toJSON());
   }
 
   /**
@@ -4259,6 +4268,10 @@ FabFileSchema.index({ isChunk: 1, 'users.permissions': 1, 'users.userId': 1 });
 
 // Optimize global access patterns
 FabFileSchema.index({ isChunk: 1, isGlobalRead: 1 });
+
+// Session revoke and delete find the rows a notebook minted by tag (sharingService/revoke.ts,
+// sessionService/delete.ts), including on files no longer attached to it.
+FabFileSchema.index({ 'users.sessionId': 1 }, { sparse: true });
 
 // Group permission indexes
 FabFileSchema.index({ deletedAt: 1, 'groups.groupId': 1, 'groups.permissions': 1 });

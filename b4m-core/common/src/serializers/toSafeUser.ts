@@ -94,6 +94,44 @@ export const USER_SUBFIELD_REDACTED_FIELDS = [
 ] as const;
 
 /**
+ * What `redactUserSecretsForSelf` drops from inside the `USER_SUBFIELD_REDACTED_FIELDS` objects, as
+ * dotted paths. A caller that can only express a Mongo exclusion projection (the users WebSocket
+ * subscription) cannot rebuild an object from an allowlist, so it withholds these instead. Anything
+ * the redactor does not copy out of one of those objects belongs here. The "rebuild-block allowlists
+ * stay pinned" tests in toSafeUser.test.ts and the User-schema check in
+ * apps/client/server/websocket/dataSubscribeFieldLimits.test.ts fail when the two disagree, the latter
+ * also when a field is added to an integration schema and classified in neither place.
+ */
+export const USER_SECRET_SUBFIELD_PATHS = [
+  'mfa.totpSecret',
+  'mfa.backupCodes',
+  'mfa.pendingBackupCodes',
+  'mfa.failedAttempts',
+  'mfa.lastFailedAttempt',
+  'mfa.lockedUntil',
+  'googleDrive.accessToken',
+  'googleDrive.refreshToken',
+  'atlassianConnect.accessToken',
+  'atlassianConnect.refreshToken',
+  'atlassianConnect.expiresAt',
+  'atlassianConnect.pendingSelectionExpiresAt',
+  'notionConnect.accessToken',
+  'notionConnect.botId',
+  'notionConnect.owner',
+  'blogIntegration.apiKey',
+  'slackSettings.slackUserToken',
+  'slackSettings.slackUserScopes',
+  'slackSettings.lastUsedAgent',
+  'authProviders.accessToken',
+  'authProviders.refreshToken',
+  'authProviders.samlNameId',
+  'authProviders.samlSessionIndex',
+  'authProviders.samlIdentityProviderId',
+  'authProviders.oktaIdentityProviderId',
+  'authProviders.encrypted',
+] as const;
+
+/**
  * Base Mongo `$project` for a user pulled in via an aggregation `$lookup` (which
  * ignores `select:false`). This is the public-safe field set; a consumer that
  * legitimately needs more (e.g. the inbox sender modal needs email/phone) spreads

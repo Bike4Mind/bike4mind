@@ -168,6 +168,13 @@ describe('sessionSummarization summary-file lookup', () => {
     h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
   });
 
+  it('keeps the generated summary text out of the logs', async () => {
+    await run();
+
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('A summary of the session.');
+  });
+
   it('looks the summary file up by session id AND the session owner', async () => {
     await run();
 
@@ -605,11 +612,23 @@ describe('sessionSummarization requester write-time re-check', () => {
     expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
+  it('bills once when a failed summary write is replayed', async () => {
+    h.sessionUpdateWithUpdateAccess.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run({ requesterId: SHAREE })).rejects.toThrow('write failed');
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+
+    await expect(run({ requesterId: SHAREE })).resolves.toBeUndefined();
+    expect(h.modelMessages).toHaveBeenCalledTimes(2);
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
     h.sessionUpdateWithUpdateAccess.mockResolvedValue(null);
 
     await run({ requesterId: SHAREE, callTagging: true });
 
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
     expect(h.sessionUpdate).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
     expect(h.updateFabFile).not.toHaveBeenCalled();

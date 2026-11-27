@@ -8,5 +8,7 @@ declare global {
      * the page again (see CookieConsentBanner).
      */
     __b4mGaConsentDefault?: 'granted' | 'denied';
+    /** The /auth/success fragment, taken out of the URL by authFragmentCaptureScript (utils/authParams). */
+    __b4mAuthFragment?: string;
   }
 }

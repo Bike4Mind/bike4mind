@@ -35,7 +35,7 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
   //
   // The stored answer and final_answer step carry the adapter's inlined reasoning
   // (<think> spans), which the UI hides with the same `visibleReplyText` rule. Thought
-  // steps are reasoning by design and stay raw.
+  // steps are reasoning by design and stay raw; observation content was already blanked for a share holder by the loader.
   const steps: AgentExecutionStep[] = trace.steps.map(step => ({
     type: step.type,
     content: step.type === 'final_answer' ? finalText(step.content) : step.content,

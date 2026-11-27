@@ -47,6 +47,25 @@ public struct KeychainTokenStore: TokenStore {
     return query
   }
 
+  /// Same service and access group, separate item: never read as the live session.
+  private var pendingRevocationItem: KeychainTokenStore {
+    KeychainTokenStore(service: service, account: "\(account).pendingRevocations", accessGroup: accessGroup)
+  }
+
+  public func pendingRevocations() throws -> [PendingRevocation] {
+    guard let json = try pendingRevocationItem.refreshToken() else { return [] }
+    return (try? JSONDecoder().decode([PendingRevocation].self, from: Data(json.utf8))) ?? []
+  }
+
+  public func setPendingRevocations(_ revocations: [PendingRevocation]) throws {
+    guard !revocations.isEmpty else {
+      try pendingRevocationItem.setRefreshToken(nil)
+      return
+    }
+    let json = String(decoding: try JSONEncoder().encode(revocations), as: UTF8.self)
+    try pendingRevocationItem.setRefreshToken(json)
+  }
+
   public func refreshToken() throws -> String? {
     do {
       return try readToken(sharedGroup: true)

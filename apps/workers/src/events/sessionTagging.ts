@@ -199,7 +199,10 @@ export const handler = withEventContext(async (event, logger) => {
     if (completionInfo) lastCompletionInfo = completionInfo;
   });
 
-  await recordSessionOperationalUsage({
+  const completionEndTime = Date.now();
+  // Billed after the session write, not before: a write that throws retries the event with a fresh
+  // model call, which would otherwise bill twice.
+  const usageArgs = {
     operation: 'notebook_tagging',
     user: payer,
     sessionId,
@@ -207,8 +210,9 @@ export const handler = withEventContext(async (event, logger) => {
     modelInfo,
     completionInfo: lastCompletionInfo,
     startTime: completionStartTime,
+    endTime: completionEndTime,
     logger,
-  });
+  } as const;
 
   const tagsText = completionBuffers
     .map(text => text?.trim())
@@ -220,7 +224,7 @@ export const handler = withEventContext(async (event, logger) => {
   if (parsedTags && parsedTags.length > 0) {
     session.tags = parsedTags;
     session.taggedAt = new Date();
-    logger.info(`Tags: ${JSON.stringify(session.tags)}`);
+    logger.info('Tags generated', { sessionId, tagCount: parsedTags.length });
     // Persist ONLY the tag fields. The read-to-write window spans a full LLM
     // completion; a whole-session write would revert any share revocation,
     // visibility change or soft-delete the owner made during it.
@@ -238,14 +242,15 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordSessionOperationalUsage(usageArgs);
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping tag write`);
   } else {
     // Records that a completion was spent and yielded nothing - NOT that the notebook is tagged.
-    // `recordSessionOperationalUsage` above has already billed, so writing nothing here is what
-    // made a notebook the model can never tag cost a call on every run. `taggedAt` and `tags` stay
-    // untouched: a stamp would turn one bad completion into a permanent "already tagged" and a
-    // wipe would destroy tags a clone or an import carried in. The backoff bounds the spend and
-    // still reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
+    // The attempt is billed after this write, landed or not. Without the stamp, a notebook the
+    // model can never tag would cost a call on every run. `taggedAt` and `tags` stay untouched:
+    // a stamp would turn one bad completion into a permanent "already tagged" and a wipe would
+    // destroy tags a clone or an import carried in. The backoff bounds the spend and still
+    // reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
     session.tagLastAttemptAt = new Date();
     const written = await sessionRepository.updateWithUpdateAccess(
       writer,
@@ -255,6 +260,7 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordSessionOperationalUsage(usageArgs);
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug('Tagging response could not be parsed', { responseLength: tagsText?.length ?? 0 });

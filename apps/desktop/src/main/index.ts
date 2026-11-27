@@ -13,6 +13,8 @@ import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { localHostControl } from './host/localHostControl';
 import { registerHostConnections } from './host/registerHostConnections';
+import { registerSshHosts } from './host/remote/registerSshHosts';
+import { electronSystemSignals } from './host/systemSignals';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
@@ -193,7 +195,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  registerSessionHandoff(auth);
+  registerSessionHandoff(auth, app.getPath('userData'));
   const attention = registerAttention({
     openWindow: createWindow,
     notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
@@ -237,15 +239,23 @@ void app.whenReady().then(async () => {
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
-  registerHostConnections({
-    ...host,
+  const hostConnections = registerHostConnections(host, {
     control: localHostControl({
       auth,
       onAuthStateChanged,
       dataDirectory: app.getPath('userData'),
       homeDirectory: app.getPath('home'),
       version: currentVersion(),
+      log: message => host.logger.warn(message),
     }),
+    auth,
+    onAuthStateChanged,
+    version: currentVersion(),
+    signals: electronSystemSignals(),
+  });
+  const sshHosts = registerSshHosts(hostConnections, {
+    dataDirectory: app.getPath('userData'),
+    log: message => host.logger.warn(message),
   });
   const models = registerModels(
     modelServers,
@@ -409,6 +419,8 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    sshHosts.dispose();
+    hostConnections.dispose();
     stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();

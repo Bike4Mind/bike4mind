@@ -25,6 +25,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
   },
+  cancelFunctionCall: {
+    method: 'POST',
+    path: '/api/v1/functions/calls/{call_id}/cancel',
+  },
   cancelImageJob: {
     method: 'POST',
     path: '/api/v1/image-jobs/{id}/cancel',
@@ -105,6 +109,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files',
   },
+  createFunction: {
+    method: 'POST',
+    path: '/api/v1/functions',
+  },
   createImageJob: {
     method: 'POST',
     path: '/api/v1/image-jobs',
@@ -128,6 +136,10 @@ export const operations = {
   createSession: {
     method: 'POST',
     path: '/api/v1/sessions',
+  },
+  createSessionTurn: {
+    method: 'POST',
+    path: '/api/v1/turns',
   },
   createSkill: {
     method: 'POST',
@@ -177,6 +189,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
   },
+  deleteFunction: {
+    method: 'DELETE',
+    path: '/api/v1/functions/{id}',
+  },
   deletePersona: {
     method: 'DELETE',
     path: '/api/v1/personas/{id}',
@@ -221,6 +237,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/tools/web-fetch',
   },
+  findFunctionRecipient: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}/recipient',
+  },
   generateAgentAvatar: {
     method: 'POST',
     path: '/api/v1/agents/{id}/generate-avatar',
@@ -260,6 +280,10 @@ export const operations = {
   getArtifactVersion: {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
+  },
+  getAuthoredFunction: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}/source',
   },
   getBrief: {
     method: 'GET',
@@ -349,9 +373,21 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/functions/calls/{call_id}',
   },
+  getFunctionCallSummary: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}/calls',
+  },
+  getFunctionShare: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}/share',
+  },
   getImageJob: {
     method: 'GET',
     path: '/api/v1/image-jobs/{id}',
+  },
+  getInterruptionFeedback: {
+    method: 'GET',
+    path: '/api/v1/assistant/interruptions',
   },
   getMe: {
     method: 'GET',
@@ -444,6 +480,10 @@ export const operations = {
   listAssistantInstructions: {
     method: 'GET',
     path: '/api/v1/assistant/instructions',
+  },
+  listAuthoredFunctions: {
+    method: 'GET',
+    path: '/api/v1/functions/mine',
   },
   listBriefs: {
     method: 'GET',
@@ -585,9 +625,17 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/personas',
   },
+  pinFunctionData: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/data',
+  },
   postSlackMessage: {
     method: 'POST',
     path: '/api/v1/slack/messages',
+  },
+  promoteFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/promote',
   },
   publishArtifact: {
     method: 'POST',
@@ -649,9 +697,21 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
+  reviewFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/review',
+  },
   reviewSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',
+  },
+  runFunctionTests: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/test-runs',
+  },
+  saveFunctionCode: {
+    method: 'PUT',
+    path: '/api/v1/functions/{id}/code',
   },
   searchArtifacts: {
     method: 'GET',
@@ -681,6 +741,22 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/session-handoffs',
   },
+  setFunctionExamples: {
+    method: 'PUT',
+    path: '/api/v1/functions/{id}/examples',
+  },
+  setFunctionSources: {
+    method: 'PUT',
+    path: '/api/v1/functions/{id}/sources',
+  },
+  setInterruptionFeedback: {
+    method: 'PUT',
+    path: '/api/v1/assistant/interruptions',
+  },
+  shareFunction: {
+    method: 'PUT',
+    path: '/api/v1/functions/{id}/share',
+  },
   startAgentExecution: {
     method: 'POST',
     path: '/api/v1/agent-executions',
@@ -705,6 +781,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
   },
+  unpinFunctionData: {
+    method: 'DELETE',
+    path: '/api/v1/functions/{id}/data/{name}',
+  },
   unpublishArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}/publish',
@@ -712,6 +792,10 @@ export const operations = {
   unregisterPushToken: {
     method: 'DELETE',
     path: '/api/v1/push-tokens',
+  },
+  unshareFunction: {
+    method: 'DELETE',
+    path: '/api/v1/functions/{id}/share',
   },
   updateAgent: {
     method: 'PATCH',
@@ -728,6 +812,10 @@ export const operations = {
   updateFile: {
     method: 'PATCH',
     path: '/api/v1/files/{id}',
+  },
+  updateFunction: {
+    method: 'PATCH',
+    path: '/api/v1/functions/{id}',
   },
   updateObligation: {
     method: 'PATCH',

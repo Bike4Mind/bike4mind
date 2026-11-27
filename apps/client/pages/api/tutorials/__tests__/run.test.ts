@@ -29,7 +29,14 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
 vi.mock('@bike4mind/server-utils/tutorials/registry', async () => {
   const { FIXTURE_REGISTRY } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');
   const CORE_TUTORIALS = [FIXTURE_REGISTRY];
-  return { CORE_TUTORIALS, resolveCoreTutorial: (id: string) => CORE_TUTORIALS.find(t => t.id === id) ?? null };
+  const { compareByCatalogue } = await vi.importActual<typeof import('@bike4mind/server-utils/tutorials/registry')>(
+    '@bike4mind/server-utils/tutorials/registry'
+  );
+  return {
+    CORE_TUTORIALS,
+    resolveCoreTutorial: (id: string) => CORE_TUTORIALS.find(t => t.id === id) ?? null,
+    byCoreTutorialRank: compareByCatalogue(CORE_TUTORIALS),
+  };
 });
 vi.mock('@bike4mind/server-utils/tutorials/content', async () => {
   const { FIXTURE_CONTENT } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');

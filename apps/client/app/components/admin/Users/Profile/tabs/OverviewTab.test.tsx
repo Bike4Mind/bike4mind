@@ -5,9 +5,11 @@ import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  oauthApps: vi.fn(),
   currentUser: { id: 'admin1' } as { id: string; isAdmin: boolean; adminPermissions?: string[] },
 }));
 
+vi.mock('@client/app/hooks/data/adminUserOAuthApps', () => ({ useAdminUserOAuthApps: mocks.oauthApps }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
@@ -63,6 +65,7 @@ const renderTab = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = { id: 'admin1' };
+  mocks.oauthApps.mockReturnValue({ data: undefined, isPending: true });
 });
 
 // Covered by InterventionHolds.test.tsx; its own queries would shift this file's api mocks.
@@ -89,6 +92,49 @@ describe('OverviewTab internal account row', () => {
     expect(screen.getByTestId('user-profile-fact-internal')).toHaveTextContent(text);
     fireEvent.click(screen.getByTestId('user-profile-internal-btn'));
     expect(onAction).toHaveBeenCalledWith('internalAccount');
+  });
+});
+
+describe('OverviewTab signed up via', () => {
+  const show = (profile: Parameters<typeof buildProfile>[0]) => {
+    render(
+      <OverviewTab user={buildProfile(profile)} onAction={vi.fn()} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />,
+      { wrapper: ProfileTestWrapper }
+    );
+    return screen.getByTestId('user-profile-fact-signup-client');
+  };
+
+  it('shows the standard empty value, not the raw id, while the client name loads', () => {
+    const fact = show({ signupClientId: 'b4m_alpha_11111111' });
+    expect(fact).not.toHaveTextContent('b4m_alpha_11111111');
+    expect(fact).toHaveTextContent('-');
+  });
+
+  it('falls back to the raw id when the lookup fails or the client has no name', () => {
+    mocks.oauthApps.mockReturnValue({ data: undefined, isPending: false, isError: true });
+    expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('b4m_alpha_11111111');
+  });
+
+  it('falls back to the raw id when the resolved name is null', () => {
+    mocks.oauthApps.mockReturnValue({
+      isPending: false,
+      data: { signupClient: { clientId: 'b4m_alpha_11111111', name: null }, apps: [] },
+    });
+    expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('b4m_alpha_11111111');
+  });
+
+  it('shows the resolved client name', () => {
+    mocks.oauthApps.mockReturnValue({
+      isPending: false,
+      data: { signupClient: { clientId: 'b4m_alpha_11111111', name: 'Alpha' }, apps: [] },
+    });
+    expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('Alpha');
+  });
+
+  it('shows the standard empty value for an unattributed account', () => {
+    const fact = show({ signupClientId: null });
+    expect(fact).not.toHaveTextContent('Unknown');
+    expect(fact).toHaveTextContent('-');
   });
 });
 
@@ -308,13 +354,15 @@ describe('OverviewTab Access card admin access', () => {
     expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('None');
   });
 
-  it('shows All (Super Admin) and no Edit for a Super Admin, with no Admin roles row', () => {
+  it('shows All (Super Admin) with Edit for the permissions the role does not imply, and no Admin roles row', () => {
     serveRoles([SUPPORT_AGENT]);
-    renderCard({ isAdmin: true, adminRoleIds: [SUPPORT_ROLE] });
+    renderCard({ isAdmin: true, adminRoleIds: [SUPPORT_ROLE], adminPermissions: ['credits:self_grant'] });
 
     expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('All (Super Admin)');
+    expect(screen.getByTestId('user-profile-admin-permission-credits-self_grant')).toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-admin-permission-support-read')).not.toBeInTheDocument();
     expect(screen.queryByTestId('user-profile-fact-admin-roles')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('user-profile-admin-permissions-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-admin-permissions-btn')).toBeInTheDocument();
   });
 
   it('offers no Edit on the viewer own profile', () => {

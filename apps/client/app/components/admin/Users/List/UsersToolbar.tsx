@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Button, Dropdown, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
+import { useQuery } from '@tanstack/react-query';
+import { PREDEFINED_USER_TAGS, hasAdminPermission } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
+import { OAUTH_CLIENTS_QUERY_KEY, fetchOAuthClients } from '@client/app/utils/oauthClientAPICalls';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   USER_FUNNEL_STEP_FILTERS,
   USER_PLAN_FILTERS,
@@ -127,11 +130,17 @@ export function UsersToolbar({
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
   const userTags = useGetUserTags();
   const adminRoles = useAdminRoleList();
+  const { currentUser } = useUser();
+  const oauthClients = useQuery({
+    queryKey: [OAUTH_CLIENTS_QUERY_KEY],
+    queryFn: fetchOAuthClients,
+    enabled: hasAdminPermission(currentUser, 'support:read'),
+  });
 
   // Offered once roles exist; a role id from a link stays removable even when it no longer resolves.
-  const singleFilters = useMemo<SingleFilter[]>(() => {
+  const roleFilter = useMemo<SingleFilter | undefined>(() => {
     const roles = adminRoles.data ?? [];
-    if (roles.length === 0 && !params.adminRole) return SINGLE_FILTERS;
+    if (roles.length === 0 && !params.adminRole) return undefined;
     const options = roles.map(role => ({ value: role.id, label: role.name }));
     if (params.adminRole && !options.some(option => option.value === params.adminRole)) {
       options.push({
@@ -143,8 +152,24 @@ export function UsersToolbar({
             : 'Deleted role',
       });
     }
-    return [...SINGLE_FILTERS, { key: 'adminRole', label: 'Admin role', options }];
+    return { key: 'adminRole', label: 'Admin role', options };
   }, [adminRoles.data, adminRoles.isLoading, adminRoles.isError, params.adminRole]);
+
+  // Same shape for the client a sign-up came through; an id that no longer resolves shows as the raw id.
+  const signupClientFilter = useMemo<SingleFilter | undefined>(() => {
+    const clients = oauthClients.data ?? [];
+    if (clients.length === 0 && !params.signupClient) return undefined;
+    const options = clients.map(client => ({ value: client.clientId, label: client.name }));
+    if (params.signupClient && !options.some(option => option.value === params.signupClient)) {
+      options.push({ value: params.signupClient, label: oauthClients.isLoading ? '...' : params.signupClient });
+    }
+    return { key: 'signupClient', label: 'Signed up via', options };
+  }, [oauthClients.data, oauthClients.isLoading, params.signupClient]);
+
+  const singleFilters = useMemo<SingleFilter[]>(
+    () => [...SINGLE_FILTERS, ...(roleFilter ? [roleFilter] : []), ...(signupClientFilter ? [signupClientFilter] : [])],
+    [roleFilter, signupClientFilter]
+  );
 
   const organizationOptions = useMemo<FilterChipOption[]>(
     () => [

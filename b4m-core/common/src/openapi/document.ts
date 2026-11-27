@@ -143,7 +143,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
     '- **Function calls** (`POST /api/v1/functions/{id}/invoke` with `mode: "async"`) return `202` with a ' +
       '`call_id`. Poll `GET /api/v1/functions/calls/{call_id}` until `status` is `finished`, then check ' +
-      '`outcome` before reading `output`. Results are kept 24 hours.',
+      '`outcome` before reading `output`. Results are kept 24 hours. ' +
+      '`POST /api/v1/functions/calls/{call_id}/cancel` cancels a call still `queued` or `running`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +

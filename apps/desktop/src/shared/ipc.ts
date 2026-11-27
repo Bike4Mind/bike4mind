@@ -1,10 +1,11 @@
 import type { HostBridgeApi } from './hostBridge';
+import type { HostConnectionsApi } from './hostConnection';
 import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { StudioApi } from './studioIpc';
 import type { LibraryApi } from './library';
 import type { ProductionsApi } from './productions';
-import type { PendingTaskDecision, RolePolicy, TaskAction } from './orchestration';
+import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
@@ -60,13 +61,10 @@ import type {
   CreationTool,
   ChatMoveToBackgroundResult,
   ChatHeldRelay,
-  ChatQueueEvent,
   ChatSessionMode,
-  ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
   RaiseRunBudgetResult,
-  ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
@@ -174,6 +172,15 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
 export const IPC_CHANNELS = {
   hostRequest: 'host:request',
   hostNotification: 'host:notification',
+  hostList: 'host:list',
+  hostConnect: 'host:connect',
+  hostDisconnect: 'host:disconnect',
+  hostRemove: 'host:remove',
+  hostSshAliases: 'host:ssh-aliases',
+  hostSshDescribe: 'host:ssh-describe',
+  hostSshAdd: 'host:ssh-add',
+  /** main -> renderer: the whole host list, on every change of any host's connection state. */
+  hostStateChanged: 'host:state-changed',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -255,9 +262,6 @@ export const IPC_CHANNELS = {
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
-  chatListTaskDecisions: 'chat:list-task-decisions',
-  /** main -> renderer push; the whole list of decisions workers wait on the user for. */
-  chatTaskDecisions: 'chat:task-decisions',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -294,8 +298,6 @@ export const IPC_CHANNELS = {
   chatGetRunSpend: 'chat:get-run-spend',
   chatGetHeldRelays: 'chat:get-held-relays',
   chatResolveHeldRelay: 'chat:resolve-held-relay',
-  /** main -> renderer push; one session's queue of typed-ahead messages changed. */
-  chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
   chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
@@ -328,18 +330,6 @@ export const IPC_CHANNELS = {
   chatOpenVideo: 'chat:open-video',
   chatSaveVideo: 'chat:save-video',
   chatCopyVideoLink: 'chat:copy-video-link',
-  /** main -> renderer push; reply tokens as they arrive. */
-  chatStreamEvent: 'chat:stream-event',
-  /**
-   * main -> renderer push; one session's stored summary changed with no reply involved.
-   *
-   * Today only its generated title, which lands moments after the first prompt and long after
-   * the IPC call that sent it has resolved - so there is nothing left to return it on.
-   */
-  chatSessionSummary: 'chat:session-summary',
-  chatGetSessionStatuses: 'chat:get-session-statuses',
-  /** main -> renderer push; one session started or stopped being busy. */
-  chatSessionStatus: 'chat:session-status',
   chatListSkills: 'chat:list-skills',
   /**
    * The one way a project's skills become loadable. Renderer -> main only, driven by the
@@ -844,7 +834,7 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
-  host: HostBridgeApi;
+  host: HostBridgeApi & HostConnectionsApi;
   library: LibraryApi;
   productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;
@@ -1043,9 +1033,6 @@ export interface DesktopApi {
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
-    /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
-    listTaskDecisions(): Promise<PendingTaskDecision[]>;
-    onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -1137,8 +1124,6 @@ export interface DesktopApi {
     getHeldRelays(sessionId: string): Promise<ChatHeldRelay[]>;
     /** Let a held message in (it runs like any relay) or decline it (its sender is told). */
     resolveHeldRelay(sessionId: string, heldId: string, deliver: boolean): Promise<void>;
-    /** Subscribe to queue changes; returns the unsubscribe. */
-    onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /**
      * Start a pending spawn suggestion with the user's edits; allowed while a reply is running.
      * Suggestions arrive with the session itself, and changes as the 'spawn-suggestions' stream
@@ -1242,23 +1227,6 @@ export interface DesktopApi {
     saveVideo(sessionId: string, jobId: string): Promise<boolean>;
     /** Copy a freshly signed server link to the clipboard; it expires, so the result says when. */
     copyVideoLink(sessionId: string, jobId: string): Promise<ChatVideoLinkResult>;
-    /** Subscribe to reply progress; returns the unsubscribe. */
-    onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
-    /**
-     * Every session that is busy right now. Read once on mount to seed the sidebar: the pushes
-     * below only describe CHANGES, so a window that opened after a background session hit the
-     * approval gate would otherwise never hear about it.
-     */
-    getSessionStatuses(): Promise<ChatSessionStatusEvent[]>;
-    /** Subscribe to per-session status changes; returns the unsubscribe. */
-    onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): () => void;
-    /**
-     * Subscribe to summary changes main made on its own - a generated title. Returns the
-     * unsubscribe. Not seeded on mount the way the statuses are: main only ever generates a
-     * title for a session whose first prompt it is watching, so a window that missed the push
-     * reads the stored title on its next list.
-     */
-    onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
      * session or draft: a Chat one gets the user's own, a Code one also gets its project's once

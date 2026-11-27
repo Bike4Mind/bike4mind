@@ -67,6 +67,17 @@ export function readNotebook(raw: unknown): WebNotebook | null {
   return { id, name, createdAt, updatedAt, version: webNotebookVersion(lastUpdated ?? updated ?? '', name) };
 }
 
+/**
+ * When a list row last changed and whether it is a tombstone. Null when the row has no `updatedAt`,
+ * which is how a server older than the `updated_since` change feed shows itself.
+ */
+export function readChangeStamp(raw: unknown): { changedAt: string; deleted: boolean } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Json;
+  const changedAt = iso(row.updatedAt);
+  return changedAt ? { changedAt, deleted: !!row.deletedAt } : null;
+}
+
 /** Marks the current-form version; anything else is a legacy cursor (see needsWebImport). */
 export const WEB_VERSION_PREFIX = 'v2|';
 

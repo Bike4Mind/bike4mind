@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_PERMISSIONS,
   AdminPermissionsSchema,
+  EXPLICIT_ONLY_ADMIN_PERMISSIONS,
   assertCanActOnAdminTarget,
+  assertCanChangeExplicitOnlyPermissions,
   assertCanGrantAdminAccess,
   canAccessAdmin,
   hasAdminPermission,
@@ -13,8 +15,22 @@ import {
 import { ForbiddenError } from './errors';
 
 describe('admin permissions', () => {
-  it.each(ADMIN_PERMISSIONS)('preserves legacy full-admin access to %s', permission => {
+  const IMPLIED_PERMISSIONS = ADMIN_PERMISSIONS.filter(
+    permission => !(EXPLICIT_ONLY_ADMIN_PERMISSIONS as readonly string[]).includes(permission)
+  );
+
+  it.each(IMPLIED_PERMISSIONS)('preserves legacy full-admin access to %s', permission => {
     expect(hasAdminPermission({ isAdmin: true }, permission)).toBe(true);
+  });
+
+  it.each(EXPLICIT_ONLY_ADMIN_PERMISSIONS)('does not imply %s from the full-admin flag', permission => {
+    expect(hasAdminPermission({ isAdmin: true }, permission)).toBe(false);
+    expect(hasAdminPermission({ isAdmin: true, adminPermissions: [permission] }, permission)).toBe(true);
+    expect(hasAdminPermission({ isAdmin: true, roleAdminPermissions: [permission] }, permission)).toBe(true);
+  });
+
+  it.each(EXPLICIT_ONLY_ADMIN_PERMISSIONS)('grants no admin access from %s alone', permission => {
+    expect(canAccessAdmin({ adminPermissions: [permission] })).toBe(false);
   });
 
   it.each(ADMIN_PERMISSIONS)('grants only the explicit permission %s', permission => {
@@ -22,8 +38,11 @@ describe('admin permissions', () => {
     for (const candidate of ADMIN_PERMISSIONS) {
       expect(hasAdminPermission(user, candidate)).toBe(candidate === permission);
     }
-    expect(canAccessAdmin(user)).toBe(true);
     expect(isFullAdmin(user)).toBe(false);
+  });
+
+  it.each(IMPLIED_PERMISSIONS)('opens the admin area with %s', permission => {
+    expect(canAccessAdmin({ adminPermissions: [permission] })).toBe(true);
   });
 
   it.each([null, undefined, {}, { isAdmin: false }, { adminPermissions: [] }])(
@@ -106,5 +125,45 @@ describe('admin permissions', () => {
 
   it('rejects repeated permissions at the input boundary', () => {
     expect(AdminPermissionsSchema.safeParse(['support:read', 'support:read']).success).toBe(false);
+  });
+
+  describe('assertCanChangeExplicitOnlyPermissions', () => {
+    const FULL_ADMIN = { isAdmin: true };
+    const HOLDER = { isAdmin: true, adminPermissions: ['credits:approve_self_grant'] };
+
+    it('refuses a full admin without the permission adding it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, [], ['credits:approve_self_grant'])).toThrow(
+        ForbiddenError
+      );
+    });
+
+    it('refuses a full admin without the permission removing it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, ['credits:approve_self_grant'], [])).toThrow(
+        ForbiddenError
+      );
+    });
+
+    it('lets a holder add or remove it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(HOLDER, [], ['credits:approve_self_grant'])).not.toThrow();
+      expect(() => assertCanChangeExplicitOnlyPermissions(HOLDER, ['credits:approve_self_grant'], [])).not.toThrow();
+    });
+
+    it('counts a permission held through a role', () => {
+      const viaRole = { isAdmin: true, roleAdminPermissions: ['credits:approve_self_grant'] };
+      expect(() => assertCanChangeExplicitOnlyPermissions(viaRole, [], ['credits:approve_self_grant'])).not.toThrow();
+    });
+
+    it('passes unrelated changes and unchanged explicit-only permissions', () => {
+      expect(() =>
+        assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, ['support:read'], ['credits:adjust'])
+      ).not.toThrow();
+      expect(() =>
+        assertCanChangeExplicitOnlyPermissions(
+          FULL_ADMIN,
+          ['credits:self_grant'],
+          ['credits:self_grant', 'support:read']
+        )
+      ).not.toThrow();
+    });
   });
 });

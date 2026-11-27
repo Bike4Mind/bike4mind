@@ -33,7 +33,13 @@ import {
   UserApiKeyAuditLog,
 } from '@bike4mind/database/auth';
 import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, type PayerStanding } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  BadRequestError,
+  EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES,
+  type PayerStanding,
+} from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
@@ -74,7 +80,12 @@ const AiTokenRequestSchema = z.object({
 });
 
 // Keep this exchange limited to scopes whose mint and consent requirements it implements.
-const AiTokenScopesSchema = z.array(z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ])).min(1);
+// The functions scopes are EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES, the only confined scopes the mint allows here.
+const AiTokenScopesSchema = z
+  .array(
+    z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ, ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR])
+  )
+  .min(1);
 
 const handler = baseApi({ auth: false })
   // Coarse per-IP flood backstop for this unauth endpoint. A federated app calls
@@ -134,7 +145,8 @@ const handler = baseApi({ auth: false })
         logError('invalid_scope', 403);
         return res.status(403).json({
           error: 'invalid_scope',
-          error_description: 'This exchange supports only ai:generate and me:read scopes',
+          error_description:
+            'This exchange supports only the ai:generate, me:read, functions:invoke, and functions:author scopes',
         });
       }
       const requestedScopes = parsedScopes.data;
@@ -223,7 +235,8 @@ const handler = baseApi({ auth: false })
           .json({ error: 'invalid_grant', error_description: 'Token subject does not resolve to a B4M user' });
       }
 
-      // 5.5. Grant gate (SECURITY) - relying-party clients only; see federatedGrantGate.ts.
+      // 5.5. Grant gate (SECURITY) - relying-party clients only; see federatedGrantGate.ts. The functions scopes
+      //      are new to this exchange, so no token predates their grants and they skip the grace period.
       const grantRejection = await checkFederatedGrant({
         client,
         clientId: client_id,
@@ -231,6 +244,7 @@ const handler = baseApi({ auth: false })
         scopes: requestedScopes,
         logger: req.logger,
         logTag: 'OAUTH_AI_TOKEN',
+        ...(requestedScopes.some(s => EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES.includes(s)) ? { enforce: true } : {}),
       });
       if (grantRejection) {
         const { status, ...body } = grantRejection;

@@ -815,6 +815,8 @@ export type ParsedReason =
       value: string;
       threshold?: string;
       limit: 'ceiling' | 'floor';
+      /** The datapoint breaches AT the threshold (`>=`/`<=`), not only past it. */
+      inclusive: boolean;
       /** Epoch ms of the newest and oldest breaching datapoint windows. */
       latestStart: number;
       earliestStart: number;
@@ -824,6 +826,8 @@ export type ParsedReason =
     }
   | { kind: 'missing'; minutes?: number }
   | { kind: 'raw'; reason: string };
+
+type ThresholdReason = Extract<ParsedReason, { kind: 'threshold' }>;
 
 /** Pulls the numbers out of CloudWatch's NewStateReason prose. */
 export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
@@ -849,6 +853,7 @@ export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
       value: formatNumber(latest.rawValue),
       threshold: thresholdMatch ? formatNumber(thresholdMatch[1]) : undefined,
       limit: /less than/i.test(reason) ? 'floor' : 'ceiling',
+      inclusive: /or equal to/i.test(reason),
       latestStart: latest.start,
       earliestStart: earliest.start,
       datapoints: points.length,
@@ -889,9 +894,22 @@ export function describeReason(
   const when = parsed.period
     ? ` in the ${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
     : ` at ${formatClock(new Date(parsed.latestStart))} UTC`;
-  const threshold = parsed.threshold ? `; the ${parsed.limit} is ${displayNumber(parsed.threshold, unit)}` : '';
+  const threshold = parsed.threshold ? `; ${thresholdPhrase(parsed, displayNumber(parsed.threshold, unit))}` : '';
   return `${what}${when}${threshold}.`;
 }
+
+/**
+ * A `>=` alarm with threshold 1 fires on a value of 1, so calling 1 its "ceiling" reads as if the
+ * value had to pass it: an inclusive comparison is worded as the value it fires at instead.
+ */
+function thresholdPhrase(parsed: ThresholdReason, threshold: string): string {
+  return parsed.inclusive
+    ? `the alarm fires at ${inclusiveBound(parsed, threshold)}`
+    : `the ${parsed.limit} is ${threshold}`;
+}
+
+const inclusiveBound = (parsed: ThresholdReason, threshold: string) =>
+  `${threshold} or ${parsed.limit === 'floor' ? 'less' : 'more'}`;
 
 /** Periods from an hour up are sums over the whole window, so no crossing time can be read from them. */
 const LONG_PERIOD_SECONDS = 3600;
@@ -916,9 +934,10 @@ export function describeFields(
   if (parsed.kind === 'threshold') {
     fields.push(`*Measured*\n${displayNumber(parsed.value, unit)}${unit ? ` ${unit}` : ''}`);
     if (parsed.threshold) {
-      fields.push(
-        `*${measurement === 'hourly-census' ? 'Threshold' : parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${displayNumber(parsed.threshold, unit)}`
-      );
+      const threshold = displayNumber(parsed.threshold, unit);
+      if (measurement === 'hourly-census') fields.push(`*Threshold*\n${threshold}`);
+      else if (parsed.inclusive) fields.push(`*Fires at*\n${inclusiveBound(parsed, threshold)}`);
+      else fields.push(`*${parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${threshold}`);
     }
     if (measurement === 'hourly-census') {
       const start = new Date(parsed.latestStart).toISOString();

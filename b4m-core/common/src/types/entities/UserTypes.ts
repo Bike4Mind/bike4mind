@@ -4,7 +4,7 @@ import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
-import type { PushNotificationPreferences } from '../../schemas/pushNotification';
+import type { InterruptionFeedback, PushNotificationPreferences } from '../../schemas/pushNotification';
 import type { BriefSchedule } from '../../schemas/brief';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
@@ -274,6 +274,12 @@ export interface IUserPreferences {
   briefSchedule?: BriefSchedule;
   /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
   busyBlockBrief?: { enabled: boolean };
+  /**
+   * Which block-end brief pushes to hold (see isBlockEndPushHeld). The run summary sent when the block brief
+   * does not cover the runs still goes out. Set through `PUT /api/v1/assistant/interruptions`; a general
+   * preferences write can still revert or clear it.
+   */
+  interruptionFeedback?: InterruptionFeedback;
 }
 
 /**
@@ -917,6 +923,9 @@ export interface IUser extends ICreditHolder {
    * @default []
    */
   authorizedEmailAddresses?: string[];
+
+  /** Platform addresses this user held before; they are never reassigned to another user. */
+  releasedPlatformEmailAddresses?: { address: string; releasedAt: Date }[];
 
   /**
    * User's preferred voice for voice sessions

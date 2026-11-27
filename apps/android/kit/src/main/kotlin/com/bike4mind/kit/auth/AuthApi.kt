@@ -11,6 +11,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -94,8 +95,11 @@ class AuthApi(private val environment: ServerEnvironment, private val http: Http
         }
     }
 
-    /** Best effort: the local sign-out happens whatever the server answers. */
+    val baseUrl: String get() = environment.baseUrl
+
+    /** `GET /api/logout` revokes the session named by the token's `sid`; throws when the server did not confirm it. */
     suspend fun logout(accessToken: String) {
-        runCatching { http.get(environment.baseUrl + "/api/logout") { bearerAuth(accessToken) } }
+        val response = http.get(environment.baseUrl + "/api/logout") { bearerAuth(accessToken) }
+        if (!response.status.isSuccess()) throw AuthException.Server(response.status.value)
     }
 }

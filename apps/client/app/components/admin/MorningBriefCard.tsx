@@ -15,8 +15,9 @@ export function MorningBriefCard() {
     staleTime: 60_000,
     enabled: allowed,
   });
-  if (!allowed) return null;
   const brief = data?.brief;
+  // Delivery is opt-in per environment, so most environments never have a brief; an empty card is noise.
+  if (!allowed || (data && !brief)) return null;
   return (
     <SectionCard
       title="Morning brief"
@@ -36,11 +37,7 @@ export function MorningBriefCard() {
             message="The morning brief could not be loaded. The admin queues remain available."
             onRetry={() => void refetch()}
           />
-        ) : !brief ? (
-          <Typography level="body-sm">
-            No morning brief yet. Review the admin queues manually; scheduled delivery is opt-in.
-          </Typography>
-        ) : (
+        ) : !brief ? null : (
           <Stack spacing={2}>
             <Typography level="body-xs">
               {brief.day} (UTC) - {brief.environment} - Slack:{' '}

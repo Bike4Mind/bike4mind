@@ -225,6 +225,47 @@ describe('gradeVerdicts', () => {
     ]);
   });
 
+  it("grades rule-decided rows as their own variant, without the model's confidence", () => {
+    const detection = (id: string, verdict: 'confirmed_abuse' | 'legitimate_human') => ({
+      id,
+      detector: 'accountCampaign' as const,
+      policyVersion: 1,
+      userIds: [`${id}-1`],
+      detectedAt: at('5T15:00:00'),
+      verdict,
+      verdicts: [],
+    });
+    const report = gradeVerdicts(
+      input({
+        detections: [detection('ruled', 'legitimate_human'), detection('modelled', 'confirmed_abuse')],
+        decisions: [
+          {
+            detectionId: 'ruled',
+            outcome: 'would_intervene',
+            mode: 'shadow',
+            confidence: 0.9,
+            decidedAt: at('5T15:06:00'),
+            decidedBy: 'link_rule',
+          },
+          {
+            detectionId: 'modelled',
+            outcome: 'would_contain',
+            mode: 'shadow',
+            confidence: 0.95,
+            decidedAt: at('5T15:06:00'),
+            decidedBy: 'model',
+          },
+        ],
+      })
+    );
+
+    expect(scoreOf(report, 'containment', 'shadow')).toMatchObject({ truePositive: 1, falsePositive: 0 });
+    expect(scoreOf(report, 'containment', 'shadow:link_rule')).toMatchObject({ truePositive: 0, falsePositive: 1 });
+    expect(report.disagreements).toEqual([
+      expect.objectContaining({ variant: 'shadow:link_rule', detectionId: 'ruled', confidence: null }),
+    ]);
+  });
+
   it('labels an unreviewed detection from its members only when they agree', () => {
     const report = gradeVerdicts(
       input({

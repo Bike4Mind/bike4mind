@@ -55,18 +55,18 @@ struct VoiceRecorderPanel: View {
     switch model.state {
     case .idle, .failed:
       if case .failed(let error) = model.state {
-        Text(error.message).font(.footnote).foregroundStyle(Tokens.Palette.destructive)
+        Text(error.message).font(Tokens.Typography.caption).foregroundStyle(Tokens.Palette.destructive)
           .multilineTextAlignment(.center)
           .accessibilityIdentifier("voice-error-label")
       }
       recordButton(symbol: "mic.circle.fill", label: "Start recording") { await model.start() }
-      Text("Tap to start, tap again to stop.").font(.footnote)
+      Text("Tap to start, tap again to stop.").font(Tokens.Typography.caption)
         .foregroundStyle(Tokens.Palette.secondaryText)
     case .recording:
       recordButton(symbol: "stop.circle.fill", label: "Stop recording", tint: Tokens.Palette.destructive) {
         await model.stop()
       }
-      Text("Recording").font(.footnote).foregroundStyle(Tokens.Palette.secondaryText)
+      Text("Recording").font(Tokens.Typography.caption).foregroundStyle(Tokens.Palette.secondaryText)
     case .starting:
       ProgressView("Starting")
     case .transcribing, .transcribed:
@@ -75,7 +75,7 @@ struct VoiceRecorderPanel: View {
   }
 
   private func recordButton(
-    symbol: String, label: String, tint: Color = .accentColor, action: @escaping () async -> Void
+    symbol: String, label: String, tint: Color = Tokens.Palette.brand, action: @escaping () async -> Void
   ) -> some View {
     Button {
       Task { await action() }

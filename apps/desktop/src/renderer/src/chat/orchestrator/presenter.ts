@@ -2,7 +2,7 @@ import type { PendingDecision } from '@shared/orchestration';
 import type { ViewAction, ViewApproval } from '@shared/viewSnapshot';
 import type { InnkeeperDesk } from './OrchestratorStage';
 import type { AgentView, ParentView } from './roster';
-import { isOneClickDecision } from './tavern/bubbleAnswer';
+import { isOneClickDecision } from './scene/bubbleAnswer';
 
 /*
  * Presenter mode: the Orchestrate stage with every word that came from the work itself replaced, so the

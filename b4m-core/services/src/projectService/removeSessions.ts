@@ -1,5 +1,6 @@
 import {
   IProjectRepository,
+  IFabFileRepository,
   ISessionRepository,
   IUserRepository,
   secureParameters,
@@ -10,6 +11,8 @@ import {
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
 import { usableObjectIds } from '@bike4mind/db-core';
+import { createGrantLossCleanup } from '../sharingService/grantLoss';
+import type { SharedItem } from '../sharingService/projectGrantor';
 
 const removeProjectSessionsSchema = z.object({
   projectId: z.string(),
@@ -23,7 +26,9 @@ interface RemoveProjectSessionsAdapters {
     projects: IProjectRepository;
     sessions: ISessionRepository;
     users: IUserRepository;
+    fabFiles?: IFabFileRepository;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const removeSessions = async (
@@ -67,7 +72,7 @@ export const removeSessions = async (
   }
   // A soft-deleted row is hidden from the reads above but keeps its project-tagged grants, which a
   // restore would bring back; only an id with no row at all needs no revoke.
-  const softDeletedIds = found.filter(s => s.deletedAt).map(s => String(s.id));
+  const softDeleted = found.filter(session => session.deletedAt);
 
   if (project.userId !== userId) {
     const ownedIds = new Set(sessions.filter(s => s.userId === userId).map(s => canonicalId(String(s.id))));
@@ -84,16 +89,24 @@ export const removeSessions = async (
   project.sessionIds = project.sessionIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
-  // Revoke all project users access to the session
-  for (const session of sessions) {
-    await db.sessions.shareable.updateUserShares(session.id, { remove: { projectId: project.id } });
+  const cleanup = createGrantLossCleanup({ db, onAccessRemoved: adapters.onAccessRemoved });
+  const current = cleanup.trackProject(project, false);
+  const detachedIds = new Set(removedIds.map(canonicalId));
+  for (const session of [...sessions, ...softDeleted]) {
+    const item = cleanup.track('sessions', session as SharedItem);
+    cleanup.removeRows(item, row => !!row.projectId && canonicalId(row.projectId) === canonicalId(project.id));
+    if (detachedIds.has(canonicalId(session.id))) await cleanup.detachSessionKnowledge(item.document, current);
   }
+  await cleanup.drain();
+  await cleanup.flush();
 
-  for (const id of softDeletedIds) {
-    await db.sessions.shareable.updateUserShares(id, { remove: { projectId: project.id }, includeDeleted: true });
-  }
-
-  await db.projects.update({ id: project.id, sessionIds: project.sessionIds, updatedAt: project.updatedAt });
+  await db.projects.update({
+    id: project.id,
+    sessionIds: project.sessionIds,
+    fileIds: project.fileIds,
+    systemPrompts: project.systemPrompts,
+    updatedAt: project.updatedAt,
+  });
 
   // removedIds are the stored ids actually taken out, so callers can skip side effects for a no-op.
   return { project, removedIds };

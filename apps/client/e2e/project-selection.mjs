@@ -5,7 +5,7 @@ export const SUITES = [
   'notebook-files', 'projects', 'agents', 'image-gen', 'profile', 'tavern', 'search',
   'data-lake', 'skills', 'teams', 'studio', 'credits', 'notebook-export-bytes',
   'ai-latency-short-answers', 'ai-latency-long-answers', 'ai-latency-tool-prompts',
-  'ai-latency-intermediate-tools', 'ai-latency-discover',
+  'ai-latency-intermediate-tools', 'ai-latency-discover', 'tutorial-basics',
 ];
 export const STANDALONE = [
   'selfhost-chat-stream.spec.ts', 'selfhost-pod-roll.spec.ts',

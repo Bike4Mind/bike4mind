@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
+  isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminRoleIds,
   resolveUserStorageLimit,
@@ -12,9 +13,10 @@ import {
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
+import { useAdminUserOAuthApps } from '@client/app/hooks/data/adminUserOAuthApps';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
-import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtc } from '../../../shared';
+import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtcDay } from '../../../shared';
 import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
@@ -27,6 +29,7 @@ import { InterventionHoldsCard } from '../../../InterventionHolds';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
+import { OAuthAppsCard } from './OAuthAppsCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
@@ -61,9 +64,10 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
   const { currentUser } = useUser();
   const storage = resolveUserStorageLimit(user);
   const network = user.signupMeta;
+  const oauthApps = useAdminUserOAuthApps(user.id);
   const signupParts = [
     user.acquisition?.signupMethod,
-    user.createdAt && formatUtc(new Date(user.createdAt)).split(',')[0],
+    user.createdAt && formatUtcDay(new Date(user.createdAt)),
     network?.country,
   ].filter(Boolean);
 
@@ -85,6 +89,11 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
         </Stack>
       </Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
+      <Fact label="Signed up via" data-testid="user-profile-fact-signup-client">
+        {user.signupClientId && !oauthApps.isPending
+          ? (oauthApps.data?.signupClient?.name ?? user.signupClientId)
+          : null}
+      </Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
         {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (
           <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
@@ -163,8 +172,9 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const knownRoles = roleListAvailable ? roles.data : [];
   const heldRoles = knownRoles.filter(role => roleIds.includes(role.id.toLowerCase()));
   const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, knownRoles);
-  // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
-  const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
+  // The endpoint is full-admin only and never edits the viewer's own account; for a Super Admin it
+  // edits only the permissions that role does not imply.
+  const canEditPermissions = isFullAdmin(currentUser) && currentUser?.id !== user.id;
 
   return (
     <SectionCard
@@ -196,7 +206,19 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
       <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.isAdmin ? (
-            'All (Super Admin)'
+            <>
+              All (Super Admin)
+              {effective
+                .filter(entry => isExplicitOnlyAdminPermission(entry.id))
+                .map(entry => (
+                  <StatusChip
+                    key={entry.id}
+                    tone="neutral"
+                    label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                    data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                  />
+                ))}
+            </>
           ) : (
             <>
               {effective.map(entry => (
@@ -353,6 +375,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         <OrganizationsCard user={user} onAudit={onAudit} />
         <AccessCard user={user} onAction={onAction} />
         <ClientsCard user={user} />
+        <OAuthAppsCard userId={user.id} />
         <SignupClassificationCard key={user.id} userId={user.id} />
         <RiskEvidenceCard userId={user.id} />
         <SectionCard

@@ -137,7 +137,7 @@ Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.
 
 TWO SURFACES - CHOOSE THE RIGHT ONE FIRST:
 Artifacts live on two surfaces with different rules. Decide which the user wants BEFORE you pick a type.
-- IN-APP preview (renders in chat/notebook): permissive. React/JSX, Tailwind classes, and the supported npm set work here.
+- IN-APP preview (renders in chat/notebook): permissive. React/JSX, Tailwind classes, and the supported npm set work here. In-app React previews cannot hot-link third-party images or stylesheets (images: inline SVG, data: URIs or the B4M host only).
 - PUBLISH / SHARE (a /p/ link teammates open): strict + validated. TWO shapes publish: (1) a self-contained text/html file (inline CSS + inline VANILLA JS), and (2) a React artifact, which is transpiled server-side at publish into a self-contained inert bundle (no CDN React, no Babel, no eval on the live page). Either shape must be self-contained and eval-free; the wrong shape is rejected.
 Both text/html and React artifacts are shareable. Pick the type by the deliverable, then follow that type's publish rules:
 - If the user signals SHARE/PUBLISH/SEND/LINK/EMBED/CLIENT/TEAM/PUBLIC, OR the deliverable is clearly external-facing (landing page, report, dashboard, calculator, portfolio, game, toy), OR intent is ambiguous -> prefer type="text/html" (simplest publishable shape) unless it is genuinely a React component. When truly unsure, ask once: "Do you want a shareable link?"
@@ -438,6 +438,10 @@ export const SettingKeySchema = z.enum([
   'ScanURLinPrompt',
   'DefaultInviteCode',
   'serverStatus',
+  'statusPageEnabled',
+  'statusPagePublicEnabled',
+  'statusPageVendorFeedsEnabled',
+  'statusPageSyntheticLlmEnabled',
   'CSMandCTAFlag',
   'showDesktopAppPromo',
   'SystemFiles',
@@ -1831,6 +1835,16 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  linkRules: z
+    .object({
+      enabled: z.boolean().prefault(true).meta({
+        title: 'Enabled',
+        description:
+          'When the model does not act, deterministic link rules (shared owned domain, admin-held signup domain, banned same device) may decide Limit or Hold signup grant, under the settings of those tiers.',
+      }),
+    })
+    .prefault({})
+    .meta({ title: 'Link rules' }),
   tiers: z
     .object({
       limit: z
@@ -2942,6 +2956,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'serverStatus', order: 1 },
       { key: 'AdminEmail', order: 2 },
       { key: 'mailFrom', order: 3 },
+      { key: 'statusPageEnabled', order: 4 },
+      { key: 'statusPagePublicEnabled', order: 5 },
+      { key: 'statusPageVendorFeedsEnabled', order: 6 },
+      { key: 'statusPageSyntheticLlmEnabled', order: 7 },
     ],
   },
   REGISTRATION: {
@@ -3787,7 +3805,7 @@ export const settingsMap = {
     min: 1,
     max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
     int: true,
-    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
+    description: `The most data, in MB, all the files pinned to one saved function and the most its sources can fetch add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned or the sources are saved. Can be overridden per organization; a member of several organizations gets the lowest.`,
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.8,
@@ -5230,6 +5248,44 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
     options: Object.values(ServerStatusEnum),
+  }),
+  statusPageEnabled: makeBooleanSetting({
+    key: 'statusPageEnabled',
+    name: 'Status Page Checks',
+    defaultValue: false,
+    description: 'Whether the status page tick runs: probes, vendor feeds, incident drafts and snapshot publishing.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 4,
+  }),
+  statusPagePublicEnabled: makeBooleanSetting({
+    key: 'statusPagePublicEnabled',
+    name: 'Status Page Public',
+    defaultValue: false,
+    description:
+      'Whether the public status route and the in-app status page are served. History can accumulate while this is off.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 5,
+  }),
+  statusPageVendorFeedsEnabled: makeBooleanSetting({
+    key: 'statusPageVendorFeedsEnabled',
+    name: 'Status Page Vendor Feeds',
+    defaultValue: true,
+    description: 'Whether the status page reads upstream vendor status feeds.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 6,
+  }),
+  statusPageSyntheticLlmEnabled: makeBooleanSetting({
+    key: 'statusPageSyntheticLlmEnabled',
+    name: 'Status Page Synthetic LLM Probe',
+    defaultValue: false,
+    description:
+      'Whether the status page runs a synthetic LLM completion probe. Each probe call spends provider credits.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 7,
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',

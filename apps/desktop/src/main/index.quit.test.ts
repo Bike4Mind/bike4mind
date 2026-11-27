@@ -114,6 +114,7 @@ vi.mock('./orchestrateMini', () => ({
   }),
 }));
 vi.mock('./host/registerHostConnections', () => ({ registerHostConnections: vi.fn() }));
+vi.mock('./host/remote/registerSshHosts', () => ({ registerSshHosts: () => ({ dispose: vi.fn() }) }));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },

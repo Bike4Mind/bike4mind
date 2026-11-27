@@ -20,6 +20,7 @@ initializeSlackPackage();
  *
  * Async processing:
  * - Apply subscription filters (project, priority, issue type)
+ * - Check the subscriber can view the event's issue or board in Jira
  * - Format Slack message
  * - POST to Slack webhook URL
  * - Record delivery status
@@ -60,6 +61,7 @@ import {
   validateJiraPayloadTimestamp,
 } from '@server/integrations/jira/webhookUtils';
 import { WebhookProcessingResult, extractIssueInfo, matchesFilters } from '@server/integrations/jira/types';
+import { canSubscriberViewJiraEvent } from '@server/integrations/jira/subscriberAccess';
 
 /** Consecutive failed deliveries after which a subscription is auto-disabled. */
 const JIRA_AUTO_DISABLE_FAILURE_THRESHOLD = 10;
@@ -516,6 +518,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     // Capture config values for use in async closure
     const webhookConfigId = jiraWebhookConfig.id;
     const atlassianSiteUrl = jiraWebhookConfig.atlassianSiteUrl;
+    const accessConfig = {
+      atlassianCloudId: jiraWebhookConfig.atlassianCloudId,
+      createdBy: jiraWebhookConfig.createdBy,
+    };
 
     // Process each subscription (fire and forget - don't block response)
     const processSubscriptions = async () => {
@@ -538,6 +544,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
                 await recordDelivery(subscription, JiraWebhookDeliveryStatus.Filtered, 'Issue does not match filters');
                 return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Filtered };
               }
+            }
+
+            const canView = await canSubscriberViewJiraEvent({
+              subscriberUserId: subscription.userId,
+              config: accessConfig,
+              payload,
+            });
+            if (!canView) {
+              await recordDelivery(
+                subscription,
+                JiraWebhookDeliveryStatus.Filtered,
+                'Subscriber cannot view this Jira content'
+              );
+              return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Filtered };
             }
 
             let botToken: string;

@@ -12,6 +12,7 @@ import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
+import { registerTurnsRoutes } from './external/turnsRoute';
 import { requireOriginVerify } from './originVerify';
 import { ensureSecretsAtRest } from './secretsAtRestBoot';
 import { createTaskProtection } from './taskProtection';
@@ -130,7 +131,7 @@ export function createApp() {
   // Lambda via NAT); keep any other direct-only route above this line too.
   app.use(requireOriginVerify);
 
-  // Every user-facing route below (completions, embed chat) refuses a caller
+  // Every user-facing route below (completions, embed chat, session turns) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
   app.use(checkBlockedIP({ surface: 'app' }));
 
@@ -142,6 +143,9 @@ export function createApp() {
   // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
   // Same always-on rationale + drain set as the completions route.
   registerEmbedRoutes(app, track);
+
+  // Public session turns endpoint: a turn on an existing session, run in-process and streamed back.
+  registerTurnsRoutes(app, track);
 
   return app;
 }

@@ -1,4 +1,4 @@
-import type { TutorialStep, TutorialTurn } from '@bike4mind/common';
+import type { TutorialStep, TutorialTrack, TutorialTurn } from '@bike4mind/common';
 
 export interface TutorialModuleIntro {
   id: string;
@@ -37,6 +37,8 @@ export interface TutorialModule extends TutorialModuleIntro {
   canvasSolve?: { nodeId: string; turn: number };
   /** Made by an admin rather than shipped in code. */
   created?: boolean;
+  /** The picker group, stamped from the owner's registry entry. */
+  track?: TutorialTrack;
 }
 
 /** A module as the repo ships it: the steps before any closing steps, and the recorded turns. */

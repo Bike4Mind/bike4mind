@@ -13,17 +13,34 @@ describe('projectService - removeSessions (narrowed writes)', () => {
 
   let db: {
     users: { findById: Mock };
-    projects: { shareable: { findAccessibleById: Mock }; update: Mock };
-    sessions: { shareable: { findAllAccessibleByIds: Mock; updateUserShares: Mock }; findAllByIds: Mock; update: Mock };
+    projects: { shareable: { findAccessibleById: Mock }; update: Mock; findParticipatingReferencing: Mock };
+    sessions: {
+      shareable: { findAllAccessibleByIds: Mock; updateUserShares: Mock };
+      findAllByIds: Mock;
+      update: Mock;
+      updateGuarded: Mock;
+    };
   };
-  let project: { id: string; userId: string; sessionIds: string[] };
+  let project: {
+    id: string;
+    userId: string;
+    sessionIds: string[];
+    fileIds: string[];
+    systemPrompts: { fileId: string }[];
+  };
   let sessions: { id: string; userId: string; users: Grant[] }[];
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    project = { id: PROJECT_ID, userId: OWNER_ID, sessionIds: [SESSION_A, SESSION_B, SESSION_KEPT] };
+    project = {
+      id: PROJECT_ID,
+      userId: OWNER_ID,
+      sessionIds: [SESSION_A, SESSION_B, SESSION_KEPT],
+      fileIds: [],
+      systemPrompts: [],
+    };
     sessions = [
       {
         id: SESSION_A,
@@ -45,11 +62,13 @@ describe('projectService - removeSessions (narrowed writes)', () => {
       projects: {
         shareable: { findAccessibleById: vi.fn(async () => project) },
         update: vi.fn(async () => project),
+        findParticipatingReferencing: vi.fn(async () => []),
       },
       sessions: {
         shareable: { findAllAccessibleByIds: vi.fn(async () => sessions), updateUserShares: vi.fn() },
         findAllByIds: vi.fn(async () => []),
         update: vi.fn(async () => undefined),
+        updateGuarded: vi.fn(async (change: { id: string; users: Grant[] }) => change),
       },
     };
   });
@@ -79,15 +98,20 @@ describe('projectService - removeSessions (narrowed writes)', () => {
     );
 
     expect(db.sessions.update).not.toHaveBeenCalled();
-    expect(db.sessions.shareable.updateUserShares.mock.calls).toStrictEqual([
-      [SESSION_A, { remove: { projectId: PROJECT_ID } }],
-      [SESSION_B, { remove: { projectId: PROJECT_ID } }],
+    expect(db.sessions.updateGuarded.mock.calls).toStrictEqual([
+      [
+        { id: SESSION_A, users: [{ userId: 'member-2', permissions: [Permission.read], projectId: 'other-project' }] },
+        { includeDeleted: true },
+      ],
+      [{ id: SESSION_B, users: [] }, { includeDeleted: true }],
     ]);
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
       sessionIds: [SESSION_KEPT],
+      fileIds: [],
+      systemPrompts: [],
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
   });
@@ -152,7 +176,14 @@ describe('projectService - removeSessions (narrowed writes)', () => {
 
   it('revokes the project grants on a soft-deleted held session as well as clearing its id', async () => {
     db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
-    db.sessions.findAllByIds.mockResolvedValueOnce([{ id: SESSION_KEPT, deletedAt: new Date() }]);
+    db.sessions.findAllByIds.mockResolvedValueOnce([
+      {
+        id: SESSION_KEPT,
+        userId: OWNER_ID,
+        deletedAt: new Date(),
+        users: [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }],
+      },
+    ]);
 
     const { removedIds } = await removeSessions(
       OWNER_ID,
@@ -162,10 +193,7 @@ describe('projectService - removeSessions (narrowed writes)', () => {
 
     expect(removedIds).toEqual([SESSION_KEPT]);
     expect(db.sessions.findAllByIds).toHaveBeenCalledWith([SESSION_KEPT], { includeDeleted: true });
-    expect(db.sessions.shareable.updateUserShares).toHaveBeenCalledWith(SESSION_KEPT, {
-      remove: { projectId: PROJECT_ID },
-      includeDeleted: true,
-    });
+    expect(db.sessions.updateGuarded).toHaveBeenCalledWith({ id: SESSION_KEPT, users: [] }, { includeDeleted: true });
   });
 
   it('clears a hard-deleted held session id without any revoke', async () => {

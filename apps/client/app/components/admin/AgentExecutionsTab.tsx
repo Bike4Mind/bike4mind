@@ -40,8 +40,6 @@ const formatAge = (updatedAt: string): string => {
   return `${days}d ${hours % 24}h`;
 };
 
-const truncate = (s: string, max = 80): string => (s.length <= max ? s : `${s.slice(0, max)}…`);
-
 const formatConfidenceTooltip = (t: NonNullable<StuckExecutionItem['confidenceTelemetry']>): string =>
   `${t.evaluatedCount} evaluated · ${t.emittedCount} gated · avg ${t.avgConfidence.toFixed(2)} · min ${t.minConfidence.toFixed(2)}`;
 
@@ -150,14 +148,12 @@ const AgentExecutionsTab: React.FC = () => {
       ),
     },
     {
-      id: 'query',
-      label: 'Query',
+      id: 'session',
+      label: 'Session',
       render: item => (
-        <Tooltip title={item.query} placement="top">
-          <Typography level="body-sm" noWrap>
-            {truncate(item.query, 100)}
-          </Typography>
-        </Tooltip>
+        <Typography level="body-xs" noWrap title={item.sessionId} sx={{ fontFamily: 'monospace' }}>
+          {item.sessionId}
+        </Typography>
       ),
     },
     {
@@ -295,7 +291,7 @@ const AgentExecutionsTab: React.FC = () => {
           loading={isPending || isPlaceholderData}
           error={isError && !data ? errorMessage : undefined}
           onRetry={() => void refetch()}
-          // Fixed columns total 54.75rem with the checkbox; the query takes the rest and truncates.
+          // Fixed columns total 54.75rem with the checkbox; the session id takes the rest and truncates.
           minWidth="68rem"
           empty={
             <Box data-testid="stuck-agent-executions-empty">

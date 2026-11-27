@@ -135,9 +135,13 @@ export const FEDERATED_ADMIN_STATUS_SCOPE = 'federated:admin-status';
 export const OAUTH_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
 export const OAUTH_FEDERATED_DEFAULT_SCOPES = ['ai:generate', 'me:read'] as const;
 
+// ApiKeyScope.FUNCTIONS_INVOKE and FUNCTIONS_AUTHOR, which the AI-token exchange (pages/api/oauth/ai-token.ts)
+// mints beside the chat scopes on its key.
+export const OAUTH_FUNCTIONS_SCOPES = ['functions:invoke', 'functions:author'] as const;
+
 // Never part of a registration's default allowedScopes: each is granted to a client deliberately,
 // one client at a time.
-export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE] as const;
+export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE, ...OAUTH_FUNCTIONS_SCOPES] as const;
 
 // Scopes an admin can grant to a client; shared by the admin edit form and updateOAuthClient.
 export const OAUTH_CLIENT_SCOPES = [

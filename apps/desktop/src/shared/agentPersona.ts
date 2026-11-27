@@ -3,6 +3,7 @@ export type Epithet = 'Warden' | 'Scribe' | 'Tinkerer' | 'Cartographer' | 'Seeke
 /** What a persona is derived from: an agent's id, creation time, title and seed prompt. */
 export type PersonaSubject = { id: string; createdAt: string; title: string; seedPrompt: string };
 
+/** `label` is what the user sees: the name alone. `epithet` only picks a sprite whose craft fits the task. */
 export type AgentPersona = { name: string; epithet: Epithet; label: string; shortTitle: string };
 
 const SEPARATORS = [':', ' - ', ' | '] as const;
@@ -138,7 +139,7 @@ export function assignPersonas(agents: readonly PersonaSubject[]): Map<string, A
     personas.set(agent.id, {
       name,
       epithet,
-      label: `${name} the ${epithet}`,
+      label: name,
       shortTitle: distinctTitle(agent.title, titles),
     });
   }

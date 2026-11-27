@@ -241,7 +241,7 @@ Host to mod:
 
 - `{ type: 'snapshot', snapshot }`: the projected snapshot (5.3). Sent once on ready, then on change,
   coalesced to at most 4 per second so a busy orchestration does not flood the mod.
-- `{ type: 'paused', paused }`: the host's `useScenePause` state (`tavern/useScenePause`), so a mod can
+- `{ type: 'paused', paused }`: the host's `useScenePause` state (`scene/useScenePause`), so a mod can
   stop animating while hidden, as built-in views do.
 - `{ type: 'action-result', requestId, ok, reason? }`.
 - `{ type: 'ping', n }`: the heartbeat (section 11).

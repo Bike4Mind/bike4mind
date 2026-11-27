@@ -39,7 +39,13 @@ vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ holdsPaidS
 // BadRequestError is included (and constructed by the tests) so the handler's
 // `instanceof` check sees the same class identity as the rejection it inspects.
 vi.mock('@bike4mind/common', () => ({
-  ApiKeyScope: { AI_GENERATE: 'ai:generate', ME_READ: 'me:read' },
+  ApiKeyScope: {
+    AI_GENERATE: 'ai:generate',
+    ME_READ: 'me:read',
+    FUNCTIONS_INVOKE: 'functions:invoke',
+    FUNCTIONS_AUTHOR: 'functions:author',
+  },
+  EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: ['functions:invoke', 'functions:author'],
   ApiKeyStatus: { ACTIVE: 'active', RATE_LIMITED: 'rate_limited', DISABLED: 'disabled', EXPIRED: 'expired' },
   BadRequestError: class BadRequestError extends Error {
     constructor(

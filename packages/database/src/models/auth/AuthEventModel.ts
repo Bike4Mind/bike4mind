@@ -18,6 +18,8 @@ export interface IAuthEventDocument extends Document, INetworkMeta {
   type: AuthEventType;
   /** How the session was minted (AuthSessionCreatedVia) or the signup strategy. */
   method: string;
+  /** The OAuth client a signup came through (IUser.signupClientId); signup rows only. */
+  clientId?: string;
   createdAt: Date;
   updatedAt: Date; // Required by Document constraint; not auto-set (timestamps.updatedAt: false)
 }
@@ -26,6 +28,7 @@ export type CreateAuthEventInput = INetworkMeta & {
   userId: string;
   type: AuthEventType;
   method: string;
+  clientId?: string;
 };
 
 const AuthEventSchema = new Schema<IAuthEventDocument>(
@@ -33,6 +36,7 @@ const AuthEventSchema = new Schema<IAuthEventDocument>(
     userId: { type: String, required: true },
     type: { type: String, required: true, enum: AUTH_EVENT_TYPES },
     method: { type: String, required: true },
+    clientId: { type: String },
     ...NETWORK_META_FIELDS,
   },
   {

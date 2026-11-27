@@ -17,6 +17,8 @@ vi.mock('./tagCache', () => ({ tagCacheManager: { clearAllCaches: vi.fn().mockRe
 import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
 import { clearClientCaches } from './clearClientCaches';
+import { useChatInput } from '../hooks/useChatInput';
+import { getStoredJupyterConfig, subscribeStoredJupyterConfig } from './jupyterBrowserClient';
 
 function setPrefixes(prefixes: string[]) {
   premiumLocalStorageKeyPrefixes.length = 0;
@@ -93,5 +95,46 @@ describe('clearClientCaches identity-scoped stores', () => {
     await clearClientCaches();
 
     expect(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY)).toBeNull();
+  });
+
+  it('drops unsent chat drafts from storage and from the live store', async () => {
+    useChatInput.getState().setDraft('__new_notebook__', 'half-typed prompt');
+    expect(localStorage.getItem('chat-input-drafts')).not.toBeNull();
+
+    await clearClientCaches();
+
+    expect(localStorage.getItem('chat-input-drafts')).toBeNull();
+    expect(useChatInput.getState().getDraft('__new_notebook__')).toBe('');
+  });
+
+  it('drops the saved Jupyter server and token', async () => {
+    localStorage.setItem('b4m-jupyter-config', JSON.stringify({ serverUrl: 'http://jupyter.test', token: 't' }));
+    const onChange = vi.fn();
+    const unsubscribe = subscribeStoredJupyterConfig(onChange);
+
+    await clearClientCaches();
+    unsubscribe();
+
+    expect(localStorage.getItem('b4m-jupyter-config')).toBeNull();
+    expect(getStoredJupyterConfig()).toBeNull();
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it('deletes service worker runtime caches but keeps the precache', async () => {
+    const deleted: string[] = [];
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['serwist-precache-v2-https://app.example.com/', 'others', 'cross-origin']),
+      delete: vi.fn(async (name: string) => {
+        deleted.push(name);
+        return true;
+      }),
+    });
+    try {
+      await clearClientCaches();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(deleted.sort()).toEqual(['cross-origin', 'others']);
   });
 });

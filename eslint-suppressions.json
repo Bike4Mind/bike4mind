@@ -558,11 +558,6 @@
       "count": 3
     }
   },
-  "apps/client/app/components/Charts/RechartsChart.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/Charts/RechartsRenderer.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -2115,11 +2110,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/elabs/voice/[id]/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -2639,7 +2629,7 @@
   },
   "apps/client/pages/api/projects/[id]/index.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 2
     }
   },
   "apps/client/pages/api/projects/[id]/invites.ts": {
@@ -3009,11 +2999,6 @@
   "apps/client/pages/api/users/[id]/collections/__tests__/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "apps/client/pages/api/users/[id]/email-settings.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/pages/api/users/[id]/organizations/__tests__/index.test.ts": {
