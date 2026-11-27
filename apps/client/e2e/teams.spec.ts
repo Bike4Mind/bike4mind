@@ -4,6 +4,7 @@ import { TEAMS_INVITEE_KEY, TEAMS_MANAGER_KEY, TEAMS_MEMBER_KEY, TIMEOUTS } from
 import { getTestUsers, type TestUser } from './helpers/test-users';
 import { apiAddTeamMember, apiDeleteGrantedTeam, apiGetTeam, apiGrantTeam, apiRevokeTeamGrant } from './helpers/api';
 import { AdminPage } from './pages/AdminPage';
+import { newWafRequestContext } from './helpers/waf-bypass';
 import { ALL_TEAM_TABS, TeamsPage } from './pages/TeamsPage';
 
 /**
@@ -61,7 +62,7 @@ test.describe('Teams', () => {
       throw new Error('Missing teams spec users - teams.setup.ts must run first');
     }
 
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     mainTeamId = await apiGrantTeam(ctx, adminToken, { name: MAIN_TEAM, ownerEmail: owner.email, seats: 6 });
     await apiAddTeamMember(ctx, adminToken, mainTeamId, member.userId);
     await apiAddTeamMember(ctx, adminToken, mainTeamId, manager.userId);
@@ -78,7 +79,7 @@ test.describe('Teams', () => {
   });
 
   test.afterAll(async ({ playwright }) => {
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     await Promise.allSettled(
       [mainTeamId, fullTeamId, disposableTeamId].filter(Boolean).map(id => apiDeleteGrantedTeam(ctx, adminToken, id))
     );
