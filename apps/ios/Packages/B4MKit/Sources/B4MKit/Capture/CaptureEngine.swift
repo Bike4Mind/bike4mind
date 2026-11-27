@@ -101,7 +101,8 @@ public actor CaptureEngine {
     if hasOwnershipProvider && claimedOwner == nil { throw CaptureOwnershipError.noSignedInAccount }
     if currentAdmission != nil {
       guard let admission = claimedAdmission, let makeAdmittedAPI else { throw SharedSessionError.unavailable }
-      return Work(generation: ownershipGeneration, owner: claimedOwner, admission: admission, api: makeAdmittedAPI(admission))
+      return Work(
+        generation: ownershipGeneration, owner: claimedOwner, admission: admission, api: makeAdmittedAPI(admission))
     }
     return Work(generation: ownershipGeneration, owner: claimedOwner, admission: nil, api: api)
   }
@@ -110,7 +111,8 @@ public actor CaptureEngine {
     _ work: Work, job: UploadJob? = nil, checkState: Bool = false, _ operation: () throws -> Result
   ) throws -> Result {
     guard work.generation == ownershipGeneration, work.owner == claimedOwner,
-      work.admission?.identity == claimedAdmission?.identity else { throw SharedSessionError.changed }
+      work.admission?.identity == claimedAdmission?.identity
+    else { throw SharedSessionError.changed }
     if let job {
       guard !discarded.contains(job.id), !hasOwnershipProvider || job.owner == work.owner else {
         throw SharedSessionError.changed
@@ -152,7 +154,8 @@ public actor CaptureEngine {
     defer { notify() }
     return try withWork(work) {
       guard !discarded.contains(id), var job = try store.load(id: id),
-        !hasOwnershipProvider || job.owner == work.owner else { return false }
+        !hasOwnershipProvider || job.owner == work.owner
+      else { return false }
       guard try change(&job) else { return false }
       job.updatedAt = now()
       try store.save(job)
@@ -207,7 +210,9 @@ public actor CaptureEngine {
     try enqueue(items, to: destination, note: note, work: makeWork())
   }
 
-  private func enqueue(_ items: [ShareItem], to destination: CaptureDestination, note: String?, work: Work) throws -> [UploadJob] {
+  private func enqueue(
+    _ items: [ShareItem], to destination: CaptureDestination, note: String?, work: Work
+  ) throws -> [UploadJob] {
     try validate(work)
     let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     var created: [UploadJob] = []
@@ -273,13 +278,17 @@ public actor CaptureEngine {
     try await submit(items, to: destination, note: note, expectedAdmission: nil)
   }
 
-  func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?, admission: SharedSessionAdmission)
+  func submit(
+    _ items: [ShareItem], to destination: CaptureDestination, note: String?, admission: SharedSessionAdmission
+  )
     async throws -> [UploadJob]
   {
     try await submit(items, to: destination, note: note, expectedAdmission: admission)
   }
 
-  private func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?, expectedAdmission: SharedSessionAdmission?)
+  private func submit(
+    _ items: [ShareItem], to destination: CaptureDestination, note: String?, expectedAdmission: SharedSessionAdmission?
+  )
     async throws -> [UploadJob]
   {
     if hasOwnershipProvider {
@@ -346,8 +355,9 @@ public actor CaptureEngine {
   }
 
   public func retry(jobID: UUID) async {
-    do { try await retry(jobID: jobID, work: makeWork()) }
-    catch { logger.notice("Capture retry unavailable: \(error, privacy: .private)") }
+    do { try await retry(jobID: jobID, work: makeWork()) } catch {
+      logger.notice("Capture retry unavailable: \(error, privacy: .private)")
+    }
   }
 
   private func retry(jobID: UUID, work: Work) async throws {
@@ -373,8 +383,9 @@ public actor CaptureEngine {
   }
 
   public func discard(jobID: UUID) {
-    do { try discard(jobID: jobID, work: makeWork()) }
-    catch { logger.notice("Capture discard unavailable: \(error, privacy: .private)") }
+    do { try discard(jobID: jobID, work: makeWork()) } catch {
+      logger.notice("Capture discard unavailable: \(error, privacy: .private)")
+    }
   }
 
   private func discard(jobID: UUID, work: Work) throws {
@@ -467,7 +478,9 @@ public actor CaptureEngine {
 
   // MARK: - Job creation
 
-  private func makeJob(for item: ShareItem, destination: CaptureDestination, note: String?, owner: CaptureOwner?) throws -> UploadJob {
+  private func makeJob(
+    for item: ShareItem, destination: CaptureDestination, note: String?, owner: CaptureOwner?
+  ) throws -> UploadJob {
     let id = UUID()
     do {
       let payload: UploadPayload
@@ -513,7 +526,8 @@ public actor CaptureEngine {
     defer { inFlight.remove(id) }
     for _ in 0..<4 {
       guard let job = try? withWork(work, { try store.load(id: id) }),
-        (try? withWork(work, job: job, { true })) == true else { return }
+        (try? withWork(work, job: job, { true })) == true
+      else { return }
       switch job.stage {
       case .queued:
         guard await startUpload(job, work: work) else { return }
@@ -756,7 +770,9 @@ public actor CaptureEngine {
       if hasOwnershipProvider { guard try await claim() else { return } }
       let work = try makeWork()
       let changed = try updateJob(event.jobID, work: work) { job in
-        guard job.stage == .uploading, job.uploadTaskID == event.taskID, job.uploadSession == identifier else { return false }
+        guard job.stage == .uploading, job.uploadTaskID == event.taskID, job.uploadSession == identifier else {
+          return false
+        }
         switch event.outcome {
         case .succeeded:
           job.stage = .registering
@@ -775,8 +791,9 @@ public actor CaptureEngine {
   }
 
   func reconcile() async {
-    do { try await reconcile(work: makeWork()) }
-    catch { logger.notice("Capture reconciliation unavailable: \(error, privacy: .private)") }
+    do { try await reconcile(work: makeWork()) } catch {
+      logger.notice("Capture reconciliation unavailable: \(error, privacy: .private)")
+    }
   }
 
   private func reconcile(work: Work) async throws {
@@ -792,8 +809,10 @@ public actor CaptureEngine {
     for candidate in uploading {
       try updateJob(candidate.id, work: work) { job in
         guard job == candidate,
-          UploadReconciler.shouldRequeue(job, liveJobIDs: live, ownIdentifier: ownIdentifier,
-            now: now(), foreignStaleAfter: configuration.foreignUploadStaleAfter) else { return false }
+          UploadReconciler.shouldRequeue(
+            job, liveJobIDs: live, ownIdentifier: ownIdentifier,
+            now: now(), foreignStaleAfter: configuration.foreignUploadStaleAfter)
+        else { return false }
         job.ticket = nil
         job.uploadSession = nil
         job.uploadTaskID = nil

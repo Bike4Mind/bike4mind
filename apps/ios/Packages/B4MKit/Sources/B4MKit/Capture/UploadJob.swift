@@ -169,10 +169,8 @@ public struct FileUploadJobStore: UploadJobStore, CaptureStagingProviding {
 
   public func remove(id: UUID) throws {
     // Failed metadata removal must leave a surviving record's payload intact.
-    do { try FileManager.default.removeItem(at: jobURL(id)) }
-    catch CocoaError.fileNoSuchFile {}
-    do { try FileManager.default.removeItem(at: payloadDirectory(id)) }
-    catch CocoaError.fileNoSuchFile {}
+    do { try FileManager.default.removeItem(at: jobURL(id)) } catch CocoaError.fileNoSuchFile {}
+    do { try FileManager.default.removeItem(at: payloadDirectory(id)) } catch CocoaError.fileNoSuchFile {}
   }
 
   public func payloadURL(jobID: UUID, fileName: String) -> URL {
@@ -215,12 +213,12 @@ public struct FileUploadJobStore: UploadJobStore, CaptureStagingProviding {
   private func removeSessionRecords(owner: CaptureOwner?) throws {
     let fileManager = FileManager.default
     func entries(_ directory: URL) throws -> [URL] {
-      do { return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
-      catch CocoaError.fileReadNoSuchFile { return [] }
+      do { return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) } catch CocoaError
+        .fileReadNoSuchFile
+      { return [] }
     }
     func remove(_ url: URL) throws {
-      do { try fileManager.removeItem(at: url) }
-      catch CocoaError.fileNoSuchFile {}
+      do { try fileManager.removeItem(at: url) } catch CocoaError.fileNoSuchFile {}
     }
     var preservedPayloadNames = Set<String>()
     let records = try entries(jobsDirectory)

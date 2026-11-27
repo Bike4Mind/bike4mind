@@ -59,7 +59,8 @@ final class ShareViewController: UIViewController {
       sessionEndCleanup: captureCleanup.perform)
     auth.restore()
     return .live(
-      baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.shareExtension, destinationStore: destinations)
+      baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.shareExtension,
+      destinationStore: destinations)
   }
 
   private func show(_ content: AnyView) {

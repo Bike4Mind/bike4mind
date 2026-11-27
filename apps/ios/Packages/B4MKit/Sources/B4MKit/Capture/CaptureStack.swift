@@ -39,7 +39,9 @@ public struct CaptureStack: Sendable {
     destinationStore: any DestinationStore = UserDefaultsDestinationStore(),
     didSendToSession: (@Sendable (String) async -> Void)? = nil,
     transport: any HTTPTransport = URLSessionTransport(),
-    makeUploader: @escaping @Sendable (String) -> any BackgroundUploading = { URLSessionBackgroundUploader(identifier: $0) }
+    makeUploader: @escaping @Sendable (String) -> any BackgroundUploading = {
+      URLSessionBackgroundUploader(identifier: $0)
+    }
   ) -> CaptureStack {
     let capture = CaptureClient(baseURL: baseURL, tokens: tokens, transport: transport)
     let engine = CaptureEngine(
@@ -51,11 +53,13 @@ public struct CaptureStack: Sendable {
         return admission
       },
       makeAdmittedAPI: { admission in
-        CaptureClient(baseURL: baseURL, tokens: AdmittedAccessTokens(tokens: tokens, admission: admission), transport: transport)
+        CaptureClient(
+          baseURL: baseURL, tokens: AdmittedAccessTokens(tokens: tokens, admission: admission), transport: transport)
       })
     return CaptureStack(
       engine: engine,
-      destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens, transport: transport)),
+      destinations: RemoteDestinationSource(
+        capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens, transport: transport)),
       submitter: engine,
       transcription: TranscriptionClient(baseURL: baseURL, tokens: tokens, transport: transport),
       destinationStore: destinationStore, jobs: engine, delegator: capture,
@@ -73,7 +77,8 @@ public struct CaptureStack: Sendable {
         let boundCapture = CaptureClient(baseURL: baseURL, tokens: boundTokens, transport: transport)
         return ShareComposerModel(
           items: items,
-          source: RemoteDestinationSource(capture: boundCapture, api: APIClient(baseURL: baseURL, tokens: boundTokens, transport: transport)),
+          source: RemoteDestinationSource(
+            capture: boundCapture, api: APIClient(baseURL: baseURL, tokens: boundTokens, transport: transport)),
           submitter: AdmittedCaptureSubmitter(engine: engine, admission: result),
           store: AdmittedDestinationStore(store: destinationStore, admission: result), delegator: boundCapture)
       })
@@ -143,8 +148,7 @@ struct AdmittedDestinationStore: DestinationStore {
   }
 
   private func withAdmission<Value>(_ fallback: Value, _ operation: () -> Value) -> Value {
-    do { return try admission.get().withCurrent(operation) }
-    catch {
+    do { return try admission.get().withCurrent(operation) } catch {
       logger.debug("Capture destination session is no longer available")
       return fallback
     }

@@ -108,15 +108,17 @@ public struct SharedSessionCoordinator: Sendable {
 
   private func rawRecord() throws -> SharedSessionRecord? {
     guard let data = try storage.sharedSessionRecord() else { return nil }
-    do { return try JSONDecoder().decode(SharedSessionRecord.self, from: data) }
-    catch { throw SharedSessionError.invalidRecord }
+    do { return try JSONDecoder().decode(SharedSessionRecord.self, from: data) } catch {
+      throw SharedSessionError.invalidRecord
+    }
   }
 
   private func read() throws -> SharedSessionSnapshot? {
     let record = try rawRecord()
     guard record?.pendingTermination == nil else { throw SharedSessionError.cleanupPending }
     guard let record, let token = try storage.refreshToken(),
-      record.refreshDigest == Self.digest(token), record.baseURL == baseURL else { return nil }
+      record.refreshDigest == Self.digest(token), record.baseURL == baseURL
+    else { return nil }
     return SharedSessionSnapshot(refreshToken: token, record: record)
   }
 
@@ -134,8 +136,7 @@ public struct SharedSessionCoordinator: Sendable {
     try storage.withSharedSessionLock {
       if let current = try read() { return current }
       guard let token = try storage.refreshToken() else { return nil }
-      if let record = try rawRecord(), record.baseURL != baseURL
-      { throw SharedSessionError.changed }
+      if let record = try rawRecord(), record.baseURL != baseURL { throw SharedSessionError.changed }
       return try write(token: token, incarnation: UUID(), userID: nil)
     }
   }
@@ -149,7 +150,9 @@ public struct SharedSessionCoordinator: Sendable {
     }
   }
 
-  func establish(token: String, userID: String?, replacing expected: SharedSessionSnapshot?) throws
+  func establish(
+    token: String, userID: String?, replacing expected: SharedSessionSnapshot?
+  ) throws
     -> SharedSessionSnapshot
   {
     try storage.withSharedSessionLock {
@@ -167,7 +170,8 @@ public struct SharedSessionCoordinator: Sendable {
         current.record.userID == nil || current.record.userID == userID
       else { throw SharedSessionError.changed }
       // Another process may already have rotated this same session. Never roll its token back.
-      let nextToken = current.refreshToken == expected.refreshToken ? (token ?? current.refreshToken) : current.refreshToken
+      let nextToken =
+        current.refreshToken == expected.refreshToken ? (token ?? current.refreshToken) : current.refreshToken
       return try write(token: nextToken, incarnation: current.record.incarnation, userID: userID)
     }
   }
@@ -220,7 +224,9 @@ public struct SharedSessionCoordinator: Sendable {
     return SharedSessionAdmission(identity: identity, coordinator: self)
   }
 
-  fileprivate func withCurrent<Result>(_ identity: SharedSessionIdentity, _ operation: () throws -> Result) throws
+  fileprivate func withCurrent<Result>(
+    _ identity: SharedSessionIdentity, _ operation: () throws -> Result
+  ) throws
     -> Result
   {
     try storage.withSharedSessionLock {

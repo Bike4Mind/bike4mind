@@ -132,8 +132,9 @@ final class SharedSessionCoordinatorTests: XCTestCase {
     let store = InMemoryTokenStore()
     let session = try coordinator(store)
     let a = try session.establish(token: "a", userID: "account-a", replacing: nil)
-    let other = try XCTUnwrap(SharedSessionCoordinator(
-      tokenStore: store, baseURL: URL(string: "https://other.example.test")!))
+    let other = try XCTUnwrap(
+      SharedSessionCoordinator(
+        tokenStore: store, baseURL: URL(string: "https://other.example.test")!))
     XCTAssertThrowsError(try other.restore())
     XCTAssertEqual(try session.current(incarnation: a.record.incarnation), a)
   }

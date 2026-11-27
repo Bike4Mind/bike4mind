@@ -26,9 +26,11 @@ struct Bike4MindApp: App {
     // development client (custom scheme) on non-production servers. See README "Sign-in callback".
     #if DEBUG
       let auth = AuthController(
-        environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform, oauthConfiguration: OAuthConfiguration.debugBuild(for:))
+        environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform,
+        oauthConfiguration: OAuthConfiguration.debugBuild(for:))
     #else
-      let auth = AuthController(environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform)
+      let auth = AuthController(
+        environment: environment, tokenStore: tokenStore, sessionEndCleanup: captureCleanup.perform)
     #endif
     _auth = State(initialValue: auth)
     let services = AppServices(auth: auth, captureDestinations: destinations)

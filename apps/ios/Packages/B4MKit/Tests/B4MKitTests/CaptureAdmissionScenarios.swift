@@ -47,7 +47,15 @@ private struct NoBiometrics: BiometricGate {
 
 private actor FixtureTransport: HTTPTransport {
   struct Claims: Encodable { let id: String; let exp: Int }
-  struct Grant: Encodable { let access_token: String; let refresh_token: String }
+  struct Grant: Encodable {
+    let accessToken: String
+    let refreshToken: String
+
+    enum CodingKeys: String, CodingKey {
+      case accessToken = "access_token"
+      case refreshToken = "refresh_token"
+    }
+  }
   struct Refresh: Encodable { let accessToken: String; let refreshToken: String }
   struct Ticket: Encodable { let id: String; let uploadUrl: String; let uploadUrlExpiresAt: String }
   let refresh = Rendezvous()
@@ -81,7 +89,7 @@ private actor FixtureTransport: HTTPTransport {
     switch request.url?.path {
     case "/api/oauth/token":
       grantCalls += 1
-      return try reply(Grant(access_token: token(), refresh_token: "fixture-\(userID)"), request: request)
+      return try reply(Grant(accessToken: token(), refreshToken: "fixture-\(userID)"), request: request)
     case "/api/auth/refreshToken":
       refreshCalls += 1
       if holdRefresh { await refresh.pause(); throw URLError(.notConnectedToInternet) }
@@ -597,7 +605,8 @@ enum CaptureAdmissionScenarios {
     let queuedRevocations = try storage.pendingRevocations()
     await recovering.retryPendingRevocations()
     if recovering.environment.baseURL != original.baseURL {
-      try require(try storage.pendingRevocations() == queuedRevocations, "Another server's retry changed the pending intent")
+      try require(
+        try storage.pendingRevocations() == queuedRevocations, "Another server's retry changed the pending intent")
       await recovering.switchEnvironment(to: .production)
       await recovering.retryPendingRevocations()
     }

@@ -294,8 +294,7 @@ final class AppServices {
   /// finally the tokens. The unregister call needs a live session, so it runs before the session is torn down.
   func signOutEverywhere(reason: AuthController.SignOutReason = .userInitiated) async {
     let scope: AuthController.SessionEndScope
-    do { scope = try auth.sessionEndScope() }
-    catch {
+    do { scope = try auth.sessionEndScope() } catch {
       sessionLogger.error("Preparing sign-out failed: \(error, privacy: .public)")
       return
     }
