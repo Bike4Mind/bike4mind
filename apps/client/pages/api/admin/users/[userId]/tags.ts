@@ -9,6 +9,7 @@ import { User, withTransaction } from '@bike4mind/database';
 import { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import { normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { adminApi } from '@server/middlewares/adminApi';
+import { assertCanChangeLakeGateTags } from '@server/admin/lakeGateTags';
 import { noteSubject } from '@server/users/adminUserNotes';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -26,6 +27,13 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'settings
       if (JSON.stringify(managedBefore) !== JSON.stringify(managedAfter)) {
         throw new ForbiddenError('Use the role or product access action to change managed tags');
       }
+      // Judged against the stored tags, not the caller's `before`, which only guards the write.
+      const current = new Set((user.tags ?? []).map(normalizeTag));
+      const requested = new Set(requestedTags.map(normalizeTag));
+      await assertCanChangeLakeGateTags(req.user, [
+        ...requestedTags.filter(tag => !current.has(normalizeTag(tag))),
+        ...(user.tags ?? []).filter(tag => !requested.has(normalizeTag(tag))),
+      ]);
       // Keep legacy managed tokens exact: trimming can activate a previously inactive role tag.
       const tags = [...managedTags, ...requestedTags.filter(tag => !isManagedTag(tag))];
       const result = await User.updateOne(
