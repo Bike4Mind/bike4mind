@@ -1,7 +1,7 @@
 import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
 import { FabFile } from '@bike4mind/database';
-import { BadRequestError, isImageServeable } from '@bike4mind/common';
+import { BadRequestError, MODAL_MEDIA_PREFIX, isImageServeable } from '@bike4mind/common';
 import { MODAL_IMAGE_PREFIX, extractModalImageKey } from './modalImageUrls';
 import { Logger } from '@bike4mind/observability';
 
@@ -12,15 +12,17 @@ const s3Client = new S3Client();
 // A refused source must surface as a 400, not be swallowed by the copy-failure fallback below.
 class ModalImageModerationError extends BadRequestError {}
 
-const MODAL_MEDIA_PURPOSE = 'modal-media';
+type SourceFile = { userId?: unknown; mimeType?: unknown };
 
-type SourceFile = { userId?: unknown; purpose?: unknown; mimeType?: unknown };
-
-/** An upload made for banner use, or the caller's own image upload, may be copied into a modal. */
-const mayUseAsModalImage = (file: SourceFile, actorUserId: string) =>
+/**
+ * An upload made for banner use, or the caller's own image upload, may be copied into a modal.
+ * Banner use is read from the key: FabFile does not store `purpose`, and only the server picks the
+ * `modals/` prefix, for an admin banner upload (pages/api/files/createFabFile.ts).
+ */
+const mayUseAsModalImage = (file: SourceFile, sourceKey: string, actorUserId: string) =>
   typeof file.mimeType === 'string' &&
   file.mimeType.startsWith('image/') &&
-  (file.purpose === MODAL_MEDIA_PURPOSE || String(file.userId) === actorUserId);
+  (sourceKey.startsWith(`${MODAL_MEDIA_PREFIX}/`) || String(file.userId) === actorUserId);
 
 /**
  * The full object key when `imageUrl` addresses `bucket`, in either S3 URL style
@@ -75,7 +77,7 @@ export class ModalImageHandler {
 
     // Also refuses a held/blocked image: a banner is permanent and platform-wide.
     const fabFile = await FabFile.findOne({ filePath: sourceKey });
-    if (!fabFile || !mayUseAsModalImage(fabFile, actorUserId) || !isImageServeable(fabFile)) {
+    if (!fabFile || !mayUseAsModalImage(fabFile, sourceKey, actorUserId) || !isImageServeable(fabFile)) {
       throw new ModalImageModerationError('This image is not available to use as a banner.');
     }
 

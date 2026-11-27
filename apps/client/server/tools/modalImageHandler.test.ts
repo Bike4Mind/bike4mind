@@ -17,6 +17,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 vi.mock('@bike4mind/database', () => ({ FabFile: { findOne } }));
 vi.mock('@bike4mind/common', () => ({
   isImageServeable: (f: { ok: boolean }) => f.ok,
+  MODAL_MEDIA_PREFIX: 'modals',
   BadRequestError: class extends Error {
     status = 400;
   },
@@ -64,8 +65,15 @@ describe('ModalImageHandler.processModalImageUrl', () => {
   });
 
   it('copies an upload made for banner use whoever uploaded it', async () => {
+    findOne.mockResolvedValue({ ...ownImage, userId: 'someone-else' });
+    const bannerUpload = 'https://test-bucket.s3.amazonaws.com/modals/abc.png';
+    expect(await ModalImageHandler.processModalImageUrl(bannerUpload, ACTOR)).toMatch(/^modal-images\//);
+  });
+
+  it('refuses another user upload outside the banner folder even with a banner purpose', async () => {
     findOne.mockResolvedValue({ ...ownImage, userId: 'someone-else', purpose: 'modal-media' });
-    expect(await ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).toMatch(/^modal-images\//);
+    await expect(ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).rejects.toMatchObject({ status: 400 });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it.each([
