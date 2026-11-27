@@ -10922,7 +10922,7 @@ export interface components {
          * @description The surface that spent the credits, on usage rows that record one.
          * @enum {string}
          */
-        source?: 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'system';
+        source?: 'web' | 'cli' | 'desktop' | 'mcp' | 'api' | 'agent' | 'system';
         /** Format: date-time */
         createdAt: string;
       }[];
