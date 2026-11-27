@@ -14906,7 +14906,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     createPublishedPageUploadRequest: {
@@ -15022,7 +15027,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     /**
@@ -15218,7 +15228,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     updatePublishedPageRequest: {
@@ -15310,7 +15325,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     createPublishedPageShareLinkRequest: {
@@ -15399,7 +15419,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     restorePublishedPageVersionRequest: {
@@ -15494,7 +15519,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     createPublishedPageCommentRequest: {
@@ -15560,7 +15590,12 @@ export interface components {
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
-      trustReason?: string;
+      /**
+       * @description With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).
+       * @enum {string}
+       */
+      trustReason?: 'email_unverified' | 'not_yet_trusted' | 'paid_standing_required';
+      /** @description With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601). */
       trustedAfter?: string;
     };
     updatePublishedPageCommentRequest: {
@@ -46132,7 +46167,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. An edit can also be refused for the account trust or administrator restriction reasons. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. Any PATCH, a resolve included, can also be refused for the account trust or administrator restriction reasons. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

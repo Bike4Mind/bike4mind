@@ -31399,10 +31399,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -31724,10 +31731,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -32249,10 +32263,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -32526,10 +32547,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -32753,10 +32781,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -33024,10 +33059,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -33220,10 +33262,17 @@
             "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
           },
           "trustReason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "email_unverified",
+              "not_yet_trusted",
+              "paid_standing_required"
+            ],
+            "description": "With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval)."
           },
           "trustedAfter": {
-            "type": "string"
+            "type": "string",
+            "description": "With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601)."
           }
         },
         "required": [
@@ -107832,7 +107881,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. An edit can also be refused for the account trust or administrator restriction reasons.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its author may edit the text, and only its author, the page owner or an admin may resolve or delete it. Any PATCH, a resolve included, can also be refused for the account trust or administrator restriction reasons.",
             "content": {
               "application/json": {
                 "schema": {

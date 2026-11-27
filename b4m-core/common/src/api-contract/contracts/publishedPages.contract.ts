@@ -37,8 +37,16 @@ const SCOPES = [ApiKeyScope.ARTIFACTS_PUBLISH];
 /** Scope and suspension refusals, plus the outbound-action trust refusal (`assertOutboundActionAllowed`). */
 const PublishForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
   errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, ACCOUNT_TRUST_REQUIRED_ERROR_CODE]).optional(),
-  trustReason: z.string().optional(),
-  trustedAfter: z.string().optional(),
+  trustReason: z
+    .enum(['email_unverified', 'not_yet_trusted', 'paid_standing_required'])
+    .optional()
+    .describe(
+      'With `errorCode: account_trust_required`: why (verify the email, wait until `trustedAfter`, or a purchase or admin approval).'
+    ),
+  trustedAfter: z
+    .string()
+    .optional()
+    .describe('With `trustReason: not_yet_trusted`: when the account becomes eligible (ISO 8601).'),
 });
 const TRUST_403 =
   'The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: ' +
@@ -58,7 +66,9 @@ const AUTHOR_ONLY =
   'The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its ' +
   'author may edit the text, and only its author, the page owner or an admin may resolve or delete it.';
 const AUTHOR_OR_TRUST = {
-  description: AUTHOR_ONLY + ' An edit can also be refused for the account trust or administrator restriction reasons.',
+  description:
+    AUTHOR_ONLY +
+    ' Any PATCH, a resolve included, can also be refused for the account trust or administrator restriction reasons.',
   schema: PublishForbiddenErrorSchema,
 } as const;
 const NOT_YOURS = {

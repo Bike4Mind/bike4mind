@@ -215,6 +215,20 @@ describe('published page sub-routes', () => {
       expect(deleted.status).toBe(204);
     });
 
+    it('answers a non-author body edit with a 403 whose errorCode is not on the wire', async () => {
+      mocks.update.mockRejectedValue(
+        new ForbiddenError('Only the author may edit this annotation', { errorCode: 'author_only' })
+      );
+      const res = await callRoute(comment, {
+        method: 'PATCH',
+        query: { ...PAGE, comment_id: 'c1' },
+        body: { body: 'x' },
+      });
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual(expect.objectContaining({ error: 'Only the author may edit this annotation' }));
+      expect(res.json).not.toHaveProperty('errorCode');
+    });
+
     it('404s an unknown comment and an unmanaged page', async () => {
       mocks.remove.mockRejectedValue(new NotFoundError('Not found', { errorCode: 'not_found' }));
       expect((await callRoute(comment, { method: 'DELETE', query: { ...PAGE, comment_id: 'nope' } })).status).toBe(404);
