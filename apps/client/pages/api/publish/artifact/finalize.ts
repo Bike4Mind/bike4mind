@@ -20,6 +20,7 @@ import {
   type PublishResult,
   type ValidationViolation,
   normalizePublishTags,
+  parseShareImageUrl,
   ApiKeyScope,
 } from '@bike4mind/common';
 import {
@@ -62,6 +63,7 @@ const DraftManifestSchema = z.object({
   slug: z.string(),
   title: z.string(),
   description: z.string().optional(),
+  shareImageUrl: z.string().optional(),
   tags: z.array(z.string()).optional(),
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
@@ -363,6 +365,7 @@ const handler = baseApi({
   // 7. Upsert record (versionsToPush from 5b)
   const publicId = previous?.publicId ?? uuidPublicId();
   const publishTags = normalizePublishTags(manifest.tags ?? []);
+  const shareImageUrl = manifest.shareImageUrl ? parseShareImageUrl(manifest.shareImageUrl) : null;
   const ownerId = previous ? previous.ownerId : String(req.user.id);
   const update = {
     $set: {
@@ -376,6 +379,8 @@ const handler = baseApi({
       // belongs to the PATCH path, which has unambiguous full-replace semantics. Re-normalizing
       // here is idempotent and keeps the invariant local to the write.
       ...(publishTags.length ? { tags: publishTags } : {}),
+      // Same add-only rule as tags: a re-publish that omits it keeps the stored image; PATCH clears it.
+      ...(shareImageUrl ? { shareImageUrl } : {}),
       visibility: manifest.visibility,
       gatedToGroupId: manifest.gatedToGroupId,
       commentPolicy: manifest.commentPolicy ?? 'none',

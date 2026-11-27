@@ -10,6 +10,7 @@ import {
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
   normalizePublishTags,
+  parseShareImageUrl,
   ApiKeyScope,
 } from '@bike4mind/common';
 import {
@@ -173,6 +174,7 @@ const handler = baseApi({
     slug: body.slug,
     title: body.title,
     description: body.description,
+    shareImageUrl: body.shareImageUrl ? (parseShareImageUrl(body.shareImageUrl) ?? undefined) : undefined,
     // Carried on the draft so finalize can write them with the artifact - one publish call sets the
     // tags, rather than the caller having to follow up with a PATCH. Normalize FIRST and only carry a
     // non-empty result, so neither `[]` nor `['  ']` travels as "clear the tags"; finalize guards

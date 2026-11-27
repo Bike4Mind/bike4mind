@@ -10,6 +10,8 @@ import {
   EMBED_ORIGINS_MAX,
   PublishTagsSchema,
   normalizePublishTags,
+  parseShareImageUrl,
+  ShareImageUrlSchema,
   ApiKeyScope,
 } from '@bike4mind/common';
 import {
@@ -26,7 +28,7 @@ import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishTh
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
  *   GET    -> management metadata (owner/admin) or public display fields
- *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
+ *   PATCH  -> update title/description/shareImageUrl/visibility/commentPolicy (owner/admin)
  *   DELETE -> soft-delete / archive (owner/admin)
  */
 
@@ -59,6 +61,8 @@ const AccessGatePatchSchema = z.union([
 const PatchSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
+  // `null` clears it, falling back to the deploy default image.
+  shareImageUrl: ShareImageUrlSchema.nullable().optional(),
   // Full replace, not a merge: `[]` clears every tag. A merge semantics would leave no way to
   // REMOVE a tag through the API, which is half of the CRUD the owner needs.
   tags: PublishTagsSchema.optional(),
@@ -171,12 +175,20 @@ const handler = baseApi({
     if (!canManage(artifact, req.user)) {
       return res.status(403).json({ error: 'Not authorized to update this artifact' });
     }
-    // Both are rendered into the cached share page (header, <title>, link-preview card, markdown export).
+    // All three are rendered into the cached share page (header, <title>, link-preview card, markdown export).
+    const shareImageUrl =
+      parsed.data.shareImageUrl === undefined
+        ? undefined
+        : parsed.data.shareImageUrl === null
+          ? null
+          : parseShareImageUrl(parsed.data.shareImageUrl);
     const displayChanged =
       (parsed.data.title !== undefined && parsed.data.title !== artifact.title) ||
-      (parsed.data.description !== undefined && parsed.data.description !== (artifact.description ?? ''));
+      (parsed.data.description !== undefined && parsed.data.description !== (artifact.description ?? '')) ||
+      (shareImageUrl !== undefined && (shareImageUrl ?? undefined) !== (artifact.shareImageUrl ?? undefined));
     if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
     if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
+    if (shareImageUrl !== undefined) artifact.shareImageUrl = shareImageUrl ?? undefined;
     // Normalize at the write site rather than in the schema: the API conventions forbid a
     // top-level .transform() in a public request schema, and every other write path (the publish
     // call, the UI) runs the same helper so one label cannot end up stored two ways.
@@ -325,8 +337,8 @@ const handler = baseApi({
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
-    // keep serving an indexable copy for up to an hour; (d) the title or description
-    // changed, so the page does not show the old ones while the owner's list shows the new;
+    // keep serving an indexable copy for up to an hour; (d) the title, description or card
+    // image changed, so the page does not show the old ones while the owner's list shows the new;
     // (e) the comment policy changed - the comment widget is part of the cached markup.
     // Best-effort; awaited because a Lambda can freeze before a dangling promise sends,
     // and this is the revoke the owner is waiting on.

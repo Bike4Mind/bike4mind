@@ -944,3 +944,56 @@ describe('PATCH /api/publish/artifacts/[id] - outbound gate on widening exposure
     expect(assertOutbound).not.toHaveBeenCalled();
   });
 });
+
+describe('PATCH /api/publish/artifacts/[id] - shareImageUrl', () => {
+  const IMAGE = 'https://images.example.org/cards/a.png';
+
+  async function patch(body: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    const artifact = Object.assign(makeArtifact(), { title: 'T' }, overrides) as ReturnType<typeof makeArtifact> & {
+      shareImageUrl?: string;
+    };
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact, purge: vi.mocked(invalidatePublishCdn) };
+  }
+
+  it('stores a normalized image and purges the cached share page', async () => {
+    const { res, artifact, purge } = await patch({ shareImageUrl: 'https://Images.Example.org/cards/a.png#x' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.shareImageUrl).toBe(IMAGE);
+    expect(artifact.save).toHaveBeenCalled();
+    expect(purge).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the image with null', async () => {
+    const { res, artifact, purge } = await patch({ shareImageUrl: null }, { shareImageUrl: IMAGE });
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.shareImageUrl).toBeUndefined();
+    expect(purge).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT purge when the same image is re-sent', async () => {
+    const { res, purge } = await patch({ shareImageUrl: IMAGE }, { shareImageUrl: IMAGE });
+    expect(res._getStatusCode()).toBe(200);
+    expect(purge).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an artifact thumbnail', 'https://cdn.example.com/publish-thumbnails/pub-1/abc.webp'],
+    ['a presigned link', 'https://bucket.example.com/a.png?X-Amz-Signature=abc'],
+    ['a bundle-relative path', 'assets/card.png'],
+    ['an http URL', 'http://images.example.org/a.png'],
+  ])('rejects %s with 400 and stores nothing', async (_label, shareImageUrl) => {
+    const { res, artifact } = await patch({ shareImageUrl });
+    expect(res._getStatusCode()).toBe(400);
+    expect(artifact.shareImageUrl).toBeUndefined();
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+});

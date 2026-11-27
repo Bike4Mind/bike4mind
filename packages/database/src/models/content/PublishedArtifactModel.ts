@@ -159,6 +159,8 @@ const PublishedArtifactSchema = new Schema(
 
     title: { type: String, required: true, maxlength: 200 },
     description: { type: String, maxlength: 1000 },
+    // Link-card image; validated and normalized by parseShareImageUrl (@bike4mind/common) at every write site.
+    shareImageUrl: { type: String, maxlength: 2048 },
     // Freeform owner labels. Normalized (trimmed/collapsed/lowercased, deduped, capped) by
     // normalizePublishTags at every write site, so the stored form is canonical and the filter
     // can be a plain equality match. No `index: true` here per the repo's index guidelines - the

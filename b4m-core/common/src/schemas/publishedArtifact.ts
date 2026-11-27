@@ -343,6 +343,59 @@ export const EmbedOriginsSchema = z
     message: 'each embed origin must be an exact, normalized https origin',
   });
 
+// --- Share image (publisher-chosen link-card image) ---
+
+export const SHARE_IMAGE_URL_MAX_LENGTH = 2048;
+
+/**
+ * Parse a publisher-supplied link-card image (og:image / twitter:image). Returns the
+ * normalized URL (fragment dropped), or null unless it is an absolute https URL on a real
+ * DNS host that an unfurler can fetch anonymously and cache:
+ *  - no userinfo, no IP literal or bare label;
+ *  - not a presigned link (`X-Amz-*` / `X-Goog-*` query): it expires and the card breaks;
+ *  - no `publish-thumbnails` path segment: artifact thumbnails are owner-only renders and
+ *    must never become a public card (apps/client/server/services/publish/thumbnailUrl.ts).
+ * The serve route re-checks the stored value with this same function before emitting it.
+ */
+export function parseShareImageUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > SHARE_IMAGE_URL_MAX_LENGTH) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.username || url.password) return null;
+  const host = url.hostname;
+  if (host.startsWith('[') || /^\d+(\.\d+){3}$/.test(host)) return null;
+  const labels = host.split('.');
+  if (labels.length < 2 || !/[a-z]/.test(labels[labels.length - 1])) return null;
+  for (const key of url.searchParams.keys()) {
+    if (/^x-(amz|goog)-/i.test(key)) return null;
+  }
+  let path: string;
+  try {
+    path = decodeURIComponent(url.pathname).toLowerCase();
+  } catch {
+    return null;
+  }
+  if (path.split('/').includes('publish-thumbnails')) return null;
+  url.hash = '';
+  return url.href;
+}
+
+/** A link-card image URL as a caller sends it. No `.transform()` (public request schemas forbid
+ *  one), so write sites store `parseShareImageUrl(value)`, the normalized form. */
+export const ShareImageUrlSchema = z
+  .string()
+  .max(SHARE_IMAGE_URL_MAX_LENGTH)
+  .refine(v => parseShareImageUrl(v) !== null, {
+    message:
+      'shareImageUrl must be an absolute https URL to a publicly reachable image (no presigned links, no artifact thumbnails)',
+  });
+
 // ─── Moderation (abuse reporting + takedown) ───────────────────────
 
 /**
@@ -450,6 +503,9 @@ export const PublishedArtifactSchema = z.object({
 
   title: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
+  /** Link-card image for shared links; preferred over the deploy default (PUBLISH_SHARE_IMAGE_URL).
+   *  Stored normalized by parseShareImageUrl. */
+  shareImageUrl: ShareImageUrlSchema.optional(),
 
   /** Freeform owner-supplied labels, normalized by normalizePublishTags. Shares a vocabulary
    *  with AppFile tags (see GET /api/publish/tags) so one label means one thing across the app,
@@ -566,6 +622,8 @@ export const UploadUrlRequestSchema = z.object({
   slug: SlugSchema,
   title: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
+  /** Link-card image for shared links (see parseShareImageUrl). */
+  shareImageUrl: ShareImageUrlSchema.optional(),
   visibility: VisibilitySchema.optional(),
   /** Optional at publish time so a client that already knows its labels - the CLI publish
    *  skill - can set them in the same call instead of a follow-up PATCH. */

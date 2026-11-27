@@ -35,9 +35,10 @@ import {
   stripToText,
   type PublishUser,
   type SandboxAsset,
+  type ShareImage,
   type ShareMetaOutput,
 } from '@server/services/publish';
-import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
+import { parseShareImageUrl, stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
@@ -258,13 +259,22 @@ const plainTitle = (title: string, artifact: { source: { kind: string }; rendere
   artifact.source.kind === 'reply'
     ? displayReplyTitleFromLine(title, cachedReplyFirstLine(artifact)) || SHARED_FALLBACK_TITLE
     : title;
+/**
+ * The publisher's own card image, else the deploy default. The stored URL is re-parsed so a
+ * value that slipped past write-time validation (an older row, a direct DB edit) is dropped.
+ */
+function shareImageFor(artifact: PublishedArtifactLean): ShareImage | undefined {
+  const own = artifact.shareImageUrl ? parseShareImageUrl(artifact.shareImageUrl) : null;
+  if (!own) return defaultShareImage(process.env.APP_NAME);
+  return { url: own, alt: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact) };
+}
 /** Link card for an ungated `/a/<token>` link; callers check the gate. */
 function shareTokenMeta(artifact: PublishedArtifactLean): ShareMetaOutput {
   return prepareShareTokenMeta({
     title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
     description: artifact.description,
     siteName: process.env.APP_NAME || '',
-    image: defaultShareImage(process.env.APP_NAME),
+    image: shareImageFor(artifact),
   });
 }
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
@@ -771,7 +781,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           canonicalUrl,
           rawUrl: `${canonicalUrl}?format=raw`,
           siteName: process.env.APP_NAME || '',
-          image: defaultShareImage(process.env.APP_NAME),
+          image: shareImageFor(artifact),
         })
       : isShare && !artifact.accessGate
         ? shareTokenMeta(artifact)
@@ -1195,7 +1205,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           canonicalUrl: `${docOrigin}${canonicalPath}`,
           rawUrl: `${docOrigin}${canonicalPath}?format=raw`,
           siteName: process.env.APP_NAME || '',
-          image: defaultShareImage(process.env.APP_NAME),
+          image: shareImageFor(artifact),
         })
       : isShare && !artifact.accessGate
         ? shareTokenMeta(artifact)
@@ -1623,6 +1633,8 @@ interface PublishedArtifactLean {
   slug: string;
   title: string;
   description?: string;
+  /** Publisher's link-card image (see shareImageFor). */
+  shareImageUrl?: string;
   visibility: PublishVisibility;
   /** Optional gate on top of `public` (issue #383). passphraseHash is select:false
    *  on the schema, so it never appears in this lean read. */
