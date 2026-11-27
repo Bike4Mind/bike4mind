@@ -42,13 +42,13 @@ export async function createCallableFunctionFromCode(
     { type: 'python', title: contract.name, content: input.code, visibility: 'private', tags: [], metadata: {} },
     { assertSourceRefsAccessible: noSourceRefs, db: ARTIFACT_DB }
   );
+  let created: Awaited<ReturnType<typeof createCallableFunction>>;
   try {
-    const created = await createCallableFunction(actor, {
+    created = await createCallableFunction(actor, {
       artifactId: artifact.id,
       expectedVersion: artifact.version,
       contract: input.contract,
     });
-    return await getCallableFunction(actor, created.id);
   } catch (error) {
     // A refused create (a taken name, the owner's cap) leaves no artifact the caller never asked for.
     await artifactService
@@ -61,6 +61,7 @@ export async function createCallableFunctionFromCode(
       });
     throw error;
   }
+  return getCallableFunction(actor, created.id);
 }
 
 /**
