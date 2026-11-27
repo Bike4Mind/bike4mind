@@ -1,4 +1,4 @@
-import { FC, ReactNode, useEffect, useRef, useState } from 'react';
+import { FC, ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import { formatChoiceReply, type SuggestedChoices } from '@bike4mind/common';
@@ -74,8 +74,11 @@ const ReplyChoiceButtons: FC<ReplyChoiceButtonsProps> = ({ questId, sessionId, s
     }
   };
 
+  // Through a ref, so a render's new pick does not re-arm the key listener.
   const pickRef = useRef(pick);
-  pickRef.current = pick;
+  useLayoutEffect(() => {
+    pickRef.current = pick;
+  });
   useEffect(() => {
     if (!live) return;
     const onKey = (event: KeyboardEvent) => {
