@@ -8,7 +8,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { createBundleUpload } from '@server/services/publish/publishBundle';
-import { toBundlePublisher, withDeclaredStatuses } from '@server/publish/v1PublishedPageRoute';
+import { toBundlePublisher, withStatusMap, declaredStatuses } from '@server/publish/v1PublishedPageRoute';
 
 export default nextRouteForContract(createPublishedPageUploadContract, {
   rateLimit: perUserRateLimit('POST /api/v1/published-pages/uploads'),
@@ -16,22 +16,24 @@ export default nextRouteForContract(createPublishedPageUploadContract, {
   await assertOutboundActionAllowed(req.user, req);
   const body = req.validated;
 
-  const result = await withDeclaredStatuses([403, 409, 422, 429], () =>
-    createBundleUpload({
-      user: toBundlePublisher(req.user),
-      logger: req.logger,
-      tier: body.tier,
-      scopeId: body.scope_id,
-      slug: body.slug,
-      title: body.title,
-      description: body.description,
-      visibility: body.visibility,
-      tags: body.tags,
-      gatedToGroupId: body.gated_to_group_id,
-      commentPolicy: body.comment_policy,
-      embedOrigins: body.embed_origins,
-      files: body.files.map(f => ({ path: f.path, size: f.size, mimeType: f.mime_type })),
-    })
+  const result = await withStatusMap(
+    () =>
+      createBundleUpload({
+        user: toBundlePublisher(req.user),
+        logger: req.logger,
+        tier: body.tier,
+        scopeId: body.scope_id,
+        slug: body.slug,
+        title: body.title,
+        description: body.description,
+        visibility: body.visibility,
+        tags: body.tags,
+        gatedToGroupId: body.gated_to_group_id,
+        commentPolicy: body.comment_policy,
+        embedOrigins: body.embed_origins,
+        files: body.files.map(f => ({ path: f.path, size: f.size, mimeType: f.mime_type })),
+      }),
+    declaredStatuses([403, 409, 422, 429])
   );
 
   res.setHeader('Cache-Control', 'private, no-store');

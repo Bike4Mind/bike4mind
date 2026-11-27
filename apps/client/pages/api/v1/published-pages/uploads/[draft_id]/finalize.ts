@@ -9,7 +9,7 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { finalizeBundle } from '@server/services/publish/publishBundle';
 import { getPublishedPage } from '@server/services/publish/managePublishedPages';
-import { toBundlePublisher, withDeclaredStatuses } from '@server/publish/v1PublishedPageRoute';
+import { toBundlePublisher, withStatusMap, declaredStatuses } from '@server/publish/v1PublishedPageRoute';
 import { toPublishedPageResource } from '@server/publish/publishedPageResource';
 
 export default nextRouteForContract(finalizePublishedPageContract, {
@@ -17,14 +17,17 @@ export default nextRouteForContract(finalizePublishedPageContract, {
 }).post(async (req, res) => {
   await assertOutboundActionAllowed(req.user, req);
 
-  const page = await withDeclaredStatuses([404, 409, 422, 429], async () => {
-    const published = await finalizeBundle({
-      user: toBundlePublisher(req.user),
-      logger: req.logger,
-      draftId: req.validatedParams.draft_id,
-    });
-    return getPublishedPage({ user: req.user, publicId: published.publicId });
-  });
+  const page = await withStatusMap(
+    async () => {
+      const published = await finalizeBundle({
+        user: toBundlePublisher(req.user),
+        logger: req.logger,
+        draftId: req.validatedParams.draft_id,
+      });
+      return getPublishedPage({ user: req.user, publicId: published.publicId });
+    },
+    declaredStatuses([404, 409, 422, 429])
+  );
 
   return res.status(200).json(toPublishedPageResource(page.artifact));
 });

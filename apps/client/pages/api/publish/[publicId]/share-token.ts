@@ -1,13 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { PublishServiceError } from '@server/services/publish/publishServiceError';
-import {
-  createShareLink,
-  listShareLinks,
-  newestShareLink,
-  revokeShareLink,
-  shareLinkBodySchema,
-} from '@server/services/publish/shareLinks';
+import { createShareLink, listShareLinks, newestShareLink, revokeShareLink } from '@server/services/publish/shareLinks';
 import type { Request, Response } from 'express';
 
 export { MAX_LIVE_SHARE_LINKS, MAX_SHARE_TOKEN_ENTRIES } from '@server/services/publish/shareLinks';
@@ -78,9 +72,8 @@ const handler = baseApi()
   .post(outboundActionGate(), async (req: Request, res: Response) => {
     const input = actor(req, res);
     if (!input) return;
-    const parsed = shareLinkBodySchema.parse(req.body ?? {});
     try {
-      const created = await createShareLink({ ...input, ...parsed });
+      const created = await createShareLink({ ...input, body: req.body ?? {} });
       return res.status(200).json({
         id: created.id,
         shareToken: created.shareToken,
@@ -95,7 +88,9 @@ const handler = baseApi()
     const input = actor(req, res);
     if (!input) return;
     try {
-      const result = await revokeShareLink({ ...input, id: (req.query as { id?: string }).id });
+      // A blank id keeps meaning revoke-all here; a repeated id is coerced to a string the service rejects as invalid.
+      const id = String((req.query as { id?: string }).id ?? '').trim();
+      const result = await revokeShareLink({ ...input, id: id || undefined });
       return res.status(200).json(result);
     } catch (error) {
       return sendLegacyError(res, error);

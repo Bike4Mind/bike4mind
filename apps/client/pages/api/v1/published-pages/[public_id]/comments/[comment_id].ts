@@ -9,7 +9,8 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { deleteAnnotation, updateAnnotation } from '@server/services/publish/annotations';
-import { loadManagedPage, toCommentResource, withStatusMap } from '@server/publish/publishedPageSubresources';
+import { loadManagedPage, toCommentResource } from '@server/publish/publishedPageSubresources';
+import { withStatusMap } from '@server/publish/v1PublishedPageRoute';
 
 // A malformed id names no comment.
 const toDeclaredStatus = (error: { statusCode: number }) => (error.statusCode === 400 ? 404 : undefined);

@@ -277,6 +277,8 @@ export interface CreateShareLinkInput {
   additional?: boolean;
   /** ISO 8601 datetime 1 hour to 365 days away; absent means the link never expires. Validated here. */
   expiresAt?: unknown;
+  /** An unparsed request body; parsed after the owner and policy checks, so a bad body never preempts them. */
+  body?: unknown;
 }
 
 /**
@@ -289,10 +291,11 @@ export async function createShareLink(input: CreateShareLinkInput): Promise<Crea
   const artifact = await loadOwnedArtifact(user, publicId);
   await assertPublicationPublicLink(artifact);
 
-  const regenerate = input.regenerate === true;
-  const additional = input.additional === true;
+  const opts = input.body === undefined ? input : { ...input, ...shareLinkBodySchema.parse(input.body) };
+  const regenerate = opts.regenerate === true;
+  const additional = opts.additional === true;
   const now = new Date();
-  const expiresAt = parseShareLinkExpiry(input.expiresAt, now);
+  const expiresAt = parseShareLinkExpiry(opts.expiresAt, now);
   if (expiresAt === 'invalid') {
     throw new PublishServiceError(
       400,
@@ -421,7 +424,7 @@ export async function createShareLink(input: CreateShareLinkInput): Promise<Crea
 }
 
 /**
- * Revokes one live link (`id`) or, without an id, every live link. Throws a PublishServiceError for
+ * Revokes one live link (`id`) or, when `id` is undefined, every live link. Throws a PublishServiceError for
  * 400 (invalid id, REVOKE_WOULD_ORPHAN_GATE), 403 and 404 (unknown id).
  */
 export async function revokeShareLink(input: {
@@ -433,8 +436,9 @@ export async function revokeShareLink(input: {
   const { user, logger } = input;
   const artifact = await loadOwnedArtifact(user, input.publicId);
 
-  const id = (input.id ?? '').trim();
-  if (id && !Types.ObjectId.isValid(id)) throw new PublishServiceError(400, 'Invalid share link id');
+  // An absent id is revoke-all; a supplied id (even blank) must name one link, so a blank value can never revoke all.
+  const id = input.id === undefined ? undefined : input.id.trim();
+  if (id !== undefined && !Types.ObjectId.isValid(id)) throw new PublishServiceError(400, 'Invalid share link id');
   const live = liveLinkViews(artifact);
   // Resolve the target BEFORE writing, so an unknown id is a 404 rather than a write that
   // matches no entry and reports success.

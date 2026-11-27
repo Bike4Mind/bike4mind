@@ -8,43 +8,51 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
+import { paginateById } from '@server/utils/cursorPagination';
 import { createShareLink, listShareLinks } from '@server/services/publish/shareLinks';
 import {
+  loadManagedPage,
   toCreatedShareLinkResource,
   toShareLinkResource,
-  withStatusMap,
 } from '@server/publish/publishedPageSubresources';
+import { declaredStatuses, withStatusMap } from '@server/publish/v1PublishedPageRoute';
 
-// A non-owner is a 404 (ids are not probeable); the live-link limit and a bad expiry are validation failures.
-const toDeclaredStatus = (error: { statusCode: number }) =>
-  error.statusCode === 403 ? 404 : error.statusCode === 400 ? 422 : undefined;
+const CURSOR_SCOPE = 'v1.published-page-share-links';
+
+// The live-link limit and a bad expiry are validation failures.
+const toDeclared = declaredStatuses([404, 422]);
 
 const listRoute = nextRouteForContract(listPublishedPageShareLinksContract, {
   rateLimit: perUserRateLimit('GET /api/v1/published-pages/[public_id]/share-links'),
 }).get(async (req, res) => {
-  // The set is bounded by the live-link ceiling, so one response holds all of it.
+  const { public_id } = req.validatedParams;
+  await loadManagedPage(req.user, public_id);
   const links = await withStatusMap(
-    () => listShareLinks({ user: req.user, logger: req.logger, publicId: req.validatedParams.public_id }),
-    toDeclaredStatus
+    () => listShareLinks({ user: req.user, logger: req.logger, publicId: public_id }),
+    toDeclared
   );
+  // The set is bounded by the live-link ceiling, so it is paged in memory.
+  const { items, nextCursor } = paginateById(links, { ...req.validatedQuery, scope: CURSOR_SCOPE });
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.status(200).json({ data: links.map(toShareLinkResource), next_cursor: null });
+  return res.status(200).json({ data: items.map(toShareLinkResource), next_cursor: nextCursor });
 });
 
 const createRoute = nextRouteForContract(createPublishedPageShareLinkContract, {
   rateLimit: perUserRateLimit('POST /api/v1/published-pages/[public_id]/share-links'),
 }).post(async (req, res) => {
   await assertOutboundActionAllowed(req.user, req);
+  const { public_id } = req.validatedParams;
+  await loadManagedPage(req.user, public_id);
   const result = await withStatusMap(
     () =>
       createShareLink({
         user: req.user,
         logger: req.logger,
-        publicId: req.validatedParams.public_id,
+        publicId: public_id,
         additional: true,
         expiresAt: req.validated.expires_at,
       }),
-    toDeclaredStatus
+    toDeclared
   );
   res.setHeader('Cache-Control', 'private, no-store');
   return res.status(201).json(toCreatedShareLinkResource(result));

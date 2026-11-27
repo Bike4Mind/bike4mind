@@ -15,7 +15,10 @@ const PublicIdParamSchema = z.object({ public_id: z.string().min(1).describe('Th
 export { PublicIdParamSchema as PublishedPageIdParamSchema };
 
 export const PublishedPageShareLinkParamSchema = PublicIdParamSchema.extend({
-  link_id: z.string().min(1).describe('The id of the share link, from the list or create response.'),
+  link_id: z
+    .string()
+    .regex(/^[0-9a-f]{24}$/)
+    .describe('The id of the share link, from the list or create response.'),
 });
 
 export const PublishedPageCommentParamSchema = PublicIdParamSchema.extend({
@@ -178,7 +181,6 @@ export const CreatePublishedPageCommentRequestSchema = z
     body: z.string().min(1).max(5000),
     anchor: CommentAnchorSchema.optional(),
     thread_root_id: z.string().optional(),
-    artifact_version_sha: z.string().optional(),
   })
   .strict();
 

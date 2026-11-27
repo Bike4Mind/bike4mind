@@ -82,25 +82,3 @@ export async function loadManagedPage(user: Express.User, publicId: string): Pro
   }
   throw new NotFoundError('Published page not found', { errorCode: 'not_found' });
 }
-
-/**
- * Runs a service call and re-throws its HTTPError at the status `remap` picks, keeping message and
- * additionalInfo, so a route answers only with statuses its contract declares. `remap` returns
- * undefined to leave an error alone.
- */
-export async function withStatusMap<T>(
-  fn: () => Promise<T>,
-  remap: (error: HTTPError) => number | undefined
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error instanceof HTTPError) {
-      const status = remap(error);
-      if (status !== undefined && status !== error.statusCode) {
-        throw new HTTPError(status, error.message, error.additionalInfo);
-      }
-    }
-    throw error;
-  }
-}

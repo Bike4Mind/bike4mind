@@ -180,10 +180,14 @@ export interface ListAnnotationsInput extends AnnotationCaller {
   publicId: string;
   /** The viewer holds the artifact's passphrase proof (see requestHasGateProof). */
   hasGateProof?: boolean;
+  /** A keyset page; omitted lists every annotation (the legacy routes). */
+  page?: { limit: number; after?: { at: Date; id: string } };
 }
 
 export interface ListAnnotationsResult {
   annotations: AnnotationDto[];
+  /** With `page`: whether rows remain past this page. */
+  hasMore: boolean;
   commentPolicy: CommentPolicy;
   /** The body is identical for every viewer, so it may be served from a shared cache. */
   cacheable: boolean;
@@ -194,12 +198,25 @@ export async function listAnnotations({
   user,
   publicId,
   hasGateProof = false,
+  page,
 }: ListAnnotationsInput): Promise<ListAnnotationsResult> {
   requirePublicId(publicId);
   const { artifact } = await loadVisibleArtifact(publicId, user, hasGateProof);
-  const rows = await Annotation.find({ publicId, deletedAt: null }).sort({ createdAt: 1 }).lean<AnnotationLean[]>();
+  const after = page?.after;
+  const query = Annotation.find({
+    publicId,
+    deletedAt: null,
+    ...(after && {
+      $or: [{ createdAt: { $gt: after.at } }, { createdAt: after.at, _id: { $gt: after.id } }],
+    }),
+  }).sort({ createdAt: 1, _id: 1 });
+  if (page) query.limit(page.limit + 1);
+  const found = await query.lean<AnnotationLean[]>();
+  const hasMore = page !== undefined && found.length > page.limit;
+  const rows = hasMore ? found.slice(0, page.limit) : found;
   return {
     annotations: rows.map(toAnnotationDto),
+    hasMore,
     commentPolicy: artifact.commentPolicy,
     cacheable: isOpenPublic(artifact),
   };

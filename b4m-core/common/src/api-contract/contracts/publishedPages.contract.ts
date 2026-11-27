@@ -247,7 +247,7 @@ export const listPublishedPageShareLinksContract = defineEndpoint({
   operationId: 'listPublishedPageShareLinks',
   summary: 'List share links',
   description:
-    'Lists the live no-sign-in share links of a page, newest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; ' +
+    'Lists the live no-sign-in share links of a page, oldest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; ' +
     'the token and URL are never returned here. The URL is returned once, when the link is created.',
   tags: TAGS,
   auth: 'apiKeyOrJwt',
@@ -273,6 +273,9 @@ export const listPublishedPageShareLinksContract = defineEndpoint({
         next_cursor: null,
       },
     },
+    403: FORBIDDEN,
+    404: NOT_YOURS,
+    422: { description: '`limit` is out of range, or `cursor` is malformed.', schema: ApiErrorSchema },
     403: FORBIDDEN,
     404: NOT_YOURS,
     422: { description: '`limit` is out of range, or `cursor` is malformed.', schema: ApiErrorSchema },

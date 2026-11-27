@@ -265,6 +265,37 @@ describe('published-pages routes', () => {
     expect((await deletePage())._getStatusCode()).toBe(404);
   });
 
+  it("answers one identical 404 body for a missing page and another user's private or public page", async () => {
+    const bodies: unknown[] = [];
+    const strip = (body: Record<string, unknown>) => ({ ...body, request_id: undefined });
+    const cases: Array<() => void> = [
+      () => mockGetPage.mockRejectedValueOnce(new HTTPError(404, 'Artifact not found', { errorCode: 'not_found' })),
+      () =>
+        mockGetPage.mockRejectedValueOnce(new HTTPError(403, 'Published page not found', { errorCode: 'forbidden' })),
+      () => mockGetPage.mockResolvedValueOnce({ artifact: { ...PAGE_DOC, visibility: 'public' }, isManager: false }),
+    ];
+    for (const arrange of cases) {
+      arrange();
+      const res = await getPage();
+      expect(res._getStatusCode()).toBe(404);
+      bodies.push(strip(res._getJSONData()));
+    }
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
+  });
+
+  it('lets a user who fails the outbound-action check delete and narrow, but not widen', async () => {
+    const { assertOutboundActionAllowed } = await import('@server/auth/assertOutboundActionAllowed');
+    vi.mocked(assertOutboundActionAllowed).mockRejectedValue(new HTTPError(403, 'Account trust required'));
+    expect((await deletePage())._getStatusCode()).toBe(204);
+    expect((await patchPage({ visibility: 'private' }))._getStatusCode()).toBe(200);
+    expect(assertOutboundActionAllowed).not.toHaveBeenCalled();
+    // Widening is refused by the service, which owns that check.
+    mockUpdatePage.mockRejectedValueOnce(new HTTPError(403, 'Account trust required'));
+    expect((await patchPage({ visibility: 'public' }))._getStatusCode()).toBe(404);
+    vi.mocked(assertOutboundActionAllowed).mockReset();
+  });
+
   it('patches (200), mapping the access gate and camelCase fields', async () => {
     const res = await patchPage({
       comment_policy: 'open',

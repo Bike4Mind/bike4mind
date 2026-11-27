@@ -32630,9 +32630,6 @@
           },
           "thread_root_id": {
             "type": "string"
-          },
-          "artifact_version_sha": {
-            "type": "string"
           }
         },
         "required": [
@@ -104509,7 +104506,7 @@
       "get": {
         "operationId": "listPublishedPageShareLinks",
         "summary": "List share links",
-        "description": "Lists the live no-sign-in share links of a page, newest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.",
+        "description": "Lists the live no-sign-in share links of a page, oldest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.",
         "tags": [
           "Published pages"
         ],
@@ -105439,7 +105436,7 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1,
+              "pattern": "^[0-9a-f]{24}$",
               "description": "The id of the share link, from the list or create response."
             },
             "required": true,

@@ -211,7 +211,7 @@ const patchPage = (body: object = { title: 'Renamed' }) =>
   fire(pageRoute, { method: 'PATCH', url: pageUrl, query: { public_id: PUBLIC_ID }, body });
 const deletePage = () => fire(pageRoute, { method: 'DELETE', url: pageUrl, query: { public_id: PUBLIC_ID } });
 
-const LINK_ID = 'l1';
+const LINK_ID = '5b1f6a0e00000000000000b1';
 const COMMENT_ID = 'c1';
 const COMMENT_DTO = {
   id: COMMENT_ID,
@@ -375,7 +375,9 @@ describe('/api/v1/published-pages scope enforcement (real middleware chain)', ()
   it('an artifacts:publish key passes every operation', async () => {
     withScopes([ApiKeyScope.ARTIFACTS_PUBLISH]);
     for (const op of OPERATIONS) {
+      vi.clearAllMocks();
       expect((await op.call())._getStatusCode(), op.name).toBe(op.okStatus);
+      expect(op.service, op.name).toHaveBeenCalledTimes(1);
     }
   });
 

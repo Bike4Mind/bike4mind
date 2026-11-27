@@ -10,25 +10,20 @@ import { deletePublishedPageContract, getPublishedPageContract, updatePublishedP
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   deletePublishedPage,
-  getPublishedPage,
   updatePublishedPage,
   type PublishedPagePatch,
 } from '@server/services/publish/managePublishedPages';
 import { toPublishedPageResource } from '@server/publish/publishedPageResource';
-import { withDeclaredStatuses } from '@server/publish/v1PublishedPageRoute';
+import { declaredStatuses, withStatusMap } from '@server/publish/v1PublishedPageRoute';
+import { loadManagedPage } from '@server/publish/publishedPageSubresources';
 
 const getRoute = nextRouteForContract(getPublishedPageContract, {
   exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/published-pages/[public_id]'),
 }).get(async (req, res) => {
-  const { artifact, isManager } = await withDeclaredStatuses([404], () =>
-    getPublishedPage({ user: req.user, publicId: req.validatedParams.public_id })
-  );
-  if (!isManager) throw new NotFoundError('Published page not found');
+  const artifact = await loadManagedPage(req.user, req.validatedParams.public_id);
 
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(toPublishedPageResource(artifact));
@@ -37,7 +32,8 @@ const getRoute = nextRouteForContract(getPublishedPageContract, {
 const patchRoute = nextRouteForContract(updatePublishedPageContract, {
   rateLimit: perUserRateLimit('PATCH /api/v1/published-pages/[public_id]'),
 }).patch(async (req, res) => {
-  await assertOutboundActionAllowed(req.user, req);
+  const { public_id } = req.validatedParams;
+  await loadManagedPage(req.user, public_id);
   const body = req.validated;
   const gate = body.access_gate;
 
@@ -55,14 +51,10 @@ const patchRoute = nextRouteForContract(updatePublishedPageContract, {
       gate === null || gate.kind === 'passphrase' ? gate : { kind: 'domain', allowedDomains: gate.allowed_domains };
   }
 
-  const updated = await withDeclaredStatuses([404, 422], () =>
-    updatePublishedPage({
-      user: req.user,
-      logger: req.logger,
-      publicId: req.validatedParams.public_id,
-      patch,
-      request: req,
-    })
+  // Widening is checked for outbound-action trust inside the service; narrowing is never blocked.
+  const updated = await withStatusMap(
+    () => updatePublishedPage({ user: req.user, logger: req.logger, publicId: public_id, patch, request: req }),
+    declaredStatuses([404, 422])
   );
 
   return res.json(toPublishedPageResource(updated));
@@ -71,9 +63,11 @@ const patchRoute = nextRouteForContract(updatePublishedPageContract, {
 const deleteRoute = nextRouteForContract(deletePublishedPageContract, {
   rateLimit: perUserRateLimit('DELETE /api/v1/published-pages/[public_id]'),
 }).delete(async (req, res) => {
-  await assertOutboundActionAllowed(req.user, req);
-  await withDeclaredStatuses([404], () =>
-    deletePublishedPage({ user: req.user, logger: req.logger, publicId: req.validatedParams.public_id })
+  const { public_id } = req.validatedParams;
+  await loadManagedPage(req.user, public_id);
+  await withStatusMap(
+    () => deletePublishedPage({ user: req.user, logger: req.logger, publicId: public_id }),
+    declaredStatuses([404])
   );
   return res.status(204).end();
 });

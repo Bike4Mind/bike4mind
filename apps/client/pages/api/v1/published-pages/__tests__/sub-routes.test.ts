@@ -103,6 +103,12 @@ describe('published page sub-routes', () => {
       expect(mocks.restore).not.toHaveBeenCalled();
     });
 
+    it('reports an archive quota overflow (413) as 422', async () => {
+      mocks.restore.mockRejectedValue(new HTTPError(413, 'Archived versions would exceed the quota'));
+      const res = await callRoute(restore, { method: 'POST', query: PAGE, body: {} });
+      expect(res.status).toBe(422);
+    });
+
     it('reports a missing previous version as 422', async () => {
       mocks.restore.mockRejectedValue(new HTTPError(400, 'No previous version to restore'));
       const res = await callRoute(restore, { method: 'POST', query: PAGE, body: {} });
@@ -118,6 +124,7 @@ describe('published page sub-routes', () => {
           dto({ anchor: { x: 0.5, scrollSection: 'intro' }, artifactVersionSha: 'sha1' }),
           dto({ id: 'c2' }),
         ],
+        hasMore: false,
       });
       const res = await callRoute(comments, { method: 'GET', query: PAGE });
       expect(res.status).toBe(200);
@@ -125,6 +132,26 @@ describe('published page sub-routes', () => {
       expect(body.next_cursor).toBeNull();
       expect(body.data[0]).toMatchObject({ anchor: { x: 0.5, scroll_section: 'intro' }, artifact_version_sha: 'sha1' });
       expect(body.data[1]).toMatchObject({ anchor: null, artifact_version_sha: null, thread_root_id: null });
+    });
+
+    it('pages the list by limit, hands out a cursor and rejects a malformed one', async () => {
+      mocks.list.mockResolvedValue({ annotations: [dto({ id: '5b1f6a0e00000000000000a1' })], hasMore: true });
+      const first = await callRoute(comments, { method: 'GET', query: { ...PAGE, limit: '1' } });
+      expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ page: { limit: 1, after: undefined } }));
+      const cursor = (first.json as unknown as { next_cursor: string }).next_cursor;
+      expect(cursor).toEqual(expect.any(String));
+
+      mocks.list.mockResolvedValue({ annotations: [], hasMore: false });
+      await callRoute(comments, { method: 'GET', query: { ...PAGE, limit: '1', cursor } });
+      expect(mocks.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          page: { limit: 1, after: { at: new Date('2026-10-02T09:30:00.000Z'), id: '5b1f6a0e00000000000000a1' } },
+        })
+      );
+      mocks.list.mockClear();
+      const bad = await callRoute(comments, { method: 'GET', query: { ...PAGE, cursor: 'garbage' } });
+      expect(bad.status).toBe(422);
+      expect(mocks.list).not.toHaveBeenCalled();
     });
 
     it('creates a comment (201) mapping the anchor to the service shape', async () => {

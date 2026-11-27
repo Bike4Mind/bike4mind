@@ -22,30 +22,39 @@ export function toBundlePublisher(user: RouteUser): BundlePublisher & { username
 }
 
 /**
- * Re-statuses a service error to one the route's contract declares. 403 is reserved for API key scope,
- * so a service 403/401 reads as "not found" where the contract has a 404 (no probing other people's
- * pages) and as 422 otherwise; the legacy 400/413 validation statuses are 422. A slug owned by another
- * user is 409. Anything else passes through untouched.
+ * The remap for a route whose contract declares `declared`. 403 is reserved for API key scope, so a
+ * service 403/401/404 reads as "not found" where the contract has a 404 and as 422 otherwise; the
+ * legacy 400/413 validation statuses are 422. A slug owned by another user is 409. Anything else is
+ * left alone.
  */
-export function toDeclaredStatus(err: unknown, declared: readonly number[]): unknown {
-  if (!(err instanceof HTTPError)) return err;
-  const info = err.additionalInfo ?? {};
-  const keep = (status: number, message = err.message) => new HTTPError(status, message, info);
-  if (info.errorCode === SLUG_OWNED_BY_OTHER) return keep(409);
-  const status = err.statusCode;
-  if (status === 401 || status === 403 || status === 404) {
-    if (declared.includes(404)) return keep(404, status === 404 ? err.message : 'Published page not found');
-    return keep(422);
-  }
-  if (status === 400 || status === 413) return keep(422);
-  return err;
+export function declaredStatuses(declared: readonly number[]): (error: HTTPError) => number | undefined {
+  return error => {
+    if (error.additionalInfo?.errorCode === SLUG_OWNED_BY_OTHER) return 409;
+    const status = error.statusCode;
+    if (status === 401 || status === 403 || status === 404) return declared.includes(404) ? 404 : 422;
+    if (status === 400 || status === 413) return 422;
+    return undefined;
+  };
 }
 
-/** Runs a service call, rethrowing its HTTP errors with a status the contract declares. */
-export async function withDeclaredStatuses<T>(declared: readonly number[], fn: () => Promise<T>): Promise<T> {
+/**
+ * Runs a service call and re-throws its HTTPError at the status `remap` picks, keeping message and
+ * additionalInfo, so a route answers only with statuses its contract declares. `remap` returns
+ * undefined to leave an error alone.
+ */
+export async function withStatusMap<T>(
+  fn: () => Promise<T>,
+  remap: (error: HTTPError) => number | undefined
+): Promise<T> {
   try {
     return await fn();
-  } catch (err) {
-    throw toDeclaredStatus(err, declared);
+  } catch (error) {
+    if (error instanceof HTTPError) {
+      const status = remap(error);
+      if (status !== undefined && status !== error.statusCode) {
+        throw new HTTPError(status, error.message, error.additionalInfo);
+      }
+    }
+    throw error;
   }
 }

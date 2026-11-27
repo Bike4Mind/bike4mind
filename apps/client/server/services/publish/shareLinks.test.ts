@@ -99,6 +99,12 @@ describe('createShareLink', () => {
     expect(conflict).toMatchObject({ statusCode: 400, errorCode: 'CONFLICTING_MINT_MODE' });
   });
 
+  it('parses a raw body only after the owner check', async () => {
+    mockLoad.mockResolvedValue(artifact([], { ownerId: 'someone-else' }));
+    expect((await refusal(createShareLink({ ...base, body: { regenerate: 'yes' } }))).statusCode).toBe(403);
+    await expect(createShareLink({ ...base, body: { regenerate: 'yes' } })).rejects.toThrow();
+  });
+
   it('refuses an additional link at the live cap', async () => {
     mockLoad.mockResolvedValue(artifact(Array.from({ length: 20 }, (_, i) => entry(`e${i}`, `T${i}`))));
     expect(await refusal(createShareLink({ ...base, additional: true }))).toMatchObject({
@@ -134,6 +140,14 @@ describe('revokeShareLink', () => {
     expect((await refusal(revokeShareLink({ ...base, id: 'nope' }))).statusCode).toBe(400);
     const unknown = await refusal(revokeShareLink({ ...base, id: '507f1f77bcf86cd799439011' }));
     expect(unknown.statusCode).toBe(404);
+  });
+
+  it('never revokes all for a blank id', async () => {
+    mockLoad.mockResolvedValue(artifact([entry('a', 'T1'), entry('b', 'T2')]));
+    for (const id of ['', ' ', '\t']) {
+      expect((await refusal(revokeShareLink({ ...base, id }))).statusCode).toBe(400);
+    }
+    expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
   it('refuses to revoke the last link behind a gate', async () => {

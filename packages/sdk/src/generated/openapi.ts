@@ -2413,7 +2413,7 @@ export interface paths {
     };
     /**
      * List share links
-     * @description Lists the live no-sign-in share links of a page, newest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.
+     * @description Lists the live no-sign-in share links of a page, oldest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.
      */
     get: operations['listPublishedPageShareLinks'];
     put?: never;
@@ -15332,7 +15332,6 @@ export interface components {
         scroll_section?: string;
       };
       thread_root_id?: string;
-      artifact_version_sha?: string;
     };
     /**
      * @example {

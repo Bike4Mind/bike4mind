@@ -12,21 +12,30 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { createAnnotation, listAnnotations } from '@server/services/publish/annotations';
-import {
-  fromCommentAnchor,
-  loadManagedPage,
-  toCommentResource,
-  withStatusMap,
-} from '@server/publish/publishedPageSubresources';
+import { fromCommentAnchor, loadManagedPage, toCommentResource } from '@server/publish/publishedPageSubresources';
+import { withStatusMap } from '@server/publish/v1PublishedPageRoute';
+import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
+
+const CURSOR_SCOPE = 'v1.published-page-comments';
 
 const listRoute = nextRouteForContract(listPublishedPageCommentsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/published-pages/[public_id]/comments'),
 }).get(async (req, res) => {
   const { public_id } = req.validatedParams;
+  const { limit, cursor } = req.validatedQuery;
+  const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, CURSOR_SCOPE);
   await loadManagedPage(req.user, public_id);
-  const { annotations } = await listAnnotations({ user: req.user, publicId: public_id });
+  const { annotations, hasMore } = await listAnnotations({
+    user: req.user,
+    publicId: public_id,
+    page: { limit, after },
+  });
+  const last = annotations[annotations.length - 1];
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.status(200).json({ data: annotations.map(toCommentResource), next_cursor: null });
+  return res.status(200).json({
+    data: annotations.map(toCommentResource),
+    next_cursor: hasMore ? encodeTimeIdCursor(CURSOR_SCOPE, { at: new Date(last.createdAt), id: last.id }) : null,
+  });
 });
 
 const createRoute = nextRouteForContract(createPublishedPageCommentContract, {

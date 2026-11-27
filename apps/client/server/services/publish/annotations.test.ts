@@ -23,7 +23,10 @@ const db = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: () => ({ select: () => ({ lean: db.artifact }) }) },
   Annotation: {
-    find: () => ({ sort: () => ({ lean: db.annotationRows }) }),
+    find: () => {
+      const query: Record<string, unknown> = { sort: () => query, limit: () => query, lean: db.annotationRows };
+      return query;
+    },
     findOne: db.findOne,
     countDocuments: db.count,
     create: db.create,
@@ -136,11 +139,28 @@ describe('annotation services', () => {
   it('lists for an anonymous viewer and marks only open-public lists cacheable', async () => {
     expect(await listAnnotations({ publicId: 'pub1' })).toEqual({
       annotations: [],
+      hasMore: false,
       commentPolicy: 'open',
       cacheable: true,
     });
     db.artifact.mockResolvedValue({ ...artifactDoc, accessGate: { kind: 'passphrase' } });
     expect((await listAnnotations({ publicId: 'pub1' })).cacheable).toBe(false);
+  });
+
+  it('pages by keyset: asks for one extra row and reports hasMore', async () => {
+    const row = (id: string) => ({
+      _id: id,
+      publicId: 'pub1',
+      kind: 'comment',
+      body: 'x',
+      createdAt: new Date('2026-10-02'),
+    });
+    db.annotationRows.mockResolvedValue([row('a'), row('b'), row('c')]);
+    const result = await listAnnotations({ publicId: 'pub1', page: { limit: 2 } });
+    expect(result.annotations.map(a => a.id)).toEqual(['a', 'b']);
+    expect(result.hasMore).toBe(true);
+    db.annotationRows.mockResolvedValue([row('c')]);
+    expect((await listAnnotations({ publicId: 'pub1', page: { limit: 2 } })).hasMore).toBe(false);
   });
 
   it('passes the gate proof to the visibility check only for passphrase gates', async () => {
@@ -179,7 +199,11 @@ describe('annotation services', () => {
     db.artifact.mockResolvedValue({ ...artifactDoc, commentPolicy: 'none' });
     expect(
       await rejection(createAnnotation({ user: expressUser(viewer), publicId: 'pub1', input, logger }))
-    ).toMatchObject({ statusCode: 403, message: 'Commenting is disabled for this artifact' });
+    ).toMatchObject({
+      statusCode: 403,
+      message: 'Commenting is disabled for this artifact',
+      additionalInfo: { errorCode: 'comments_disabled' },
+    });
   });
 
   it('create throttles non-admins and exempts admins', async () => {

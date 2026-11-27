@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreatedPublishedPageShareLinkSchema, ListPublishedPageShareLinksResponseSchema } from '@bike4mind/common';
+import {
+  CreatedPublishedPageShareLinkSchema,
+  ListPublishedPageShareLinksResponseSchema,
+  PublishedPageShareLinkParamSchema,
+} from '@bike4mind/common';
 import { callRoute } from './routeMocks';
 
 const store = vi.hoisted(() => ({ links: [] as Array<{ id: string; token: string; expiresAt: Date | null }> }));
@@ -13,6 +17,18 @@ vi.mock('@server/middlewares/dispatchByMethod', async () => ({
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({ assertOutboundActionAllowed: vi.fn() }));
+vi.mock('@server/services/publish/managePublishedPages', async orig => {
+  const { HTTPError } = await import('@bike4mind/server-utils/utils/errors');
+  return {
+    ...(await orig<Record<string, unknown>>()),
+    getPublishedPage: async ({ publicId }: { publicId: string }) => {
+      if (publicId === 'missing') throw new HTTPError(404, 'Artifact not found', { errorCode: 'not_found' });
+      if (publicId === 'private-other')
+        throw new HTTPError(403, 'Published page not found', { errorCode: 'forbidden' });
+      return { artifact: {}, isManager: publicId !== 'public-other' };
+    },
+  };
+});
 vi.mock('@server/services/publish/shareLinks', async orig => {
   const actual = await orig<typeof import('@server/services/publish/shareLinks')>();
   const { PublishServiceError } = await import('@server/services/publish/publishServiceError');
@@ -31,7 +47,7 @@ vi.mock('@server/services/publish/shareLinks', async orig => {
     createShareLink: async (input: { expiresAt?: unknown; additional?: boolean }) => {
       if (input.expiresAt === '2030-01-01T00:00:00Z') throw new PublishServiceError(400, 'bad expiry');
       const link = {
-        id: `link${store.links.length}`,
+        id: String(store.links.length).padStart(24, '0'),
         token: `tok-${'x'.repeat(40)}-${store.links.length}abcd`,
         expiresAt: null,
       };
@@ -39,7 +55,6 @@ vi.mock('@server/services/publish/shareLinks', async orig => {
       return { ...view(link), shareLinks: store.links.map(view) };
     },
     revokeShareLink: async (input: { id?: string; publicId: string }) => {
-      if (input.publicId === 'foreign') throw new PublishServiceError(403, 'Only the owner');
       if (input.publicId === 'gated') {
         throw new PublishServiceError(400, 'orphan', { errorCode: actual.SHARE_LINK_ERROR_CODES.wouldOrphanGate });
       }
@@ -54,6 +69,7 @@ vi.mock('@server/services/publish/shareLinks', async orig => {
 import shareLinks from '../[public_id]/share-links/index';
 import revoke from '../[public_id]/share-links/[link_id]';
 
+const ABSENT_LINK = 'f'.repeat(24);
 const BAD = '2030-01-01T00:00:00Z';
 const PAGE = { public_id: 'k3x9d2' };
 
@@ -119,13 +135,52 @@ describe('/api/v1/published-pages/{public_id}/share-links', () => {
   });
 
   it('answers only declared statuses for service refusals', async () => {
-    expect((await callRoute(revoke, { method: 'DELETE', query: { ...PAGE, link_id: 'nope' } })).status).toBe(404);
-    expect((await callRoute(revoke, { method: 'DELETE', query: { public_id: 'foreign', link_id: 'x' } })).status).toBe(
-      404
-    );
-    expect((await callRoute(revoke, { method: 'DELETE', query: { public_id: 'gated', link_id: 'x' } })).status).toBe(
-      409
-    );
+    expect((await callRoute(revoke, { method: 'DELETE', query: { ...PAGE, link_id: ABSENT_LINK } })).status).toBe(404);
+    expect(
+      (await callRoute(revoke, { method: 'DELETE', query: { public_id: 'gated', link_id: ABSENT_LINK } })).status
+    ).toBe(409);
     expect((await callRoute(shareLinks, { method: 'POST', query: PAGE, body: { expires_at: BAD } })).status).toBe(422);
+  });
+
+  it('never revokes every link for a blank or malformed link_id', async () => {
+    await callRoute(shareLinks, { method: 'POST', query: PAGE, body: {} });
+    await callRoute(shareLinks, { method: 'POST', query: PAGE, body: {} });
+    for (const link_id of [' ', '\t', 'nope']) {
+      expect(PublishedPageShareLinkParamSchema.safeParse({ ...PAGE, link_id }).success).toBe(false);
+      await expect(callRoute(revoke, { method: 'DELETE', query: { ...PAGE, link_id } })).rejects.toThrow();
+    }
+    expect(store.links).toHaveLength(2);
+  });
+
+  it("answers one identical 404 body for a missing page and another user's private or public page", async () => {
+    const bodies = [];
+    for (const public_id of ['missing', 'private-other', 'public-other']) {
+      const res = await callRoute(shareLinks, { method: 'GET', query: { public_id } });
+      expect(res.status).toBe(404);
+      bodies.push(res.text);
+      const revoked = await callRoute(revoke, { method: 'DELETE', query: { public_id, link_id: ABSENT_LINK } });
+      expect(revoked.status).toBe(404);
+      bodies.push(revoked.text);
+    }
+    expect(new Set(bodies).size).toBe(1);
+  });
+
+  it('pages the list by limit and cursor, and rejects a malformed cursor', async () => {
+    store.links.push(
+      { id: 'a'.repeat(24), token: 'tok-aaaa', expiresAt: null },
+      { id: 'b'.repeat(24), token: 'tok-bbbb', expiresAt: null },
+      { id: 'c'.repeat(24), token: 'tok-cccc', expiresAt: null }
+    );
+    const first = await callRoute(shareLinks, { method: 'GET', query: { ...PAGE, limit: '2' } });
+    expect(first.json!.data).toHaveLength(2);
+    const { next_cursor } = first.json as unknown as { next_cursor: string };
+    expect(next_cursor).toEqual(expect.any(String));
+    const second = await callRoute(shareLinks, { method: 'GET', query: { ...PAGE, limit: '2', cursor: next_cursor } });
+    expect(second.json!.data).toHaveLength(1);
+    await expect(
+      callRoute(shareLinks, { method: 'GET', query: { ...PAGE, cursor: 'garbage' } })
+    ).resolves.toMatchObject({
+      status: 422,
+    });
   });
 });
