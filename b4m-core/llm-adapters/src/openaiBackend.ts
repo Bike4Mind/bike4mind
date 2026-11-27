@@ -150,7 +150,7 @@ const federatedOpenAIClients = new Map<string, FederatedOpenAI>();
  * The client authenticates through `apiKey: () => auth.getToken()` rather than the SDK's
  * `workloadIdentity` option, whose exchange runs lazily inside the request and is not reachable
  * from outside. Holding the WorkloadIdentityAuth lets the backend run the exchange before a
- * request is sent (see OpenAIBackend.useCredentialForNextRequest); the request then reads the
+ * request is sent (see OpenAIBackend.clientForNextRequest); the request then reads the
  * cached token. Unlike `workloadIdentity`, a 401 is not retried (the request was sent); the
  * backend drops the cached token so the next request exchanges again.
  */
@@ -310,7 +310,7 @@ export class OpenAIBackend implements ICompletionBackend {
   }
 
   /**
-   * Fix the credential for the next request and point `_api` at the matching client. Runs
+   * Fix the credential for the next request and return the client that matches it. Runs
    * before anything is sent; see ResolvedProviderCredential for why a later failure never
    * falls back. The exchange itself is forced here via the shared WorkloadIdentityAuth.
    */

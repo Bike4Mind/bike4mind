@@ -333,7 +333,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   /**
-   * Fix the credential for the next request and point `_api` at the matching client. Runs
+   * Fix the credential for the next request and return the client that matches it. Runs
    * before anything is sent; see ResolvedProviderCredential for why a later failure never
    * falls back.
    */

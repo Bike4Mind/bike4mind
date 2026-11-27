@@ -177,3 +177,55 @@ describe('openai backend federated 401', () => {
     expect(openaiInvalidate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('openai backend concurrent calls', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a fallback call's retry on the static key while a federated call completes during its backoff", async () => {
+    recordProviderCredentialUse.mockReset();
+    openaiExchange.mockReset();
+    stubFederationEnv();
+    const credentials: string[] = [];
+    let firstRequestSeen!: () => void;
+    const firstRequest = new Promise<void>(resolve => (firstRequestSeen = resolve));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: unknown, init?: { headers?: HeadersInit }) => {
+        const headers = new Headers(init?.headers);
+        credentials.push(headers.get('authorization')?.replace(/^Bearer /, '') ?? '');
+        if (credentials.length === 1) {
+          firstRequestSeen();
+          // Retryable for our withRetry, but not retried inside the SDK.
+          return new Response(JSON.stringify({ error: { message: 'service unavailable' } }), {
+            status: 503,
+            headers: { 'content-type': 'application/json', 'x-should-retry': 'false' },
+          });
+        }
+        return new Response(JSON.stringify({ error: { message: 'rejected in test' } }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      })
+    );
+    openaiExchange.mockRejectedValueOnce(new Error('Token exchange failed with status 503'));
+    openaiExchange.mockResolvedValue(FEDERATED_TOKEN);
+    const backend = new OpenAIBackend({ kind: 'federated', fallbackKey: PLATFORM_KEY });
+    const complete = () =>
+      backend.complete(ChatModels.GPT4o, messages, { stream: false }, async () => {}).catch(() => {});
+
+    const fallbackCall = complete();
+    await firstRequest;
+    // Resolves while the fallback call sits in its retry backoff.
+    await complete();
+    await fallbackCall;
+
+    expect(credentials).toEqual([PLATFORM_KEY, FEDERATED_TOKEN, PLATFORM_KEY]);
+    expect(recordProviderCredentialUse.mock.calls).toEqual([
+      ['openai', 'static_fallback'],
+      ['openai', 'federated'],
+    ]);
+  });
+});
