@@ -15,6 +15,7 @@ import {
   type SessionStatusFeed,
   type SessionsController,
 } from './useChat';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 const summary = (id: string, title = id) =>
   ({
@@ -49,7 +50,7 @@ function stubHost(results: Record<string, unknown>, chat: Record<string, unknown
     },
   };
   vi.stubGlobal('b4m', {
-    host,
+    host: { ...localHostConnections(), ...host },
     chat: { onStreamEvent: () => () => undefined, ...chat },
     claudeImport: { onSessionsChanged: () => () => undefined },
   });

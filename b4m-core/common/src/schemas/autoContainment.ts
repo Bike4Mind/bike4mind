@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ABUSE_ASSESSMENT_RESULTS } from './abuseAssessment';
 import { AUTO_CONTAINMENT_MODES, type AutoContainmentConfig, type AutoContainmentMode } from './settings';
 
 /**
@@ -16,7 +17,41 @@ export type InterventionTier = (typeof INTERVENTION_TIERS)[number];
 export type GraduatedInterventionTier = Exclude<InterventionTier, 'contain'>;
 
 /** Bumped whenever the wouldAction-to-tier table or a skip rule changes, so graded decisions stay comparable. */
-export const INTERVENTION_POLICY_VERSION = 1;
+export const INTERVENTION_POLICY_VERSION = 2;
+
+/**
+ * Deterministic link rules that can decide a graduated tier when the abuse model abstains
+ * (apps/workers/src/security/autoContainment/linkRules.ts). Part of the versioned policy table.
+ */
+export const LINK_RULES = ['sharedOwnedDomain', 'heldSignupDomain', 'bannedSameDevice'] as const;
+export type LinkRule = (typeof LINK_RULES)[number];
+
+export const INTERVENTION_DECIDERS = ['model', 'link_rule'] as const;
+export type InterventionDecider = (typeof INTERVENTION_DECIDERS)[number];
+
+/**
+ * What the link rules read about one account (loaded by
+ * packages/server-utils/src/security/autoContainment/linkRuleFacts.ts). A null field is a fact that
+ * could not be read, so the rule needing it cannot fire.
+ */
+export type LinkRuleFacts = {
+  userId: string;
+  /** Paid standing (credit purchase or paid subscription); true also when it could not be read. */
+  paying: boolean;
+  /** The address is on a partner organization's signup domain; true also when it could not be read. */
+  partnerDomain: boolean;
+  /** Credits spent since signup (usage events, never the balance). */
+  creditsSpent: number;
+  /**
+   * Accounts (this one included) on the same owned mail domain that signed up within the strong-link
+   * window of this one, and how many of them spent credits since their signup.
+   */
+  ownedDomainCluster: { domain: string; accounts: number; spenders: number } | null;
+  /** The address's domain (or a parent) an admin confirmed blocked on review; automated blocks do not count. */
+  adminHeldDomain: string | null;
+  /** Distinct banned accounts on the same uncommon device, outside the detection. */
+  bannedSameDevice: number | null;
+};
 
 export const INTERVENTION_SCOPES = ['ai_spend', 'signup_grant', 'account'] as const;
 export type InterventionScope = (typeof INTERVENTION_SCOPES)[number];
@@ -91,6 +126,18 @@ export const autoContainmentDecisionItemSchema = z.object({
   releasedAt: z.date().nullable().prefault(null),
   releasedBy: z.string().nullable().prefault(null),
   releaseReason: z.string().nullable().prefault(null),
+  /** Rows written before link rules were all decided by the model. */
+  decidedBy: z.enum(INTERVENTION_DECIDERS).prefault('model'),
+  /**
+   * On rule-decided rows, every link rule that fired for the decision's accounts. Empty on model-decided
+   * rows: facts are loaded only when a rule could replace the model's skip.
+   */
+  linkRules: z.array(z.enum(LINK_RULES)).prefault([]),
+  /** The model's own judgment on graduated rows, so abstention on rule-decided cases is measurable. */
+  modelJudgment: z
+    .object({ result: z.enum(ABUSE_ASSESSMENT_RESULTS), confidence: z.number().nullable() })
+    .nullable()
+    .prefault(null),
 });
 export type AutoContainmentDecisionItem = z.infer<typeof autoContainmentDecisionItemSchema>;
 

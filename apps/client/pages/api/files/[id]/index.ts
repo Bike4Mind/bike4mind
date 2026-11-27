@@ -56,8 +56,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
     }
 
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
-    // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
-    // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    // WRITE into that lake, so gate it with the same manage check the remove path uses -
+    // otherwise a read-only member could inject files via Send-to-Data-Lake. File ownership
+    // (canColdAddFileToLake) is enforced further in, by reconcileLakeTags.
     //
     // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
     // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is

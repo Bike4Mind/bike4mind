@@ -7,7 +7,11 @@ vi.mock('../utils/orgAccess', () => ({
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
 
-import { authorizeLakeConnectorAccess, authorizeLakeConnectorRead } from './authorizeLakeConnectorAccess';
+import {
+  authorizeLakeConnectorAccess,
+  authorizeLakeConnectorRead,
+  connectingUserCanStillManage,
+} from './authorizeLakeConnectorAccess';
 import { NotFoundError } from '../utils/errors';
 
 const member = { id: 'u1', isAdmin: false };
@@ -105,5 +109,27 @@ describe('personal-lake parity between the write and read gates', () => {
     );
     expect(writeAdmits).toBe(admitted);
     expect(readManages).toBe(admitted);
+  });
+});
+
+describe('connectingUserCanStillManage', () => {
+  const orgLake = { organizationId: 'org1', createdByUserId: 'someone' };
+
+  it('is true while the user still passes the connect door', async () => {
+    await expect(connectingUserCanStillManage(member, orgLake)).resolves.toBe(true);
+  });
+
+  it('is false once the org refuses them', async () => {
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
+    await expect(connectingUserCanStillManage(member, orgLake)).resolves.toBe(false);
+  });
+
+  it('is false for a personal lake the user did not create', async () => {
+    await expect(connectingUserCanStillManage(member, { createdByUserId: 'u2' })).resolves.toBe(false);
+  });
+
+  it('rethrows a failure that is not a refusal, so the message is retried', async () => {
+    h.verifyOrgPermission.mockRejectedValue(new Error('connection reset'));
+    await expect(connectingUserCanStillManage(member, orgLake)).rejects.toThrow('connection reset');
   });
 });

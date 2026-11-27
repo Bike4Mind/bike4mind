@@ -145,6 +145,7 @@ export const agentContinuationQueueSubscription = agentContinuationQueue.subscri
 websocketApi.route('agent_execute', {
   handler: 'apps/client/server/websocket/agentExecute.func',
   runtime: 'nodejs24.x',
+  copyFiles: toolRuntimeAssets(),
   timeout: '30 seconds',
   // 256 MB ran out of memory on cold start (Node 24 + Mongoose + AWS SDK) — matches
   // the lifecycle-handler issue fixed in PR #8449. Symptom: every invocation hit

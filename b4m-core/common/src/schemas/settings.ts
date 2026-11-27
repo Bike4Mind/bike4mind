@@ -305,6 +305,8 @@ export const FORMAT_PROMPT_TEMPLATE = `Formatting only - nothing here decides wh
 export const SettingKeySchema = z.enum([
   'openaiDemoKey',
   'anthropicDemoKey',
+  'openaiCredentialMode',
+  'anthropicCredentialMode',
   'geminiDemoKey',
   'xaiApiKey',
   'moonshotApiKey',
@@ -438,6 +440,10 @@ export const SettingKeySchema = z.enum([
   'ScanURLinPrompt',
   'DefaultInviteCode',
   'serverStatus',
+  'statusPageEnabled',
+  'statusPagePublicEnabled',
+  'statusPageVendorFeedsEnabled',
+  'statusPageSyntheticLlmEnabled',
   'CSMandCTAFlag',
   'showDesktopAppPromo',
   'SystemFiles',
@@ -1338,6 +1344,14 @@ function makeStringSetting(
   };
 }
 
+/**
+ * How the platform authenticates to a provider. `federated` takes effect only where the deploy
+ * grants the workload identity federation capability (infra/providerFederation.ts); read by
+ * ChatCompletionProcess through withProviderCredentialPlan in @bike4mind/llm-adapters.
+ */
+export const PROVIDER_CREDENTIAL_MODES = ['static', 'federated'] as const;
+export type ProviderCredentialMode = (typeof PROVIDER_CREDENTIAL_MODES)[number];
+
 /** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
 export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
 export type SpendAutoPauseMode = (typeof SPEND_AUTO_PAUSE_MODES)[number];
@@ -1831,6 +1845,16 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  linkRules: z
+    .object({
+      enabled: z.boolean().prefault(true).meta({
+        title: 'Enabled',
+        description:
+          'When the model does not act, deterministic link rules (shared owned domain, admin-held signup domain, banned same device) may decide Limit or Hold signup grant, under the settings of those tiers.',
+      }),
+    })
+    .prefault({})
+    .meta({ title: 'Link rules' }),
   tiers: z
     .object({
       limit: z
@@ -2477,6 +2501,7 @@ export const API_SERVICE_GROUPS = {
     icon: 'SmartToy',
     settings: [
       { key: 'openaiDemoKey', order: 1 },
+      { key: 'openaiCredentialMode', order: 1.5 },
       { key: 'DefaultContext', order: 2 },
       { key: 'DefaultChunkSize', order: 3 },
       { key: 'FormatPromptTemplate', order: 4 },
@@ -2593,7 +2618,10 @@ export const API_SERVICE_GROUPS = {
     name: 'Anthropic Service',
     description: 'Anthropic API integration settings',
     icon: 'Psychology',
-    settings: [{ key: 'anthropicDemoKey', order: 1 }],
+    settings: [
+      { key: 'anthropicDemoKey', order: 1 },
+      { key: 'anthropicCredentialMode', order: 2 },
+    ],
   },
   GEMINI: {
     id: 'geminiAPIService',
@@ -2942,6 +2970,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'serverStatus', order: 1 },
       { key: 'AdminEmail', order: 2 },
       { key: 'mailFrom', order: 3 },
+      { key: 'statusPageEnabled', order: 4 },
+      { key: 'statusPagePublicEnabled', order: 5 },
+      { key: 'statusPageVendorFeedsEnabled', order: 6 },
+      { key: 'statusPageSyntheticLlmEnabled', order: 7 },
     ],
   },
   REGISTRATION: {
@@ -3239,6 +3271,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 1,
   }),
+  openaiCredentialMode: makeStringSetting({
+    key: 'openaiCredentialMode',
+    name: 'OpenAI Credential Mode',
+    defaultValue: 'static',
+    options: [...PROVIDER_CREDENTIAL_MODES],
+    description:
+      '"static" (default): the platform authenticates to OpenAI with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key for a request whose token exchange fails or times out before it is sent; an error after sending is never retried with the API key. Without the capability it keeps using the API key.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.OPENAI.id,
+    order: 1.5,
+  }),
   xaiApiKey: makeStringSetting({
     key: 'xaiApiKey',
     name: 'xAI API Key',
@@ -3298,6 +3341,17 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.ANTHROPIC.id,
     order: 1,
+  }),
+  anthropicCredentialMode: makeStringSetting({
+    key: 'anthropicCredentialMode',
+    name: 'Anthropic Credential Mode',
+    defaultValue: 'static',
+    options: [...PROVIDER_CREDENTIAL_MODES],
+    description:
+      '"static" (default): the platform authenticates to Anthropic with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key for a request whose token exchange fails or times out before it is sent; an error after sending is never retried with the API key. Without the capability it keeps using the API key.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.ANTHROPIC.id,
+    order: 2,
   }),
   geminiDemoKey: makeStringSetting({
     key: 'geminiDemoKey',
@@ -5230,6 +5284,44 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
     options: Object.values(ServerStatusEnum),
+  }),
+  statusPageEnabled: makeBooleanSetting({
+    key: 'statusPageEnabled',
+    name: 'Status Page Checks',
+    defaultValue: false,
+    description: 'Whether the status page tick runs: probes, vendor feeds, incident drafts and snapshot publishing.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 4,
+  }),
+  statusPagePublicEnabled: makeBooleanSetting({
+    key: 'statusPagePublicEnabled',
+    name: 'Status Page Public',
+    defaultValue: false,
+    description:
+      'Whether the public status route and the in-app status page are served. History can accumulate while this is off.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 5,
+  }),
+  statusPageVendorFeedsEnabled: makeBooleanSetting({
+    key: 'statusPageVendorFeedsEnabled',
+    name: 'Status Page Vendor Feeds',
+    defaultValue: true,
+    description: 'Whether the status page reads upstream vendor status feeds.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 6,
+  }),
+  statusPageSyntheticLlmEnabled: makeBooleanSetting({
+    key: 'statusPageSyntheticLlmEnabled',
+    name: 'Status Page Synthetic LLM Probe',
+    defaultValue: false,
+    description:
+      'Whether the status page runs a synthetic LLM completion probe. Each probe call spends provider credits.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 7,
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',

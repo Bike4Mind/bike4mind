@@ -231,6 +231,12 @@ export const downloadRelevantLinks = async (
               db: adapters.db,
               storage: adapters.storage,
             });
+            if (existingDownloadResult) {
+              await db.researchDatas.update({
+                id: existingDownloadResult.researchData.id,
+                fabFileId: downloadedFile.id,
+              });
+            }
             logger?.info(
               `✅ [DOWNLOAD_${index + 1}] File created: ${downloadedFile.id} ${
                 downloadedFile.mimeType

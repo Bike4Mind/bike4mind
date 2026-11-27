@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,7 @@ const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' }
 const listRecentFolders = async (): Promise<RecentFolder[]> => [];
 
 const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
   busy: false,
   error: null,
   dismissError: vi.fn(),

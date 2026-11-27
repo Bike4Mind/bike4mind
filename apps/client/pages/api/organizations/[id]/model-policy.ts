@@ -1,8 +1,8 @@
 // GET/PUT/DELETE /api/organizations/:id/model-policy
-// The org's allowlist of providers, models and built-in tools (OrgModelPolicySchema). managePolicies
+// The org's allowlist of providers, models and tools (built-in or contributed) (OrgModelPolicySchema). managePolicies
 // holder or platform admin (verifyOrgPermission). DELETE removes the policy so the org is unrestricted.
 
-import { OrgModelPolicySchema } from '@bike4mind/common';
+import { b4mLLMTools, OrgModelPolicySchema } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
@@ -16,11 +16,22 @@ import {
 } from '@server/organizations/orgModelPolicy';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import type { Request } from 'express';
 
 type OrgRequest = Request<{}, unknown, unknown, { id?: string }>;
 
 const orgIdOf = (req: OrgRequest): string => (typeof req.query.id === 'string' ? req.query.id : '');
+
+// Contributed tools are governed beyond the built-in enum and only the server knows them, so the form lists them from
+// here and a write must name a tool from one of the two sets.
+const contributedTools = Object.keys(premiumLlmTools);
+const knownTools: ReadonlySet<string> = new Set([...b4mLLMTools.options, ...contributedTools]);
+const withContributedTools = <T extends object>(view: T) => ({ ...view, contributedTools });
+const WritablePolicySchema = OrgModelPolicySchema.refine(
+  policy => (policy.allowedTools ?? []).every(tool => knownTools.has(tool)),
+  { message: 'Unknown tool name', path: ['allowedTools'] }
+);
 
 const recordChange = (
   req: OrgRequest,
@@ -43,7 +54,7 @@ async function changePolicy(req: OrgRequest, change: PolicyChange) {
     // Re-read authorization and the before value on every transaction attempt.
     const organization = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
     const policy =
-      change.kind === 'reset' ? OrgModelPolicySchema.parse({}) : parseOrBadRequest(OrgModelPolicySchema, change.body);
+      change.kind === 'reset' ? OrgModelPolicySchema.parse({}) : parseOrBadRequest(WritablePolicySchema, change.body);
     const before = toOrgModelPolicyView(organization.modelPolicy);
     const changes = diffOrgModelPolicy(before, policy);
     const changed = changes.length > 0 || before.invalidStored;
@@ -80,17 +91,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
-      return res.json(toOrgModelPolicyView(org.modelPolicy));
+      return res.json(withContributedTools(toOrgModelPolicyView(org.modelPolicy)));
     })
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      return res.json(await changePolicy(req, { kind: 'replace', body: req.body }));
+      return res.json(withContributedTools(await changePolicy(req, { kind: 'replace', body: req.body })));
     })
   )
   .delete(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      return res.json(await changePolicy(req, { kind: 'reset' }));
+      return res.json(withContributedTools(await changePolicy(req, { kind: 'reset' })));
     })
   );
 

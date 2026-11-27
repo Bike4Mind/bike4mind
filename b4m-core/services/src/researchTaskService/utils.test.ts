@@ -16,7 +16,6 @@ import {
   IResearchTaskScrape,
   IUserDocument,
   BadRequestError,
-  NotFoundError,
   ResearchTaskType,
   ResearchTaskExecutionType,
   ResearchTaskStatus,
@@ -325,26 +324,6 @@ describe('findExistingResearchData utils', () => {
         expect(mockFabFilesRepo.update).toHaveBeenCalledWith(expect.objectContaining({ id: file.id }));
       });
 
-      it('fails the re-crawl, without uploading, when the file owner is gone', async () => {
-        const file = { ...mockFabFile, userId: 'deleted-owner', fileSize: 10 };
-        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
-        mockFabFilesRepo.findById.mockResolvedValue(file);
-        mockUsersRepo.findById.mockResolvedValue(null);
-
-        await expect(
-          findOrUpdateExistingResearchData(
-            'https://example.com',
-            'x'.repeat(100),
-            'text/markdown',
-            mockResearchTaskWithOrganization,
-            mockUser,
-            adapters,
-            mockLogger
-          )
-        ).rejects.toThrow(NotFoundError);
-        expect(mockStorage.upload).not.toHaveBeenCalled();
-      });
-
       it('fails the re-crawl on a non-quota error from the gate rather than keeping the old crawl', async () => {
         const file = { ...mockFabFile, fileSize: 10 };
         mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
@@ -391,6 +370,29 @@ describe('findExistingResearchData utils', () => {
         ContentType: 'application/pdf',
         ContentLength: content.length,
       });
+    });
+
+    it('returns no file, and leaves the linked file untouched, when it belongs to another owner', async () => {
+      const foreign = { ...mockFabFile, userId: 'other-member' };
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockFabFilesRepo.findById.mockResolvedValue(foreign);
+
+      const result = await findOrUpdateExistingResearchData(
+        'https://example.com',
+        'x'.repeat(100),
+        'text/markdown',
+        mockResearchTaskWithOrganization,
+        mockUser,
+        adapters,
+        mockLogger
+      );
+
+      expect(result).toEqual({ file: null, researchData: mockResearchData, storageLimitReached: false });
+      expect(mockStorage.upload).not.toHaveBeenCalled();
+      expect(mockStorage.generateSignedUrl).not.toHaveBeenCalled();
+      expect(mockFabFilesRepo.commitContentRewrite).not.toHaveBeenCalled();
+      expect(mockFabFilesRepo.update).not.toHaveBeenCalled();
+      expect(mockUsersRepo.incrementCurrentStorage).not.toHaveBeenCalled();
     });
 
     it('should throw error when existing file is not found', async () => {

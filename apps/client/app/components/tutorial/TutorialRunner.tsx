@@ -3,7 +3,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { setOptimisticQueryData } from '@client/app/utils/react-query';
-import { carriesTutorialMarker, markedTurn, samePrompt, type TutorialStatus } from '@bike4mind/common';
+import {
+  carriesTutorialMarker,
+  markedTurn,
+  samePrompt,
+  type TutorialCardSide,
+  type TutorialStatus,
+  type TutorialStep,
+} from '@bike4mind/common';
 import { CoachMark } from './CoachMark';
 import { HideUnusedComposerChips } from './ComposerChips';
 import type {
@@ -61,6 +68,19 @@ export function stepProgress(script: TutorialScript, stepId: string) {
   const counted = script.steps.filter(s => s.type !== 'bridge');
   const index = counted.findIndex(s => s.id === stepId);
   return index >= 0 ? { index: index + 1, count: counted.length } : undefined;
+}
+
+/**
+ * The side the card tries first. A step's own side is chosen for its own anchor, so an anchor the step moved the card
+ * to (a file row in the File Browser, say) brings its own side or none, and the card takes the roomiest clear spot.
+ */
+export function cardSide(
+  step: Pick<TutorialStep, 'anchor' | 'placement'>,
+  override: ({ testid: string | undefined } & TutorialAnchorOptions) | null
+): TutorialCardSide | undefined {
+  if (override?.placement) return override.placement;
+  const moved = override?.testid !== undefined && override.testid !== step.anchor;
+  return moved ? undefined : step.placement;
 }
 
 /** Heads the bridge card, which closes the module, where a step shows its count. */
@@ -342,12 +362,14 @@ export function TutorialRunner({
         done={doneStepId === step.id}
         anchor={anchor}
         anchorScope={anchorScope}
-        placement={override?.placement ?? step.placement}
+        placement={cardSide(step, override)}
         avoid={override?.avoid ?? step.avoid}
         width={step.cardWidth}
         panel={step.layout === 'panel'}
         // Closing the card that ends the module finishes it: there is nothing left to pause.
         onLeave={step.type === 'bridge' ? () => completeFrom(step.id) : () => stop('left', PAUSED_NOTICE)}
+        // The closing card's Done finishes the module; there is nothing left to leave.
+        offerLeave={step.type !== 'bridge'}
         onShowSteps={onShowSteps}
         onSkip={skippable && step.type !== 'bridge' ? () => void skip() : undefined}
         progress={progress}

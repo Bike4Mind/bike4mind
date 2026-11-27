@@ -395,6 +395,14 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledExactlyOnceWith('own', 'member@example.com');
   });
 
+  it('clears the pointer when the route id is spelled differently from the stored id', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', organizationId: 'org1' });
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'ORG1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({ id: 'user1', organizationId: null });
+  });
+
   it('leaves the removed user organizationId alone when it points at a different org', async () => {
     mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', organizationId: 'other-org' });
 

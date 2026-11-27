@@ -1,6 +1,6 @@
 import type { ClientOptions } from '@anthropic-ai/sdk';
 import { oidcFederationProvider } from '@anthropic-ai/sdk/lib/credentials/oidc-federation';
-import { subjectTokenSource } from './wifTokenSource';
+import { exchangeFetch, subjectTokenSource } from './wifTokenSource';
 
 type AccessTokenProvider = NonNullable<ClientOptions['credentials']>;
 type AccessToken = Awaited<ReturnType<AccessTokenProvider>>;
@@ -62,7 +62,7 @@ export function federatedAnthropicCredentials(): AccessTokenProvider {
         serviceAccountId,
         workspaceId,
         baseURL,
-        fetch: (input, init) => fetch(input, init),
+        fetch: (input, init) => exchangeFetch(input, init),
       })
     );
     providers.set(cacheKey, provider);

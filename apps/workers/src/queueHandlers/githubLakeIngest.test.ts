@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   settle: vi.fn(),
   sendToQueue: vi.fn(),
   releaseGitHubLakeConnection: vi.fn(),
+  canStillManage: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -61,6 +62,9 @@ vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnecti
 vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));
 vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess', () => ({
+  connectingUserCanStillManage: h.canStillManage,
+}));
 
 import { hasAdminPermission } from '@bike4mind/common';
 import {
@@ -114,6 +118,7 @@ beforeEach(() => {
   h.releaseSyncClaim.mockResolvedValue({ id: 'conn1' });
   h.recordSynced.mockResolvedValue({ id: 'conn1' });
   h.lakeFindById.mockResolvedValue(LAKE);
+  h.canStillManage.mockResolvedValue(true);
   h.batchFindById.mockImplementation(async (id: string) => ({ id, dataLakeId: 'lake1', status: 'processing' }));
   h.userFindById.mockResolvedValue({ id: 'user1' });
   h.getSettingByName.mockResolvedValue(true);
@@ -542,6 +547,22 @@ describe('githubLakeIngest - yield', () => {
 
 describe('githubLakeIngest - chain safety', () => {
   const STARTED = Date.now() - 60_000;
+
+  it('stops syncing when the connecting user can no longer manage the lake', async () => {
+    const user = { id: 'user1', email: 'owner@example.com' };
+    h.userFindById.mockResolvedValue(user);
+    h.canStillManage.mockResolvedValue(false);
+    await run(continuation());
+    expect(h.canStillManage).toHaveBeenCalledWith(user, LAKE);
+    expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+      'conn1',
+      'tok-adopt',
+      expect.stringContaining('Reconnect'),
+      'error'
+    );
+    expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+  });
 
   it('runs the slice as the connecting user', async () => {
     const user = { id: 'user1', email: 'owner@example.com' };

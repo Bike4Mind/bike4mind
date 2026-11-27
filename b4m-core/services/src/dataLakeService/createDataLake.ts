@@ -11,6 +11,7 @@ import {
   ConflictError,
   CreateDataLakeRequestInput,
   DATA_LAKES,
+  isRegistryLakeKey,
   MAX_DATA_LAKE_SLUG_LENGTH,
   normalizeEntitlementKey,
   slugifyDataLakeName,
@@ -118,6 +119,9 @@ function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
  * buildOwnershipConditions, so a lake minting `datalake:<registry-slug>` would read every
  * tenant's files in that registry lake.
  *
+ * A registry lake's id or slug is taken in every scope, org included: an org lake holding one
+ * could otherwise be moved org-less later, and id-or-slug lookups answer such a key with one lake.
+ *
  * Also taken if any lake, in any scope, already carries the tag it would mint: setLakeVisibility
  * moves a lake between scopes without re-minting its tag, so the scope check alone can pass a slug
  * whose tag the globally unique index then rejects.
@@ -132,7 +136,7 @@ async function disambiguateSlug(
   for (let attempt = 0; attempt < 50; attempt++) {
     const slug = attempt === 0 ? baseSlug : withDisambiguatingSuffix(baseSlug, attempt);
     const datalakeTag = buildDatalakeTag(slug, organizationId);
-    if (reservedTags.has(datalakeTag)) continue;
+    if (reservedTags.has(datalakeTag) || isRegistryLakeKey(slug)) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length > 0) continue;
     const tagHolders = await db.dataLakes.find({ datalakeTag });

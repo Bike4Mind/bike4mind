@@ -388,6 +388,44 @@ describe('POST /api/mcp/confirm', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
+  describe('an action staged by another user in the shared notebook', () => {
+    beforeEach(() => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        promptMeta: { session: { userId: 'sharee-2' } },
+        pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: pendingActionTs },
+      } as never);
+    });
+
+    it('refuses Confirm by the session owner without claiming or invoking', async () => {
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(claimPendingAction).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
+
+    it('still lets the session owner cancel it', async () => {
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
+    });
+  });
+
+  it('runs an action the session owner staged on their own turn', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      promptMeta: { session: { userId: 'user-1' } },
+      pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: pendingActionTs },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 409 on cancel when the claim is lost', async () => {
     vi.mocked(claimPendingAction).mockResolvedValue(false);
 
@@ -554,6 +592,20 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'denied');
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses Confirm of an action another user staged, with no host call', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      promptMeta: { session: { userId: 'sharee-2' } },
+      pendingAction: customAction(),
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(claimPendingAction).not.toHaveBeenCalled();
     expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
   });
 

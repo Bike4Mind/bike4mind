@@ -40,6 +40,12 @@ export type HostKind = 'local' | 'remote';
 
 export type HostEntry = { hostId: string; label: string; kind: HostKind; state: HostConnectionState };
 
+/** An alias from the user's `~/.ssh/config`; `hostId` is the host it is a route to, once added. */
+export type SshAliasEntry = { alias: string; hostId: string | null };
+
+/** What `ssh -G` resolves an alias to, without connecting. */
+export type SshAliasDescription = { alias: string; hostname: string; user: string; port: number };
+
 /**
  * Managing the hosts themselves, beside the protocol bridge. `onStateChanged` sends the whole
  * list on every change, a removal included. connect, disconnect and remove reject for a host
@@ -53,4 +59,13 @@ export type HostConnectionsApi = {
   /** Closes every connection to the host and keeps it offline until connect. */
   disconnect(hostId: string): Promise<void>;
   remove(hostId: string): Promise<void>;
+  /** The concrete Host aliases of `~/.ssh/config` (no patterns), in file order. */
+  sshAliases(): Promise<SshAliasEntry[]>;
+  describeSshAlias(alias: string): Promise<SshAliasDescription>;
+  /**
+   * Adds the machine an alias of `sshAliases` reaches and starts connecting; resolves with its
+   * hostId. An alias that is already a route resolves with its host's id. A machine without the
+   * host program installed shows as `needsInstall`.
+   */
+  addSshHost(alias: string): Promise<string>;
 };

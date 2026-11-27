@@ -142,3 +142,21 @@ describe('BriefcasePromptModel repository — owner scoping', () => {
     expect(await briefcasePromptRepository.softDeleteOwned('not-an-id', 'A')).toBe(false);
   });
 });
+
+describe('BriefcasePromptModel - requiredTools outside the built-in set', () => {
+  it('stores, reads and re-saves a doc whose tool name is not a built-in', async () => {
+    const created = await BriefcasePrompt.create(systemPrompt({ requiredTools: ['web_search', 'overlay_tool_a'] }));
+    const [doc] = await briefcasePromptRepository.listSystemByType('general', null);
+    expect(doc.requiredTools).toEqual(['web_search', 'overlay_tool_a']);
+
+    const loaded = await BriefcasePrompt.findById(created._id);
+    loaded!.name = 'Renamed';
+    await expect(loaded!.save()).resolves.toBeDefined();
+  });
+
+  it('keeps an empty requiredTools list', async () => {
+    const created = await BriefcasePrompt.create(systemPrompt({ requiredTools: [] }));
+    const loaded = await BriefcasePrompt.findById(created._id).lean();
+    expect(loaded!.requiredTools).toEqual([]);
+  });
+});

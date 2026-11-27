@@ -278,6 +278,8 @@ export const infraHolders = {
       // The admin who released a graduated hold.
       { path: 'releasedBy', matchBy: 'userId', action: 'anonymize' },
     ],
+    // 'model' or 'link_rule': which policy decided, not a person.
+    unrelatedPaths: ['decidedBy'],
   },
   BusinessMetricState: {
     kind: 'noUserData',
@@ -626,6 +628,51 @@ export const infraHolders = {
     ],
     unmatchedPaths: { 'fixVerdict.by': 'GitHub login of the reviewer; no link to a user id is stored.' },
   },
+  // An emergency entry held for review. `actorId` is the operator's cloud identity, not a user id, and
+  // `entry` is the operator's own text, which is not scanned.
+  StatusBreakGlassQuarantine: {
+    kind: 'holder',
+    references: [{ path: 'resolvedBy', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['actorId'],
+  },
+  StatusComponent: { kind: 'noUserData', note: 'Status page component catalog.' },
+  StatusComponentInterval: { kind: 'noUserData', note: 'Automatic state history of a status page component.' },
+  StatusDailyRollup: { kind: 'noUserData', note: 'Daily uptime rollup per status page component.' },
+  StatusExternalTransition: { kind: 'noUserData', note: 'Availability transitions from the out-of-band check.' },
+  StatusHistoryCorrection: {
+    kind: 'holder',
+    references: [{ path: 'actorId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  // A published incident and its timeline. Update bodies and notes are the admin's text and are not scanned;
+  // `breakGlass.actorIds` are operator cloud identities, not user ids.
+  StatusIncident: {
+    kind: 'holder',
+    references: [
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'updates.authorId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'updates.editHistory.editorId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'internalNotes.authorId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'breakGlass.backdateConfirmedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'retracted.by', matchBy: 'userId', action: 'anonymize' },
+    ],
+    unrelatedPaths: ['breakGlass.actorIds'],
+  },
+  StatusOverride: {
+    kind: 'holder',
+    references: [
+      { path: 'actorId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'clearedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  StatusProbeResult: { kind: 'noUserData', note: 'Status page probe outcome.' },
+  StatusProbeState: { kind: 'noUserData', note: 'Status page probe hysteresis counters.' },
+  // A lease owner is the id of the run holding it, not a user.
+  StatusRunState: {
+    kind: 'holder',
+    references: [{ path: 'lastManualActorId', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['probeLease.owner', 'publishLease.owner'],
+  },
+  StatusSnapshot: { kind: 'noUserData', note: 'Latest published status page files.' },
   StorageDriftRecord: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

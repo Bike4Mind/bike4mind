@@ -498,6 +498,8 @@ export interface CoachMarkProps {
   /** The step reports its action done; a card hidden to its pill comes back to say what is next. */
   done?: boolean;
   onLeave: () => void;
+  /** False on a card that ends the module (its own Done finishes it), which then offers no "Leave tutorial". */
+  offerLeave?: boolean;
   onShowSteps?: () => void;
   /** Offered as "Skip step" beside Leave; absent, the card offers no skip. */
   onSkip?: () => void;
@@ -528,6 +530,7 @@ export function CoachMark({
   panel = false,
   done = false,
   onLeave,
+  offerLeave = true,
   onShowSteps,
   onSkip,
   progress,
@@ -662,7 +665,15 @@ export function CoachMark({
   const topInset = Math.max(0, ...topBars.filter(bar => bar.top <= 0).map(bar => bar.bottom));
   const edge =
     phone && target ? dockPhoneCard({ target, obstacles, card, viewport, current: currentEdge, topInset }) : undefined;
-  if (edge && edge !== currentEdge) setPhoneDock({ key: pulseKey, edge });
+  // Claimed once the target holds still, so an anchor still sliding in (a sheet opening) does not hold the card
+  // on the edge it passed through.
+  const targetTop = target?.top;
+  const targetBottom = target?.bottom;
+  useEffect(() => {
+    if (!edge || edge === currentEdge) return;
+    const claim = window.setTimeout(() => setPhoneDock({ key: pulseKey, edge }), QUIET_MS);
+    return () => clearTimeout(claim);
+  }, [edge, currentEdge, pulseKey, targetTop, targetBottom]);
   if (edge) {
     position = edge === 'top' ? { left: EDGE, top: topInset + EDGE } : { left: EDGE, bottom: EDGE };
   } else if (target) {
@@ -818,7 +829,7 @@ export function CoachMark({
           )}
         </Stack>
         {children && <Box sx={{ mt: 1.5, '&:empty': { display: 'none' } }}>{children}</Box>}
-        {!panel && (
+        {!panel && (onSkip || offerLeave) && (
           <Stack direction="row" justifyContent="flex-end" gap={onSkip ? 1.5 : undefined} sx={{ mt: 1 }}>
             {onSkip && (
               <Button
@@ -832,16 +843,18 @@ export function CoachMark({
                 Skip step
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={onLeave}
-              data-testid="tutorial-coach-leave"
-              sx={{ minHeight: 0, px: 0.5, py: 0.25, mr: -0.5, fontSize: 'xs', fontWeight: 'md' }}
-            >
-              Leave tutorial
-            </Button>
+            {offerLeave && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={onLeave}
+                data-testid="tutorial-coach-leave"
+                sx={{ minHeight: 0, px: 0.5, py: 0.25, mr: -0.5, fontSize: 'xs', fontWeight: 'md' }}
+              >
+                Leave tutorial
+              </Button>
+            )}
           </Stack>
         )}
       </Sheet>

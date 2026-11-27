@@ -24,7 +24,16 @@ private struct GalleryContent: View {
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
 
-  private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
+  private static let tileMinimum: CGFloat = 110
+  private let columns = [GridItem(.adaptive(minimum: Self.tileMinimum), spacing: 2)]
+
+  /// Overfills `size` by at least one row whatever column count the adaptive grid picks, so the
+  /// clipped skeleton never ends in a ragged row.
+  private static func skeletonTileCount(filling size: CGSize) -> Int {
+    let columns = Int((size.width / tileMinimum).rounded(.up))
+    let rows = Int((size.height / tileMinimum).rounded(.up)) + 1
+    return max(0, columns * rows)
+  }
 
   init(
     api: any MediaAPI, firstPages: MediaFirstPageStore,
@@ -103,9 +112,14 @@ private struct GalleryContent: View {
   private var content: some View {
     switch (model.state, model.items.isEmpty) {
     case (.idle, true), (.loading, true):
-      ProgressView("Loading media")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("media-loading")
+      GeometryReader { proxy in
+        SkeletonContainer(label: "Loading media") {
+          LazyVGrid(columns: columns, spacing: 2) {
+            ForEach(0..<Self.skeletonTileCount(filling: proxy.size), id: \.self) { _ in SkeletonTile() }
+          }
+        }
+      }
+      .accessibilityIdentifier("media-loading")
     case (.failed(let error), true):
       ContentUnavailableView {
         Label("Couldn't load your media", systemImage: "wifi.exclamationmark")
