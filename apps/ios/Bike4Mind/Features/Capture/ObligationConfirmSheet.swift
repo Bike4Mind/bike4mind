@@ -65,7 +65,7 @@ struct ObligationConfirmSheet: View {
         }
         if case .failure(let problem) = model.parsedAmount {
           Text(problem == .negative ? "The amount can't be negative." : "Enter a number, or leave it empty.")
-            .font(.footnote)
+            .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.Palette.destructive)
         }
       }

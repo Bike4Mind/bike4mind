@@ -26,6 +26,7 @@ import type {
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { HostNotificationDelivery } from '@shared/hostBridge';
+import type { HostEntry } from '@shared/hostConnection';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { OrchestrateMiniPayload } from '@shared/orchestrateMini';
@@ -76,6 +77,15 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.hostNotification, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.hostNotification, handler);
     },
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.hostList),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, hosts: HostEntry[]) => listener(hosts);
+      ipcRenderer.on(IPC_CHANNELS.hostStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.hostStateChanged, handler);
+    },
+    connect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostConnect, hostId),
+    disconnect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostDisconnect, hostId),
+    remove: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostRemove, hostId),
   },
   library: {
     page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),

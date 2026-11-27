@@ -1,6 +1,7 @@
 import { expect, type Response } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
+import { scopeWafBypass } from '../helpers/waf-bypass';
 import {
   describeStall,
   hasFirstAnswerText,
@@ -106,10 +107,13 @@ export class ChatPage extends BasePage {
     const authorization = recorder.authorization();
     if (refs.length !== 1 || !authorization || timeoutMs <= 0) return unknown;
     try {
-      const response = await this.page.request.get(`/api/quests/${encodeURIComponent(refs[0].questId)}`, {
-        headers: { Authorization: authorization },
-        timeout: timeoutMs,
-      });
+      const response = await scopeWafBypass(this.page.request).get(
+        `/api/quests/${encodeURIComponent(refs[0].questId)}`,
+        {
+          headers: { Authorization: authorization },
+          timeout: timeoutMs,
+        }
+      );
       if (!response.ok()) return unknown;
       const body = (await response.json()) as { type?: string; fallbackInfo?: Record<string, unknown> | null };
       // The poll body drops fallbackInfo on an errored quest, so absence there does not mean none.

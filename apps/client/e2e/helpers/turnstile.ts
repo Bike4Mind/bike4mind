@@ -22,8 +22,8 @@ export async function bypassTurnstile(page: Page): Promise<void> {
     url => url.origin === apiOrigin && url.pathname === '/api/otc/send',
     route => {
       const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
-      // fallback, not continue, so installWafBypass's handler (registered earlier, so it runs after
-      // this one) still adds its edge header on top of this one.
+      // fallback, not continue, so installWafBypass's context route (page routes run before context
+      // routes) still adds its edge header on top of this one.
       if (!secret) return route.fallback();
       return route.fallback({ headers: { ...route.request().headers(), 'x-e2e-cleanup-secret': secret } });
     }
