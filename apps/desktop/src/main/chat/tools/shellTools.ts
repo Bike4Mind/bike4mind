@@ -32,6 +32,7 @@ import {
   type SandboxedCommand,
 } from './sandbox';
 import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
+import { commandShape, SHAPE_PLACEHOLDER } from './commandShape';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   MAX_TOOL_OUTPUT_CHARS,
@@ -653,6 +654,25 @@ export async function shellApproval(
     written.some(place => isWithin(directory, place) || isWithin(place, directory))
   );
   const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
+  // A shape allowance stands only for a command whose one reason to ask is that the scan cannot follow it.
+  const shapeText =
+    opaque &&
+    !runsSessionCode &&
+    !signingRisk &&
+    scan.envFiles.length === 0 &&
+    !gitProgram &&
+    !scan.gitPathUnplaced &&
+    !scan.remoteTree &&
+    unreachable.length === 0 &&
+    !touchesProtected &&
+    !secret &&
+    !uncheckedSettingsWrite &&
+    !writesWhileUnresolved &&
+    !scan.commands.some(entry => entry.deletes)
+      ? commandShape(command)
+      : null;
+  // Only worth keeping when it reads a run-time word, and only in the folder it was allowed in.
+  const shape = shapeText?.includes(SHAPE_PLACEHOLDER) ? `${cwd}\x00${shapeText}` : undefined;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -685,6 +705,7 @@ export async function shellApproval(
         };
       }),
       directories: [...new Set([...directories, ...outside])],
+      ...(shape ? { shape } : {}),
       // Data sent off this computer may come from any folder, so every one counts as reached.
       writtenDirectories: [...new Set([...directories, ...(scan.outbound.length > 0 ? outside : writtenOutside)])],
       paths: scan.paths ?? [],

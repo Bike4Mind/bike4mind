@@ -7,12 +7,7 @@ import { PermissionRuleStore } from '../permissions/PermissionRuleStore';
 import { PermissionService } from '../permissions/PermissionService';
 import { ClaudeCodeSettings } from '../permissions/ClaudeCodeSettings';
 import { CapabilityLedger } from './CapabilityLedger';
-import {
-  capabilityHandlers,
-  completeCapabilityMutation,
-  retireSessionApprovals,
-  syncCapabilityChange,
-} from './capabilityHandlers';
+import { capabilityHandlers, completeCapabilityMutation, syncCapabilityChange } from './capabilityHandlers';
 
 let directory: string;
 beforeEach(async () => {
@@ -127,22 +122,6 @@ describe('capability IPC handlers', () => {
     const state = await handlers.revoke(grant.id);
     expect(targets.cancelModelPull).toHaveBeenLastCalledWith('qwen3:0.6b#q4');
     expect(state.grants[0]?.revokedAt).toBeDefined();
-  });
-
-  it('retires in-memory approvals at startup once while retaining conversation paths', async () => {
-    const { ledger } = setup();
-    await ledger.grant(sessionGrant('account-a'));
-    await ledger.grant({
-      ...sessionGrant('account-a'),
-      capability: 'tool',
-      scope: { kind: 'tool', value: 'bash_execute' },
-    });
-    await retireSessionApprovals(ledger);
-    await retireSessionApprovals(ledger);
-    const state = await ledger.state();
-    expect(state.grants.find(grant => grant.scope.kind === 'path')?.revokedAt).toBeUndefined();
-    expect(state.grants.find(grant => grant.scope.kind === 'tool')?.revokedAt).toBeDefined();
-    expect(state.audit.filter(event => event.type === 'revoke')).toHaveLength(1);
   });
 });
 

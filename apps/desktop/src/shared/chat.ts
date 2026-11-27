@@ -363,9 +363,9 @@ export interface ChatToolDetail {
 }
 
 /**
- * 'always' repeats the approval for identical later calls in the SAME conversation, and is
- * forgotten when the app exits. It is matched on the exact request - an approved `git status`
- * does not carry over to `git status; rm -rf ~`.
+ * 'always' repeats the approval for identical later calls in the SAME conversation, kept with
+ * that conversation across restarts and dropped when it is deleted. It is matched on the exact
+ * request - an approved `git status` does not carry over to `git status; rm -rf ~`.
  *
  * 'redirect' is NOT a refusal, and the difference is the whole point of it: the user wants the
  * work done, just in the conversation they are already in rather than by the tool. A denial
