@@ -17,7 +17,9 @@ const models = vi.hoisted(() => [
   { id: 'text-a', name: 'Text A', type: 'text', backend: 'openai' },
   { id: 'text-b', name: 'Text B', type: 'text', backend: 'openai' },
   { id: 'image-a', name: 'Image A', type: 'image', backend: 'openai' },
+  { id: 'image-b', name: 'Image B', type: 'image', backend: 'openai' },
   { id: 'speech-a', name: 'Speech A', type: 'speech-to-text', backend: 'openai' },
+  { id: 'speech-b', name: 'Speech B', type: 'speech-to-text', backend: 'openai' },
 ]);
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: models }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -40,10 +42,11 @@ const renderSetting = (withProvider = true) => {
   );
 };
 
-const chooseTextModel = async (name: string) => {
-  fireEvent.click(await screen.findByRole('combobox', { name: /primary operations model/i }));
+const chooseModel = async (label: RegExp, name: string) => {
+  fireEvent.click(await screen.findByRole('combobox', { name: label }));
   fireEvent.click(within(await screen.findByRole('listbox')).getByText(name));
 };
+const chooseTextModel = (name: string) => chooseModel(/primary operations model/i, name);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,6 +83,31 @@ describe('AdminOperationsModelSetting', () => {
     await chooseTextModel('Text B');
     fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['image', /image generation model/i, 'Image B', { imageModelId: 'image-b' }],
+    ['speech', /speech-to-text model/i, 'Speech B', { speechModelId: 'speech-b' }],
+  ])('stages and saves a %s model change', async (_kind, label, name, change) => {
+    renderSetting();
+    await chooseModel(label, name);
+    expect(api.put).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(api.put).toHaveBeenCalledWith('/api/admin/operations-model', { ...config, ...change });
+  });
+
+  it('blocks saving while a model id is missing', async () => {
+    api.get.mockResolvedValue({ data: { modelId: 'text-a', imageModelId: 'image-a', speechModelId: '' } });
+    renderSetting();
+    await chooseTextModel('Text B');
+    expect(
+      await screen.findByText('Operations models: Choose text, image and speech models before saving.')
+    ).toBeTruthy();
+    const save = screen.getByTestId('admin-save-confirm-btn');
+    expect(save).toHaveProperty('disabled', true);
+    fireEvent.click(save);
     expect(api.put).not.toHaveBeenCalled();
   });
 
