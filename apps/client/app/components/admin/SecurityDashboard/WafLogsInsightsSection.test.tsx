@@ -33,8 +33,9 @@ const insights = (
 });
 
 const nameTicks = (chart: HTMLElement) =>
-  [...chart.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')].map(
-    tick => tick.textContent
+  [...chart.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')].map(tick =>
+    // Recharts wraps a long label into one tspan per line, and textContent drops the space between them.
+    [...tick.querySelectorAll('tspan')].map(line => line.textContent).join(' ')
   );
 
 describe('WafLogsInsightsSection charts', () => {
