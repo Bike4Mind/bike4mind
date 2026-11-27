@@ -8,6 +8,7 @@ import type { TutorialRequest } from '../routes/types';
 const found = vi.hoisted(() => ({
   session: undefined as Record<string, unknown> | undefined,
   projects: [] as unknown[],
+  knowledgeFiles: [] as unknown[],
 }));
 const mocks = vi.hoisted(() => ({
   deleteSession: vi.fn(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   sessionRepository: { findByIdAndUserId: async () => found.session, update: vi.fn() },
-  fabFileRepository: { find: mocks.findFiles },
+  fabFileRepository: { find: mocks.findFiles, findAllByIds: async () => found.knowledgeFiles },
   projectRepository: { findAllBySessionId: async () => found.projects },
   withTransaction: mocks.transaction,
 }));
@@ -154,9 +155,15 @@ describe('deleteSession', () => {
     mocks.rescope.mockReset().mockResolvedValue(undefined);
   });
 
-  const deletes = async (session: Record<string, unknown>, files: unknown[] = [], projects: unknown[] = []) => {
+  const deletes = async (
+    session: Record<string, unknown>,
+    files: unknown[] = [],
+    projects: unknown[] = [],
+    knowledgeFiles: unknown[] = []
+  ) => {
     found.session = session;
     found.projects = projects;
+    found.knowledgeFiles = knowledgeFiles;
     mocks.findFiles.mockReset().mockResolvedValue(files);
     const result = await deleteSession('s1', 'u1');
     expect(mocks.deleteSession).toHaveBeenCalledTimes(result ? 1 : 0);
@@ -183,5 +190,30 @@ describe('deleteSession', () => {
 
   it('keeps a notebook the user put in a project', async () => {
     expect(await deletes(untouched, [], [{ id: 'p1' }])).toBe(false);
+  });
+
+  describe('after the walk attached its sample sheet', () => {
+    const sampleSheet = { id: 'k1', userId: 'u1', tags: [{ name: 'tutorial:first-steps' }] };
+    const attached = { ...untouched, knowledgeIds: ['k1'] };
+
+    it('deletes a notebook whose only knowledge is the sample sheet', async () => {
+      expect(await deletes(attached, [], [], [sampleSheet])).toBe(true);
+    });
+
+    it('keeps a notebook given the user knowledge besides the sample sheet', async () => {
+      const ownFile = { id: 'k2', userId: 'u1', tags: [] };
+      expect(await deletes({ ...untouched, knowledgeIds: ['k1', 'k2'] }, [], [], [sampleSheet, ownFile])).toBe(false);
+    });
+
+    it.each([
+      ['tagged like it by the user', { ...sampleSheet, tags: [{ name: 'tutorial:my-notes' }] }],
+      ['owned by someone else', { ...sampleSheet, userId: 'u2' }],
+    ])('keeps a notebook whose sheet is %s', async (_label, file) => {
+      expect(await deletes(attached, [], [], [file])).toBe(false);
+    });
+
+    it('keeps a notebook whose knowledge no longer resolves', async () => {
+      expect(await deletes(attached, [], [], [])).toBe(false);
+    });
   });
 });

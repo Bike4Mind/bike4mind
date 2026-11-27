@@ -15,7 +15,7 @@ import { sessionService } from '@bike4mind/services';
 import { getOrCreateSession } from '../managers/sessionCrud';
 import { setCoreSessionMarker } from './sessionMarker';
 import { tutorialSheets } from './sheet';
-import { CORE_TUTORIAL_SHEET_TAG } from './sheetTags';
+import { CORE_TUTORIAL_SHEET_TAG, isCoreTutorialSheetTag } from './sheetTags';
 import type { TutorialServiceDeps } from './service';
 
 export { CORE_TUTORIAL_SHEET_TAG };
@@ -28,6 +28,21 @@ const isShared = (session: ShareFields) =>
   !!session.isGlobalWrite ||
   (session.users?.length ?? 0) > 0 ||
   (session.groups?.length ?? 0) > 0;
+
+/**
+ * Whether the notebook holds knowledge the user chose. The walk attaches the user's own copy of its sample sheet,
+ * so only that copy is discounted; an id that does not resolve to one counts as the user's.
+ */
+async function holdsUserKnowledge(knowledgeIds: string[] | undefined, userId: string): Promise<boolean> {
+  if (!knowledgeIds?.length) return false;
+  const files = await fabFileRepository.findAllByIds(knowledgeIds);
+  const sampleSheetIds = new Set(
+    files
+      .filter(file => file.userId === userId && (file.tags ?? []).some(tag => isCoreTutorialSheetTag(tag.name)))
+      .map(file => String(file.id))
+  );
+  return knowledgeIds.some(id => !sampleSheetIds.has(id));
+}
 
 export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
   return {
@@ -53,12 +68,12 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       return !!session && !session.surface;
     },
-    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it, not shared
-    // and in no project.
+    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing of the user's attached to
+    // it (the walk's own sample sheet aside), not shared and in no project.
     deleteSession: async (sessionId, userId) => {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       if (!session || !isTutorialSessionName(session.name)) return false;
-      if (isShared(session) || (session.knowledgeIds?.length ?? 0) > 0) return false;
+      if (isShared(session) || (await holdsUserKnowledge(session.knowledgeIds, userId))) return false;
       if ((await fabFileRepository.find({ sessionId })).length > 0) return false;
       if ((await projectRepository.findAllBySessionId(sessionId)).length > 0) return false;
       const affectedUserIds = await withTransaction(async () => {
