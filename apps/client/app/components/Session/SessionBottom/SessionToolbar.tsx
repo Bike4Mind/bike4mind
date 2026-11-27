@@ -356,7 +356,10 @@ export function SessionToolbar(props: SessionToolbarProps) {
                             [theme.getColorSchemeSelector('dark')]: {
                               '&:not(:disabled)': {
                                 bgcolor: 'reading.accent',
-                                '&:hover': { bgcolor: 'reading.accent', filter: 'brightness(1.1)' },
+                                // This selector outranks Joy's hover/active rules, so restate both (darken, not
+                                // brighten, to keep the white icon legible).
+                                '&:hover': { filter: 'brightness(0.92)' },
+                                '&:active': { filter: 'brightness(0.85)' },
                               },
                             },
                           })}
