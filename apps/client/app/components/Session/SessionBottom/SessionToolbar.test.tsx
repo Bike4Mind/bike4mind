@@ -328,12 +328,12 @@ describe('SessionToolbar - dark send button fill', () => {
     const css = Array.from(document.querySelectorAll('style'))
       .map(style => style.textContent)
       .join('\n');
-    const rule = (pseudo: string) =>
+    const rule = (pseudo: string, percent: number) =>
       new RegExp(
-        `\\.${cls}:not\\(:disabled\\):${pseudo}\\s*\\{[^}]*background-color:\\s*color-mix\\(in srgb,\\s*var\\(--joy-palette-reading-accent\\)`
+        `\\.${cls}:not\\(:disabled\\):${pseudo}\\s*\\{[^}]*background-color:\\s*color-mix\\(in srgb,\\s*var\\(--joy-palette-reading-accent\\)\\s*${percent}%,\\s*black\\)`
       );
-    expect(css).toMatch(rule('hover'));
-    expect(css).toMatch(rule('active'));
+    expect(css).toMatch(rule('hover', 88));
+    expect(css).toMatch(rule('active', 78));
     expect(css).toMatch(new RegExp(`@media \\(hover: ?hover\\)\\s*\\{[^{}]*\\.${cls}:not\\(:disabled\\):hover`));
   });
 
