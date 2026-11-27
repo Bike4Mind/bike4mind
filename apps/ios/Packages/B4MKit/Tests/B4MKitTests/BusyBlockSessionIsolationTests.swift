@@ -62,6 +62,10 @@ private final class SessionPermissionReader: BusyBlockReader, @unchecked Sendabl
 private struct UnreadableSessionStore: TokenStore {
   func refreshToken() throws -> String? { throw KeychainError(status: errSecInteractionNotAllowed) }
   func setRefreshToken(_ token: String?) throws { throw KeychainError(status: errSecInteractionNotAllowed) }
+  func pendingRevocations() throws -> [PendingRevocation] { throw KeychainError(status: errSecInteractionNotAllowed) }
+  func setPendingRevocations(_ revocations: [PendingRevocation]) throws {
+    throw KeychainError(status: errSecInteractionNotAllowed)
+  }
 }
 
 private final class SessionBackgroundScheduler: BackgroundRefreshScheduling, @unchecked Sendable {
