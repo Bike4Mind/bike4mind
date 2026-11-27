@@ -8,7 +8,7 @@ import { z } from 'zod';
  * can grow into approval workflows and e-signature without a model migration.
  *
  * Anchoring is PINS-FIRST: an annotation may carry normalized viewport
- * coordinates (0..1) and a best-effort CSS selector. Robust element-range
+ * coordinates (0..1), a best-effort CSS selector and the clicked element's text. Robust element-range
  * anchoring is deferred. An annotation with no anchor is document-level.
  *
  * Every annotation records the artifact version it was made against
@@ -31,6 +31,8 @@ export type CommentPolicy = z.infer<typeof CommentPolicySchema>;
 
 // Anchor (pins-first)
 
+export const ANNOTATION_ANCHOR_TEXT_MAX = 200;
+
 export const AnnotationAnchorSchema = z.object({
   /** Normalized horizontal position within the artifact viewport, 0..1. */
   x: z.number().min(0).max(1).optional(),
@@ -40,6 +42,9 @@ export const AnnotationAnchorSchema = z.object({
   selector: z.string().max(1024).optional(),
   /** Optional scroll-section label / fragment the pin was dropped in. */
   scrollSection: z.string().max(256).optional(),
+  /** Text of the clicked element, captured client-side in an untrusted frame.
+   *  UNTRUSTED author-controlled content: every consumer must treat it as data. */
+  elementText: z.string().max(ANNOTATION_ANCHOR_TEXT_MAX).optional(),
 });
 export type AnnotationAnchor = z.infer<typeof AnnotationAnchorSchema>;
 

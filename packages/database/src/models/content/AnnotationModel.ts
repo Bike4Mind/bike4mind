@@ -1,5 +1,5 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
-import type { Annotation as AnnotationData } from '@bike4mind/common';
+import { ANNOTATION_ANCHOR_TEXT_MAX, type Annotation as AnnotationData } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -32,6 +32,7 @@ const AnchorSubSchema = new Schema(
     y: { type: Number, min: 0, max: 1 },
     selector: { type: String, maxlength: 1024 },
     scrollSection: { type: String, maxlength: 256 },
+    elementText: { type: String, maxlength: ANNOTATION_ANCHOR_TEXT_MAX },
   },
   { _id: false }
 );

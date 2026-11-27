@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { JSDOM } from 'jsdom';
+import { ANNOTATION_ANCHOR_TEXT_MAX } from '@bike4mind/common';
 import { VIEWER_SANDBOX } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 const {
@@ -1729,6 +1731,80 @@ describe('GET /api/publish/serve - comment pin bridge', () => {
     const data = res._getData() as string;
     expect(data).toContain(BRIDGE_MARKER); // bridge injected into the isolated bundle document
     expect(data).not.toContain(WIDGET_MOUNT); // the trusted overlay never crosses into the isolated origin
+  });
+
+  describe('pin bridge click capture (executed in jsdom)', () => {
+    const BODY = '<h1 id="h">  Hello \n  world </h1><p id="blank">   </p><p id="p">para</p><div id="long"></div>';
+
+    /** Serve a bundle, run the injected bridge in a jsdom window, drop a pin on `targetId` (or body/html). */
+    const dropPin = async (target: string, tweak?: (doc: Document) => void) => {
+      mockArtifactFindOne.mockReturnValue(bundle({ commentPolicy: 'open' }));
+      mockDownload.mockResolvedValue(Buffer.from(`<html><body>${BODY}</body></html>`));
+      const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+      await promise;
+      const html = res._getData() as string;
+      const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+        .map(m => m[1])
+        .find(c => c.includes('pin-dropped'));
+      expect(script).toBeTruthy();
+
+      const dom = new JSDOM(html.replace(/<script>[\s\S]*?<\/script>/g, ''), { runScripts: 'outside-only' });
+      const { window } = dom;
+      const posted: Record<string, unknown>[] = [];
+      // Top-level jsdom has parent === window, so the bridge's parent.postMessage lands here.
+      window.postMessage = ((m: Record<string, unknown>) => void posted.push(m)) as typeof window.postMessage;
+      tweak?.(window.document);
+      window.eval(script as string);
+      window.dispatchEvent(new window.MessageEvent('message', { data: { b4m: 'pinmode', on: true }, source: window }));
+      const el =
+        target === 'body'
+          ? window.document.body
+          : target === 'html'
+            ? window.document.documentElement
+            : window.document.getElementById(target)!;
+      el.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+      return posted.filter(m => m.b4m === 'pin-dropped');
+    };
+
+    it('posts the target text, whitespace-collapsed and trimmed', async () => {
+      const [m] = await dropPin('h');
+      expect(m).toMatchObject({ b4m: 'pin-dropped', text: 'Hello world' });
+    });
+
+    it('caps the text at ANNOTATION_ANCHOR_TEXT_MAX', async () => {
+      const [m] = await dropPin('long', doc => {
+        doc.getElementById('long')!.textContent = 'a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX + 300);
+      });
+      expect(m.text).toBe('a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX));
+    });
+
+    it('omits text for an empty or whitespace-only target but still posts the pin', async () => {
+      const msgs = await dropPin('blank');
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]).not.toHaveProperty('text');
+      expect(msgs[0]).toMatchObject({ x: expect.any(Number), y: expect.any(Number) });
+    });
+
+    it('omits text when the click lands on body or html (empty page space)', async () => {
+      for (const t of ['body', 'html']) {
+        const msgs = await dropPin(t);
+        expect(msgs).toHaveLength(1);
+        expect(msgs[0]).not.toHaveProperty('text');
+      }
+    });
+
+    it('still posts the pin when reading the target text throws', async () => {
+      const msgs = await dropPin('p', doc => {
+        Object.defineProperty(doc.getElementById('p')!, 'textContent', {
+          get() {
+            throw new Error('author getter');
+          },
+        });
+      });
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]).toMatchObject({ b4m: 'pin-dropped' });
+      expect(msgs[0]).not.toHaveProperty('text');
+    });
   });
 
   it('injects NO bridge or overlay when comments are disabled (default)', async () => {
