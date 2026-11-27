@@ -16656,7 +16656,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
@@ -16685,7 +16685,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
@@ -16717,10 +16717,10 @@ export interface components {
           name: string;
         } | null;
         /**
-         * @description How the share reaches the key owner: named, or through a project or organization they belong to.
+         * @description How the function reaches the key owner: named, through a project or organization they belong to, or `signed_in` when an admin offered it to everyone signed in. Null on the key owner's own.
          * @enum {string|null}
          */
-        shared_via: 'person' | 'project' | 'organization' | null;
+        shared_via: 'person' | 'project' | 'organization' | 'signed_in' | null;
         /** @description The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own. */
         review_hash: string | null;
       };
@@ -16732,7 +16732,7 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
+         * @description `own` is a function of the key owner; `shared` is one another person shared with them, by name, project, or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the platform publishes to everyone, and no entry carries it now.
          * @enum {string}
          */
         group: 'own' | 'shared' | 'platform';
@@ -16764,10 +16764,10 @@ export interface components {
           name: string;
         } | null;
         /**
-         * @description How the share reaches the key owner: named, or through a project or organization they belong to.
+         * @description How the function reaches the key owner: named, through a project or organization they belong to, or `signed_in` when an admin offered it to everyone signed in. Null on the key owner's own.
          * @enum {string|null}
          */
-        shared_via: 'person' | 'project' | 'organization' | null;
+        shared_via: 'person' | 'project' | 'organization' | 'signed_in' | null;
         /** @description The hash of the interface shown here (name, description, and schemas). Send it back to allow the function, so an interface that changed since is never allowed unseen. Null on the key owner's own. */
         review_hash: string | null;
       };
