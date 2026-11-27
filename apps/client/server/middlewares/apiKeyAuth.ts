@@ -16,6 +16,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
+import { resolveRequestMcpClient } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
@@ -351,6 +352,7 @@ export const apiKeyAuth = (
         // billing owner. Some routes stamp UsageEvent.source differently, so the
         // credit sections can disagree with this view.
         source: resolveApiCompletionSource(flattenHeaders(req.headers)),
+        mcpClient: resolveRequestMcpClient(req),
         ownerType: resolveApiKeyOwnerType(validation),
         ...exchangeAttribution(validation),
       };
@@ -380,6 +382,7 @@ export const apiKeyAuth = (
           responseTime: finalResponseTime,
           statusCode,
           source: usageInfo.source,
+          mcpClient: usageInfo.mcpClient,
           ownerType: usageInfo.ownerType,
           oauthClientId: usageInfo.oauthClientId,
           payerStanding: usageInfo.payerStanding,

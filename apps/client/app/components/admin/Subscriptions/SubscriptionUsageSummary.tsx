@@ -84,8 +84,8 @@ export function SubscriptionUsageSummary({ subscriptionId, status }: { subscript
       <Fact label="Definitions">
         <Typography level="body-xs">
           Billed-owner usage only, never personal activity of members. Provider requests follow Analytics source
-          definitions (web, CLI, Desktop and agent; API separately). Credits include charged failed calls, not purchases
-          or refunds. These are observations, not churn predictions.
+          definitions (web, CLI, Desktop, MCP host and agent; API separately). Credits include charged failed calls, not
+          purchases or refunds. These are observations, not churn predictions.
         </Typography>
       </Fact>
     </SectionCard>

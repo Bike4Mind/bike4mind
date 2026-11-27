@@ -263,7 +263,7 @@ export const AttributedUsageEvent = z.object({
   // source/apiKeyId. Both optional: recorders whose ledger write carries no
   // source leave them unset, and those rows fall into the UNCLASSIFIED_SOURCE
   // bucket in aggregation (mirrors the ledger).
-  /** Originating surface (web/cli/api/agent/system); unset => unclassified. */
+  /** Originating surface (web/cli/desktop/mcp/api/agent/system); unset => unclassified. */
   source: z.enum(COMPLETION_SOURCES).optional(),
   /** API key that authed the call; present only for API-key-authed usage. */
   apiKeyId: z.string().optional(),

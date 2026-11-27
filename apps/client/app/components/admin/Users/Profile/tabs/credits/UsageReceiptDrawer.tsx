@@ -1,7 +1,12 @@
 import React from 'react';
 import { Box, Drawer, IconButton, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import type { AdminUsageReceipt, AdminUsageReceiptCall, AdminUsageReceiptQuery } from '@bike4mind/common';
+import type {
+  AdminUsageReceipt,
+  AdminUsageReceiptCall,
+  AdminUsageReceiptQuery,
+  CompletionSource,
+} from '@bike4mind/common';
 import { useAdminUsageReceipt } from '@client/app/hooks/data/adminUserCredits';
 import { ErrorState, Fact, SectionCard, StatusChip } from '../../../../shared';
 import { formatCreditDelta, formatCredits } from '../../actions/creditAdjustment';
@@ -11,9 +16,10 @@ const SOURCE_LABELS: Readonly<Record<string, string>> = {
   cli: 'CLI',
   desktop: 'Desktop app',
   api: 'API',
+  mcp: 'MCP',
   agent: 'Agent',
   system: 'System',
-};
+} satisfies Record<CompletionSource, string>;
 
 const OPERATION_LABELS: Readonly<Record<string, string>> = {
   notebook_naming: 'Notebook naming',

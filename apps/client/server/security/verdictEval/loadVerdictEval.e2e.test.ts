@@ -262,12 +262,14 @@ describe('buildVerdictEvalReport', () => {
     const officeA = await seedUser({ signupMeta: { ip: '10.0.0.2' } });
     const officeB = await seedUser({ signupMeta: { ip: '10.0.0.2' } });
     const agent = await seedUser({ signupMeta: { ip: '10.0.0.3' } });
+    const mcpHost = await seedUser({ signupMeta: { ip: '10.0.0.4' } });
     await UsageEvent.collection.insertMany([
       { userId: agent, creditsCharged: 1, source: 'api', createdAt: ago(1) },
+      { userId: mcpHost, creditsCharged: 1, source: 'mcp', createdAt: ago(1) },
       { userId: phone, creditsCharged: 1, source: 'web', createdAt: ago(1) },
     ]);
 
-    const signals = await loadCohortSignals([phone, officeA, officeB, agent]);
+    const signals = await loadCohortSignals([phone, officeA, officeB, agent, mcpHost]);
 
     expect(signals.get(phone)).toEqual({
       userAgent: 'Mozilla/5.0 (iPhone)',
@@ -278,5 +280,6 @@ describe('buildVerdictEvalReport', () => {
     expect(signals.get(officeA)).toMatchObject({ sharedSignupIp: true, apiAgentUsage: false });
     expect(signals.get(officeB)).toMatchObject({ sharedSignupIp: true });
     expect(signals.get(agent)).toMatchObject({ sharedSignupIp: false, apiAgentUsage: true });
+    expect(signals.get(mcpHost)).toMatchObject({ apiAgentUsage: true });
   });
 });

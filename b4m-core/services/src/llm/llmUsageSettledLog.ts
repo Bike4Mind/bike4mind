@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type { CompletionSource } from '@bike4mind/common';
 
 /** Must stay in sync with the metric filters in infra/llmSpend.ts. */
 export const LLM_USAGE_SETTLED_MESSAGE = 'llm-usage-settled';
@@ -8,7 +9,7 @@ export type LlmSpendProvider = (typeof LLM_SPEND_PROVIDERS)[number];
 /** Same window as newAccountExpression in CounterLogModel. */
 const YOUNG_ACCOUNT_WINDOW_MS = 168 * 60 * 60 * 1000;
 
-export type LlmUsageSource = 'chat' | 'api' | 'cli' | 'desktop' | 'agent' | 'web' | 'system';
+export type LlmUsageSource = CompletionSource | 'chat';
 
 export type LlmUsageSettled = {
   backend: string;

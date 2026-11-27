@@ -24,7 +24,7 @@ type UsageBySourceQuery = z.infer<typeof QuerySchema>;
 /**
  * Admin endpoint: counter-log activity grouped by `metadata.source`.
  * Surfaces both event count and distinct-user count per surface
- * (web / cli / api / agent / system) so admins can see *how many users*
+ * (web / cli / desktop / mcp / api / agent / system) so admins can see *how many users*
  * each surface is serving, not just total activity volume.
  *
  * Reads from CounterLog rather than CreditTransaction because the analytics

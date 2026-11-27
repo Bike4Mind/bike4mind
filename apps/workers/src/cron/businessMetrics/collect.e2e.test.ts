@@ -90,13 +90,14 @@ describe('business metric persisted behavior', () => {
     await ApiKeyUsageLog.collection.insertMany([
       { userId: String(user), keyId: String(normalKey), source: 'api', timestamp: at },
       { userId: String(user), keyId: String(normalKey), source: 'desktop', timestamp: at },
+      { userId: String(user), keyId: String(normalKey), source: 'mcp', timestamp: at },
       { userId: String(user), keyId: String(productKey), source: 'api', timestamp: at },
     ]);
     const result = await collectBusinessMetrics(comparisonWindow(new Date('2026-10-26T12:05:00Z')));
     const values = (name: string) => result.metrics.find(metric => metric.name === name)?.values.slice(0, 2);
     expect(values('spendUsd')).toEqual([10, 3]);
     expect(values('requests:user')).toEqual([1, 0]);
-    expect(values('requests:firstParty')).toEqual([1, 0]);
+    expect(values('requests:firstParty')).toEqual([2, 0]);
     expect(values('completions:user')).toEqual([1, 1]);
     expect(values('completions:firstParty')).toEqual([1, 0]);
     expect(values('verifiedSignups')).toEqual([1, 0]);

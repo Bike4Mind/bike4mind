@@ -40,6 +40,7 @@ import {
   DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
   LAKE_MANAGE_RUNGS,
+  API_KEY_COMPLETION_SOURCES,
 } from '@bike4mind/common';
 
 // --- Data Lake Schema ---
@@ -1601,7 +1602,7 @@ const DataLakeBatchSchema = new mongoose.Schema(
         {
           organizationId: { type: String, default: null },
           apiKeyId: { type: String },
-          source: { type: String, enum: ['api', 'cli', 'desktop'] },
+          source: { type: String, enum: [...API_KEY_COMPLETION_SOURCES] },
         },
         { _id: false }
       ),

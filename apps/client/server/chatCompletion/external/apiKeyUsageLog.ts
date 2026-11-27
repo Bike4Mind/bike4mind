@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
+import { resolveRequestMcpClient } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
@@ -59,6 +60,7 @@ export function logApiKeyUsageOnResponse({
     endpoint,
     method: req.method,
     source,
+    mcpClient: resolveRequestMcpClient(req),
     ownerType: resolveApiKeyOwnerType(apiKey),
     ...exchangeAttribution(apiKey),
     logger,

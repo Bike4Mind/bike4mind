@@ -390,7 +390,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('-5.0 pts vs previous 27 days')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      /web app, CLI, Desktop or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*External API users are shown separately regardless of Accounts and not counted/
+      /web app, CLI, Desktop, an MCP host or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*External API users are shown separately regardless of Accounts and not counted/
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });

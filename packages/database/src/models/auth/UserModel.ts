@@ -2633,6 +2633,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       web: { firstSeenAt: Date, lastSeenAt: Date, version: String },
       desktop: { firstSeenAt: Date, lastSeenAt: Date, version: String },
       cli: { firstSeenAt: Date, lastSeenAt: Date, version: String },
+      mcp: { firstSeenAt: Date, lastSeenAt: Date, version: String },
       api: { firstSeenAt: Date, lastSeenAt: Date, version: String },
     },
 

@@ -48,7 +48,7 @@ const IN_CHUNK = 500;
 export const VERDICT_EVAL_SPEND_ACCOUNT_LIMIT = 500;
 export const VERDICT_EVAL_SPEND_ROW_LIMIT = 50_000;
 const SPEND_LOOKBACK_MS = SPEND_LOOKBACK_DAYS * DAY_MS;
-const API_AGENT_SOURCES = ['api', 'agent', 'cli'];
+const API_AGENT_SOURCES = ['api', 'agent', 'cli', 'mcp'];
 
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
 const OBJECT_ID = /^[0-9a-f]{24}$/;

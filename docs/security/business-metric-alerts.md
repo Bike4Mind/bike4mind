@@ -104,11 +104,11 @@ Set revenue guards per currency before enabling production.
 | Metric                                       | Definition                                                                                                                                                                                                |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `verifiedSignups`                            | An external account counts as a signup in a period only if it verified (`emailVerifiedAt`, falling back to `createdAt`) before that period's cutoff; email changes do not count as new signups.           |
-| `activeUsers`                                | Distinct external users with a successful app/CLI/desktop usage event, original Quest message, or agent execution. Public API activity is separate.                                                       |
+| `activeUsers`                                | Distinct external users with a successful app/CLI/desktop/MCP-host usage event, original Quest message, or agent execution. Public API activity is separate.                                              |
 | `payingSubscribers`                          | Distinct external user or organization owners with an active Stripe-managed subscription and an unexpired period. Admin grants and trials are excluded.                                                   |
 | `spendUsd`, `spendUsd:<provider>`            | Frozen estimated provider costs from UsageEvent, including failed calls with recorded cost. These are estimates, not provider invoices.                                                                   |
 | `credits`                                    | Credits charged on those same usage records.                                                                                                                                                              |
-| `requests:user`, `requests:firstParty`       | API-key request log rows, split into third-party `api` and first-party `cli`/`desktop` sources. Includes failed requests.                                                                                 |
+| `requests:user`, `requests:firstParty`       | API-key request log rows, split into third-party `api` and first-party `cli`/`desktop`/`mcp` sources. Includes failed requests.                                                                           |
 | `completions:user`, `completions:firstParty` | `completion_api` usage records with an API key, using the same source split.                                                                                                                              |
 | `revenueMinor:<currency>`                    | Successful Stripe charges at the payment-event timestamp, deduplicated by charge ID. Gross receipts, including credit packs and subscriptions; refunds are not subtracted. Currencies are never combined. |
 
@@ -121,7 +121,7 @@ All business figures exclude admins, synthetic accounts, staff domains from
 `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`, test addresses matching an explicitly configured `ANALYTICS_TEST_PATTERN` (no email heuristic
 is applied when unset), and orphaned users. Organization owners must
 also be external. System usage and API keys tagged with a `productId` are excluded, including
-internal ingestion activity. Ordinary first-party CLI/desktop traffic remains in its named cut.
+internal ingestion activity. Ordinary first-party CLI/desktop/MCP-host traffic remains in its named cut.
 Stripe customers must map to an eligible account in this stage's database.
 Usage billed to Agent owners is included in spend, credits and completions when the agent
 resolves to an eligible user or organization owner; the same exclusions apply to that owner.
