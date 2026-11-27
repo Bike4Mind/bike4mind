@@ -32,6 +32,11 @@ describe('resolveNativeTheme', () => {
     expect(theme.accentRole).toBe(role('accent'));
   });
 
+  it('fills the dark send button with the dark accent, not a second blue', () => {
+    expect(role('sendButton')?.dark).toEqual({ red: 0x61, green: 0xaf, blue: 0xef, alpha: 1 });
+    expect(role('sendButton')?.dark).toEqual(role('accent')?.dark);
+  });
+
   it('carries the web radius scale and an 8pt spacing ramp', () => {
     expect(theme.radii).toEqual([
       { name: 'xs', value: 2 },

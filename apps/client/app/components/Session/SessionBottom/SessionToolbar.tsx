@@ -347,11 +347,19 @@ export function SessionToolbar(props: SessionToolbarProps) {
                         style={{ display: 'inline-flex' }}
                       >
                         <Button
-                          sx={{
+                          sx={theme => ({
                             borderRadius: '6px',
                             paddingBlock: '0px',
                             ...fixedIconSize,
-                          }}
+                            // Dark primary solidBg is Joy's default blue, a second blue beside the accent.
+                            // Must stay in sync with the native sendButton role (design-tokens nativeTheme.ts).
+                            [theme.getColorSchemeSelector('dark')]: {
+                              '&:not(:disabled)': {
+                                bgcolor: 'reading.accent',
+                                '&:hover': { bgcolor: 'reading.accent', filter: 'brightness(1.1)' },
+                              },
+                            },
+                          })}
                           variant="solid"
                           color="primary"
                           disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
