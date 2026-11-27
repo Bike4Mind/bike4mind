@@ -3673,7 +3673,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     teardown: DataLakeTeardownScope
   ): Promise<string[]> {
     const docs = await this.fabFileModel
-      .find(buildDataLakeTeardownFilter(scope, teardown), { _id: 1 })
+      .find({ ...buildDataLakeTeardownFilter(scope, teardown), deletedAt: { $ne: null } }, { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }

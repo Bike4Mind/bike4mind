@@ -1389,6 +1389,15 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(swept.map(f => f.id)).toEqual([file._id.toString()]);
     });
 
+    it('never names a live member for the purge, even one the rule would now take', async () => {
+      // Kept live at delete because another lake held it; that lake has since let it go.
+      const keptLive = await makeFile({ fileName: 'kept-live.txt', userId: CREATOR, tags: [{ name: DATALAKE_TAG }] });
+
+      expect(await fabFileRepository.findTeardownIdsByDataLakeTag(scope, OWNERS)).not.toContain(
+        keptLive._id.toString()
+      );
+    });
+
     it('names the same files for the purge, soft-deleted ones included', async () => {
       const ids = await seedMixedMembers();
       await fabFileRepository.softDeleteByDataLakeTag(scope, OWNERS);

@@ -2293,8 +2293,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
   /**
-   * Member ids (including soft-deleted) under the same rule as `softDeleteByDataLakeTag`: the only
-   * files a whole-lake teardown removes from the retrieval index or purges.
+   * Soft-deleted member ids under the same rule as `softDeleteByDataLakeTag`: the only files a
+   * whole-lake teardown removes from the retrieval index or purges. Live rows are never named, so a
+   * file phase 1 kept live cannot be destroyed by a purge whose rule has since changed.
    */
   findTeardownIdsByDataLakeTag(scope: DataLakeMembershipScope, teardown: DataLakeTeardownScope): Promise<string[]>;
   /**

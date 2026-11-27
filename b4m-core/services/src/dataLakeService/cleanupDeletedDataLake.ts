@@ -207,8 +207,9 @@ export const cleanupDeletedDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
-  // The same owner-and-no-other-lake rule phase 1 swept under (softDeleteByDataLakeTag), so this
-  // never destroys a file phase 1 would have left live; every other member is let go in step 2b.
+  // The same owner-and-no-other-lake rule phase 1 swept under (softDeleteByDataLakeTag), and only
+  // rows already soft-deleted: a file phase 1 kept live stays live even if the rule now differs
+  // (its other lake let it go, or the owner changed). Every live member is let go in step 2b.
   // Not bounded by restore's stamp: an owner's member they deleted on their own does not outlive
   // the lake.
   const teardown = await resolveLakeTeardownScope(existing, await loadActiveLakeGrants(existing, { db }), { db });

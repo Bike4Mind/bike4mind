@@ -49,6 +49,7 @@ afterEach(async () => {
 });
 
 const CREATOR = 'u-lake-creator';
+const DELETED_AT = new Date('2026-06-01T00:00:00.000Z');
 const STRANGER = 'u-stranger';
 
 const makeFile = (overrides: { fileName: string; userId: string; tags: { name: string }[] }) =>
@@ -78,7 +79,14 @@ async function seedLake() {
     datalakeTag,
     createdByUserId: CREATOR,
     status: 'deleted',
+    filesDeletedAt: DELETED_AT,
   });
+  // The state phase 1 leaves: the creator's members soft-deleted under the lake's stamp. The
+  // purge only destroys soft-deleted rows.
+  await FabFile.collection.updateMany(
+    { _id: { $in: [metaTagged._id, prefixOwned._id] } },
+    { $set: { deletedAt: DELETED_AT } }
+  );
 
   for (const f of [metaTagged, prefixOwned, strangerFile]) {
     // createdAt/updatedAt are declared on IFabFileChunkDocument (via IMongoDocument) but populated
@@ -241,6 +249,31 @@ describe('data lake purge index-removal scope (real repos + Mongo)', () => {
     });
     expect(members).not.toContain(joiner._id.toString());
     expect(members).toEqual([]);
+  });
+
+  it('keeps a member the delete left live, stripping only this lake from it', async () => {
+    const { lake } = await seedLake();
+    // Kept live at delete because another lake held it; that lake has since let it go, so the
+    // teardown rule alone would now take it.
+    const keptLive = await makeFile({
+      fileName: 'kept-live.txt',
+      userId: CREATOR,
+      tags: [{ name: lake.datalakeTag }, { name: 'quarterly' }],
+    });
+    let received: RetrievalIndexRemoval | undefined;
+    const port: RetrievalIndexPort = {
+      async removeForDataLake(input) {
+        received = input;
+      },
+    };
+
+    await runCleanup(lake._id.toString(), port);
+
+    expect(await fileExists(keptLive._id.toString())).toBe(true);
+    expect(received?.fabFileIds).not.toContain(keptLive._id.toString());
+    const tagsNow = (await FabFile.findById(keptLive._id))?.tags?.map(t => t.name) ?? [];
+    expect(tagsNow).not.toContain(lake.datalakeTag);
+    expect(tagsNow).toContain('quarterly');
   });
 
   it('a failing index aborts the purge before anything is destroyed', async () => {
