@@ -237,7 +237,8 @@ final class CaptureEngineTests: XCTestCase {
     let calls = await rig.api.calls
     XCTAssertEqual(calls.count, 1, "only the ticket was minted: \(calls)")
 
-    signedIn.withLock { $0 = alice }
+    let returningOwner = alice
+    signedIn.withLock { $0 = returningOwner }
     await rig.engine.resume()
     XCTAssertEqual(rig.uploader.started.count, 2)
     XCTAssertEqual(try rig.store.load(id: job.id)?.ticket?.fileID, "file-2")
@@ -258,7 +259,8 @@ final class CaptureEngineTests: XCTestCase {
       UploadEvent(jobID: job.id, taskID: try XCTUnwrap(job.uploadTaskID), outcome: .succeeded),
       from: try XCTUnwrap(job.uploadSession))
 
-    signedIn.withLock { $0 = bob }
+    let otherOwner = bob
+    signedIn.withLock { $0 = otherOwner }
     await rig.engine.resume()
 
     XCTAssertNil(try rig.store.load(id: job.id))
@@ -280,7 +282,8 @@ final class CaptureEngineTests: XCTestCase {
       UploadEvent(jobID: job.id, taskID: try XCTUnwrap(job.uploadTaskID), outcome: .succeeded),
       from: try XCTUnwrap(job.uploadSession))
 
-    signedIn.withLock { $0 = alice }
+    let returningOwner = alice
+    signedIn.withLock { $0 = returningOwner }
     await rig.engine.resume()
     XCTAssertEqual(try rig.store.load(id: job.id)?.stage, .failed)
     XCTAssertTrue(FileManager.default.fileExists(atPath: rig.uploader.started[0].file.path))
