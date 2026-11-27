@@ -293,28 +293,6 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     icon: HubIcon,
     color: '#00897b',
   },
-  // OptiHashi optimization tools
-  optihashi_schedule: {
-    name: 'optihashi_schedule',
-    displayName: 'Optimization Schedule',
-    description: 'Run optimization solvers on scheduling problems',
-    icon: HubIcon,
-    color: '#00838f',
-  },
-  optihashi_formulate: {
-    name: 'optihashi_formulate',
-    displayName: 'Optimization Formulate',
-    description: 'Convert natural language to structured optimization problems',
-    icon: HubIcon,
-    color: '#00695c',
-  },
-  optihashi_edit_problem: {
-    name: 'optihashi_edit_problem',
-    displayName: 'Optimization Edit',
-    description: 'Edit the active optimization brief from natural language, preserving the rest',
-    icon: HubIcon,
-    color: '#00796b',
-  },
   // Navigation tool
   navigate_view: {
     name: 'navigate_view',
@@ -494,9 +472,6 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   retrieve_knowledge_content: 'Search',
   // Agent delegation
   delegate_to_agent: 'Agents',
-  // OptiHashi optimization
-  optihashi_schedule: 'Optimization',
-  optihashi_formulate: 'Optimization',
   // Bob synthetic-persona panel
   bob_panel_read: 'Feedback',
   // Navigation

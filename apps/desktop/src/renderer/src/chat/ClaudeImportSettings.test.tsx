@@ -127,9 +127,13 @@ describe('opened from a sidebar sync hint', () => {
     try {
       getState.mockResolvedValue(ready);
       await mount('b4m-web');
-      for (const id of ['code', 'chat', 'web']) {
+      for (const id of ['code', 'chat']) {
         expect(host.querySelector(`[data-testid="claude-import-${id}-explainer"]`)?.textContent).toContain('read-only');
       }
+      // Messages sent in a synced web chat go to the web session, so that one is two-way.
+      expect(host.querySelector('[data-testid="claude-import-web-explainer"]')?.textContent).toContain(
+        'sync both ways'
+      );
       expect(scrolled).toEqual(['claude-import-web-section']);
     } finally {
       HTMLElement.prototype.scrollIntoView = original;

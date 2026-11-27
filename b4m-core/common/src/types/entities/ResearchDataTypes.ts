@@ -74,11 +74,13 @@ export interface IResearchDataRepository extends IBaseRepository<IResearchData> 
   ): Promise<IResearchData | null>;
 
   /**
-   * Find all research data by research task id with files
+   * Find all research data by research task id with files. Only files owned by `ownerUserId` are
+   * joined; a row whose file belongs to anyone else is omitted, the same as a row with no file.
    * @param researchTaskId - The id of the research task
+   * @param ownerUserId - The research task owner
    * @returns The research data with files
    */
-  findAllByResearchTaskIdWithFiles(researchTaskId: string): Promise<IResearchDataWithFiles[]>;
+  findAllByResearchTaskIdWithFiles(researchTaskId: string, ownerUserId: string): Promise<IResearchDataWithFiles[]>;
 
   /**
    * Find Research Data by id and research agent id

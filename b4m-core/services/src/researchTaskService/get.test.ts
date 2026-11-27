@@ -51,6 +51,7 @@ describe('researchTaskService - get', () => {
         fabFileId: 'fab-file-1',
         fabFile: {
           id: 'fab-file-1',
+          userId: expectedTask.userId,
           filePath: 'files/a.pdf',
           mimeType: 'application/pdf',
           moderationStatus: 'clean',
@@ -81,7 +82,33 @@ describe('researchTaskService - get', () => {
     });
     expect(result).toMatchObject({ ...expectedTask, researchData: [{ id: 'research-data-1' }] });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
-    expect(mockResearchDataRepo.findAllByResearchTaskIdWithFiles).toHaveBeenCalledWith(taskId);
+    expect(mockResearchDataRepo.findAllByResearchTaskIdWithFiles).toHaveBeenCalledWith(taskId, expectedTask.userId);
+  });
+
+  it('omits a row whose file belongs to someone other than the task owner, and does not sign it', async () => {
+    const task = mockResearchTask({ id: 'task-1' });
+    const row = (id: string, userId: string) => ({
+      id: `rd-${id}`,
+      fabFileId: id,
+      fabFile: { id, userId, filePath: `files/${id}.md`, mimeType: 'text/markdown', moderationStatus: 'clean' },
+      researchAgentId: task.researchAgentId,
+      researchTaskId: task.id,
+    });
+    (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(task);
+    (mockResearchDataRepo.findAllByResearchTaskIdWithFiles as Mock).mockResolvedValueOnce([
+      row('own', task.userId),
+      row('foreign', 'someone-else'),
+    ]);
+
+    const result = await get(mockUser, { id: task.id }, adapters);
+
+    expect(result.researchData.map(d => d.id)).toEqual(['rd-own']);
+    expect(adapters.storage.generateSignedUrl).toHaveBeenCalledTimes(1);
+    expect(adapters.storage.generateSignedUrl).toHaveBeenCalledWith(
+      'files/own.md',
+      expect.any(Number),
+      expect.anything()
+    );
   });
 
   it('should throw error when research task is not found', async () => {

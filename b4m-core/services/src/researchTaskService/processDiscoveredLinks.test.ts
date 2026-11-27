@@ -95,6 +95,7 @@ describe('processDiscoveredLinks', () => {
 
     mockFabFile = {
       id: 'fab-file-id',
+      userId: 'test-user-id',
       filePath: 'fab-files/file.md',
     };
 
@@ -261,6 +262,18 @@ describe('processDiscoveredLinks', () => {
         statusFailedAt: expect.any(Date),
       })
     );
+  });
+
+  it('fails the task without reading a linked file owned by someone else', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue({ ...mockFabFile, userId: 'other-member' });
+
+    await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockStorage.download).not.toHaveBeenCalled();
+    expect(mockLLM.complete).not.toHaveBeenCalled();
+    expect(mockDb.researchTasks.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
   });
 
   it('should mark task as failed when fab file has no filePath', async () => {

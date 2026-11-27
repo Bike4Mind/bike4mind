@@ -89,10 +89,11 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
       this.service.logger.log(`🚨 SEARCHING for trigger words: ${triggerWordsToSearch.join(', ')}`);
 
-      const mentionedAgents = await this.service.db.agents.findByTriggerWords(
-        triggerWordsToSearch,
-        this.service.user.id
-      );
+      // A mention summons only the user's own agents: a share entry is written by the agent's owner
+      // alone, so a shared agent joins a chat only when the recipient attaches it.
+      const mentionedAgents = (
+        await this.service.db.agents.findByTriggerWords(triggerWordsToSearch, this.service.user.id)
+      ).filter(agent => String(agent.userId) === this.service.user.id);
 
       agentsToProcess = mentionedAgents;
       this.service.logger.log(

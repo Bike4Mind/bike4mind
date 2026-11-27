@@ -1,6 +1,7 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
 import { prAttentionRank } from '@shared/prAttention';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import type { PrSummary } from '@shared/pullRequest';
 import {
   nestedSessionsOf,
@@ -10,6 +11,7 @@ import {
   parentHints,
   projectForGroup,
   projectGroupDirectory,
+  projectKeyOf,
   QUICK_SWITCH_LIMIT,
 } from './grouping';
 import { capRows, GROUP_ROW_CAP, GROUP_ROW_STEP, groupLimit, setGroupLimit } from './groupCap';
@@ -277,13 +279,33 @@ describe('Claude Code worktrees', () => {
   });
 });
 
+describe('projects on two hosts', () => {
+  it('keeps the same folder on two hosts as two projects, each starting sessions on its own host', () => {
+    const local = project('/work/repo', 'repo');
+    const remote = project('/work/repo', 'repo');
+    const sessions = [
+      session({ id: 'here', mode: 'code', project: local }),
+      session({ id: 'there', mode: 'code', project: remote, hostId: 'devbox' }),
+    ];
+    const { projects } = groupSessions(sessions, 'code');
+    expect(
+      projects.map(group => [group.hostId, group.directory, group.key, group.sessions.map(entry => entry.id)])
+    ).toEqual([
+      [LOCAL_HOST_ID, '/work/repo', '/work/repo', ['here']],
+      ['devbox', '/work/repo', 'devbox\n/work/repo', ['there']],
+    ]);
+    expect(projectForGroup(sessions, 'devbox', '/work/repo')).toBe(remote);
+    expect(projectForGroup(sessions, LOCAL_HOST_ID, '/work/repo')).toBe(local);
+  });
+});
+
 describe('starting a session from a project group', () => {
   it('finds a manually selected Claude worktree when no session names its repository root', () => {
     const worktree = project('/work/repo/.claude/worktrees/wt', 'wt');
     const sessions = [session({ id: 'tree', mode: 'code', project: worktree })];
     const group = groupSessions(sessions, 'code').projects[0];
     expect(group.directory).toBe('/work/repo');
-    expect(projectForGroup(sessions, group.directory)).toBe(worktree);
+    expect(projectForGroup(sessions, LOCAL_HOST_ID, group.directory)).toBe(worktree);
   });
 
   it('uses the most recent matching project without grouping unrelated worktrees', () => {
@@ -295,9 +317,9 @@ describe('starting a session from a project group', () => {
       session({ id: 'root', mode: 'code', project: root }),
       session({ id: 'other', mode: 'code', project: other }),
     ];
-    expect(projectForGroup(sessions, '/work/repo')).toBe(tree);
-    expect(projectForGroup(sessions, other.directory)).toBe(other);
-    expect(projectForGroup(sessions, '/missing')).toBeUndefined();
+    expect(projectForGroup(sessions, LOCAL_HOST_ID, '/work/repo')).toBe(tree);
+    expect(projectForGroup(sessions, LOCAL_HOST_ID, other.directory)).toBe(other);
+    expect(projectForGroup(sessions, LOCAL_HOST_ID, '/missing')).toBeUndefined();
   });
 });
 
@@ -584,5 +606,15 @@ describe('nestedSessionsOf', () => {
   it('terminates on a corrupt origin cycle', () => {
     const sessions = [session({ id: 'a', origin: origin('b') }), session({ id: 'b', origin: origin('a') })];
     expect(nestedSessionsOf(sessions, 'a').map(found => found.id)).toEqual(['b']);
+  });
+});
+
+describe('projectKeyOf', () => {
+  const repo = project('/work/repo', 'repo');
+
+  it('keys a local project by its bare directory, as saved prefs were, and a remote one by host too', () => {
+    expect(projectKeyOf(LOCAL_HOST_ID, repo)).toBe('/work/repo');
+    expect(projectKeyOf('devbox', repo)).toBe('devbox\n/work/repo');
+    expect(projectKeyOf('devbox', repo)).not.toBe(projectKeyOf('nas', repo));
   });
 });

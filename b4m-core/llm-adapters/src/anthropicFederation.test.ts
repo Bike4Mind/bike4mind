@@ -106,7 +106,12 @@ describe('federated Anthropic client under aws-sts', () => {
     const token = await federatedAnthropicCredentials()();
 
     expect(token.token).toBe('sk-ant-oat-test');
-    expect(stsSend).toHaveBeenCalledWith({ input: { Audience: ['https://aud.example'], SigningAlgorithm: 'RS256' } });
+    expect(stsSend).toHaveBeenCalledWith(
+      { input: { Audience: ['https://aud.example'], SigningAlgorithm: 'RS256' } },
+      {
+        abortSignal: expect.any(AbortSignal),
+      }
+    );
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://api.anthropic.com/v1/oauth/token');
     expect(String(init.body)).toContain('sts-jwt');

@@ -161,7 +161,7 @@ export class ModalManagementToolServer implements AdminTool {
       };
 
       // Create the modal using server-side function
-      const result = await createModal(serverParams);
+      const result = await createModal(serverParams, context.user.id);
 
       if (!result.success) {
         return result;
@@ -239,7 +239,7 @@ export class ModalManagementToolServer implements AdminTool {
   }
 
   // Update modal handler - direct database access
-  private async updateModalHandler(_context: AdminToolContext, params: AdminToolParams): Promise<AdminToolResult> {
+  private async updateModalHandler(context: AdminToolContext, params: AdminToolParams): Promise<AdminToolResult> {
     let modalId = (params.data as { id?: string })?.id || (params.options?.id as string);
     let updates: Partial<IModal> = {};
 
@@ -328,7 +328,7 @@ export class ModalManagementToolServer implements AdminTool {
       }
 
       // Use server-side update function
-      const result = await updateModal(fullModalId, { ...updates });
+      const result = await updateModal(fullModalId, { ...updates }, context.user.id);
 
       if (!result.success) {
         return result;
@@ -550,7 +550,7 @@ export class ModalManagementToolServer implements AdminTool {
       let result;
       switch (toolParams.action) {
         case 'create':
-          result = await createModal(toolParams);
+          result = await createModal(toolParams, context.user.id);
           // Transform create result to triggerModal format so it displays
           if (result.success && result.data) {
             const createdModal = await ModalModel.findById(result.data.id).lean();
@@ -586,7 +586,7 @@ export class ModalManagementToolServer implements AdminTool {
           result = await listModals(toolParams.filter);
           break;
         case 'update':
-          result = await updateModal(toolParams.modalId, toolParams);
+          result = await updateModal(toolParams.modalId, toolParams, context.user.id);
           break;
         case 'delete':
           result = await deleteModal(toolParams.modalId);

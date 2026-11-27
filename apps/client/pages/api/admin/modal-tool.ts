@@ -81,13 +81,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           switch (toolParams.action) {
             case 'create':
               logger.info('Executing CREATE action');
-              return await createModal(toolParams);
+              return await createModal(toolParams, req.user!.id);
             case 'list':
               logger.info('Executing LIST action', { filterKeys: Object.keys(toolParams.filter ?? {}) });
               return await listModals(toolParams.filter);
             case 'update':
               logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
-              return await updateModal(toolParams.modalId, toolParams);
+              return await updateModal(toolParams.modalId, toolParams, req.user!.id);
             case 'delete':
               logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
               return await deleteModal(toolParams.modalId);

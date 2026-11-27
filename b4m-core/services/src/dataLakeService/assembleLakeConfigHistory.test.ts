@@ -811,7 +811,14 @@ describe('created-config liveness', () => {
 
   it('does not read configs when no row is a create, and assumes live when the adapter is absent', async () => {
     const none = withConfigs(
-      [event({ id: 'u1', action: 'update-research-config', target: { kind: 'researchConfig', id: CFG_A }, leverChanges: [{ lever: 'name', before: 'a', after: 'b' }] as never })],
+      [
+        event({
+          id: 'u1',
+          action: 'update-research-config',
+          target: { kind: 'researchConfig', id: CFG_A },
+          leverChanges: [{ lever: 'name', before: 'a', after: 'b' }] as never,
+        }),
+      ],
       []
     );
     await assembleLakeConfigHistory(lake(), none.adapters);
@@ -835,9 +842,12 @@ describe('file names', () => {
     return { find, adapters: { ...a, db: { ...a.db, fabFiles: { find } } } };
   };
 
+  const MEMBER_TAGS = [{ name: 'datalake:ops', strength: 1 }];
+  const memberLake = () => lake({ datalakeTag: 'datalake:ops', fileTagPrefix: 'ops:', createdByUserId: 'creator' });
+
   it('names each file in one batched read, and leaves a deleted file without a name', async () => {
-    const { adapters: a, find } = build([{ id: FAB_A, fileName: 'handbook.pdf' }]);
-    const view = await assembleLakeConfigHistory(lake(), a);
+    const { adapters: a, find } = build([{ id: FAB_A, fileName: 'handbook.pdf', userId: 'u1', tags: MEMBER_TAGS }]);
+    const view = await assembleLakeConfigHistory(memberLake(), a);
     const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
     expect(byId.f1).toMatchObject({ fileName: 'handbook.pdf' });
     expect(byId.f2).not.toHaveProperty('fileName');
@@ -845,9 +855,45 @@ describe('file names', () => {
   });
 
   it('ignores a soft-deleted file row', async () => {
-    const { adapters: a } = build([{ id: FAB_A, fileName: 'old.pdf', deletedAt: new Date() }]);
-    const view = await assembleLakeConfigHistory(lake(), a);
+    const { adapters: a } = build([
+      { id: FAB_A, fileName: 'old.pdf', userId: 'u1', tags: MEMBER_TAGS, deletedAt: new Date() },
+    ]);
+    const view = await assembleLakeConfigHistory(memberLake(), a);
     expect(view.entries[0]).not.toHaveProperty('fileName');
+  });
+
+  it('names a file that matches the lake through the creator-owned prefix arm', async () => {
+    const { adapters: a } = build([
+      { id: FAB_A, fileName: 'prefixed.pdf', userId: 'creator', tags: [{ name: 'ops:q3', strength: 1 }] },
+    ]);
+    const view = await assembleLakeConfigHistory(memberLake(), a);
+    const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
+    expect(byId.f1).toMatchObject({ fileName: 'prefixed.pdf' });
+  });
+
+  it('leaves a file that is no longer in the lake without a name', async () => {
+    const { adapters: a } = build([
+      { id: FAB_A, fileName: 'left.pdf', userId: 'u1', tags: [{ name: 'other', strength: 1 }] },
+    ]);
+    const view = await assembleLakeConfigHistory(memberLake(), a);
+    const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
+    expect(byId.f1).not.toHaveProperty('fileName');
+  });
+
+  it('does not name a non-creator file through the prefix arm', async () => {
+    const { adapters: a } = build([
+      { id: FAB_A, fileName: 'foreign.pdf', userId: 'u1', tags: [{ name: 'ops:q3', strength: 1 }] },
+    ]);
+    const view = await assembleLakeConfigHistory(memberLake(), a);
+    const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
+    expect(byId.f1).not.toHaveProperty('fileName');
+  });
+
+  it('names a file that left the lake when the reader owns it', async () => {
+    const { adapters: a } = build([{ id: FAB_A, fileName: 'mine.pdf', userId: 'reader', tags: [] }]);
+    const view = await assembleLakeConfigHistory(memberLake(), { ...a, viewerUserId: 'reader' });
+    const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
+    expect(byId.f1).toMatchObject({ fileName: 'mine.pdf' });
   });
 
   it('does not read files when no file rows are returned', async () => {

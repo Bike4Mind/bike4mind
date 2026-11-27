@@ -26,7 +26,7 @@ export const MAX_PREAMBLE_FILES = 25;
  * The tool that turns a `fabFileId` from the preamble into content. A run whose toolbelt omits
  * it cannot read any attached file that content materialization did not inline - so the
  * preamble must not tell the agent to use a tool it was never given. An orchestration profile
- * may legitimately omit it to keep a loop on task (see `agentExecutor.optiProfile.ts`), and the
+ * may legitimately omit it to keep a loop on task (a surface profile contributed by a mounted package), and the
  * agent path does not union `session.enabledTools`, so the omission is invisible from here
  * without the caller passing its resolved tool names in.
  */

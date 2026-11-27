@@ -5,7 +5,7 @@ import {
   type SlackAttachment,
 } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
-import { HTTPError, STATIC_LAKE_IDS } from '@bike4mind/common';
+import { HTTPError, isRegistryLakeKey, STATIC_LAKE_IDS } from '@bike4mind/common';
 import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
 import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
 import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
@@ -181,7 +181,8 @@ export const slugTier = (
 ): 0 | 1 | 2 | null => {
   const orgId = lakeOrgId(lake);
   if (orgId && (scope.organizationIds ?? []).includes(orgId)) return 0;
-  if (!orgId) return 1;
+  // The registry row itself stays addressable; an org-less DB row holding its key does not.
+  if (!orgId) return isRegistryLakeKey(lake.slug) && !STATIC_LAKE_IDS.has(lake.id) ? null : 1;
   return grantedLakeIds.has(lake.id) ? 2 : null;
 };
 

@@ -27,6 +27,15 @@ describe('extractMcpPendingAction', () => {
     });
   });
 
+  it('accepts a token the notion server emitted for notion_create_page', () => {
+    const notionToken = encodeToken({ tool: 'notion_create_page', params: { title: 't' }, ts: 3 });
+
+    expect(extractMcpPendingAction('notion__notion_create_page', preview(notionToken))).toMatchObject({
+      kind: 'accepted',
+      action: { tool: 'notion_create_page', params: { title: 't' }, ts: 3 },
+    });
+  });
+
   it('accepts a valid preview that has no next_step and does not add one', () => {
     const result = JSON.stringify({ action: 'preview', _confirmToken: validToken });
 
@@ -59,6 +68,7 @@ describe('extractMcpPendingAction', () => {
   it.each([
     ['a read tool that echoed a token naming itself', 'github__get_issue', 'get_issue'],
     ['a tool of the other confirming server', 'github__jira_create_issue', 'jira_create_issue'],
+    ['a notion read tool that echoed a token naming itself', 'notion__notion_read_page', 'notion_read_page'],
   ])('rejects a token from %s', (_label, emittingTool, tool) => {
     const echoed = encodeToken({ tool, params: {}, ts: 1 });
 
@@ -115,7 +125,8 @@ describe('confirmingServerOf', () => {
     ['mcp__github__list_issues', undefined],
     ['__github__list_issues', undefined],
     ['github', undefined],
-    ['notion__create_page', undefined],
+    ['notion__notion_search', 'notion'],
+    ['slack__post_message', undefined],
   ])('maps %s to %s', (toolName, server) => {
     expect(confirmingServerOf(toolName)).toBe(server);
   });

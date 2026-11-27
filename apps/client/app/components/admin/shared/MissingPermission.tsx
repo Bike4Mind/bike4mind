@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { Stack, Tooltip, Typography } from '@mui/joy';
 import {
+  isFullAdmin,
   meetsAdminPermissionRequirement,
   missingAdminPermissionMessage,
   type AdminPermissionRequirement,
@@ -32,6 +33,15 @@ export function missingAdminPermissionFor(
   const missing = all.filter(each => !meetsAdminPermissionRequirement(user, each));
   if (missing.length === 0) return null;
   return missing.map(each => missingAdminPermissionMessage(each)).join('; ');
+}
+
+/** Matches the 403 an `adminApi` route answers for one of its `fullAdminMethods`. */
+export const FULL_ADMIN_ONLY_ACTION_MESSAGE = 'Only full administrators can perform this action';
+
+/** A `blockedReason` for an action whose route lists it in `fullAdminMethods`, else null. */
+export function useFullAdminOnlyReason(): string | null {
+  const { currentUser } = useUser();
+  return isFullAdmin(currentUser) ? null : FULL_ADMIN_ONLY_ACTION_MESSAGE;
 }
 
 /**

@@ -198,7 +198,15 @@ async function handleChat(
   //    name. The other branches already deduped: `smart` via `mergeTools`, `fast` via `[]`.
   //  - The unrecognized ids are deduped too: what a caller debugging a typo needs is the SET of
   //    ids that are not tools here, not one entry per occurrence.
-  const requestedTools = Array.from(new Set(filterKnownTools(simplifiedRequest.tools)));
+  // Overlay-contributed names are recognized by the generated map, not the enum; they are typed as
+  // B4MLLMTools here only because the downstream signatures predate open tool names.
+  const premiumToolNames = new Set(Object.keys(premiumLlmTools));
+  const requestedTools = Array.from(
+    new Set([
+      ...filterKnownTools(simplifiedRequest.tools),
+      ...((simplifiedRequest.tools ?? []).filter(id => premiumToolNames.has(id)) as B4MLLMTools[]),
+    ])
+  );
   const recognized = new Set<string>(requestedTools);
   const unrecognizedIds = new Set((simplifiedRequest.tools ?? []).filter(id => !recognized.has(id)));
   const unrecognizedTools = Array.from(unrecognizedIds).slice(0, UNRECOGNIZED_TOOL_REPORT_LIMIT);
@@ -297,6 +305,7 @@ async function handleChat(
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       fileInputsAllowed: fileInputsAllowedFor(req),
+      contributedToolNames: premiumToolNames,
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
@@ -358,6 +367,7 @@ async function handleChat(
             // (its own, or its workspace's resolved at read time) include premium names needs
             // the merge or those tools silently no-op on this synchronous path.
             externalTools: premiumLlmTools,
+            contributedToolNames: premiumToolNames,
             abortSignal,
           })
         ),

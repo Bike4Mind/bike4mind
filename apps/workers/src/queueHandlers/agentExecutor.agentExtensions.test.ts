@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OPTI_SURFACE } from '@bike4mind/common';
 import type { IOptiPlanState } from '@bike4mind/database';
 
 const { order, tag } = vi.hoisted(() => {
@@ -27,7 +26,6 @@ import {
   executorAgentExtensions,
   type ExecutorToolMap,
 } from './agentExecutor.agentExtensions';
-import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 
 const logger = { info: vi.fn(), warn: vi.fn() };
 
@@ -37,9 +35,9 @@ describe('executor agent extensions', () => {
     vi.clearAllMocks();
   });
 
-  it('registers the built-in profile and guards, in priority order, with no contributions', () => {
+  it('registers the built-in guards, in priority order, and no profile, with no contributions', () => {
     expect(createExecutorAgentExtensions([]).list()).toEqual({
-      surfaceProfiles: [{ id: 'synthetic:opti-orchestration', surface: OPTI_SURFACE, source: 'builtin' }],
+      surfaceProfiles: [],
       toolMapGuards: [
         { id: 'decompose-once', priority: 100, source: 'builtin' },
         { id: 'plan-completion', priority: 200, source: 'builtin' },
@@ -48,23 +46,22 @@ describe('executor agent extensions', () => {
     });
   });
 
-  it('resolves the built-in surface profile exactly as the direct builder does', () => {
-    const registry = createExecutorAgentExtensions([]);
-    const contributedToolNames = ['tool_a', 'tool_b'];
-    const resolved = registry.resolveSurfaceProfile(OPTI_SURFACE, { executionId: 'e', logger, contributedToolNames });
-    expect(resolved).toEqual(buildOptiOrchestrationProfile({ premiumToolNames: contributedToolNames }));
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(registry.resolveSurfaceProfile('chat', { executionId: 'e', logger, contributedToolNames })).toBeUndefined();
-  });
-
-  it('warns once when the surface resolves with no contributed tools', () => {
-    createExecutorAgentExtensions([]).resolveSurfaceProfile(OPTI_SURFACE, {
-      executionId: 'e',
-      logger,
-      contributedToolNames: [],
-    });
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0][1]).toEqual({ executionId: 'e' });
+  it('resolves a contributed surface profile and nothing for an unclaimed surface', () => {
+    const profile = {
+      id: 'synthetic:fixture-profile',
+      name: 'Fixture',
+      allowedTools: ['tool_a'],
+      deniedTools: [],
+      maxIterations: { quick: 1, medium: 2, very_thorough: 3 },
+      defaultThoroughness: 'medium' as const,
+      isSynthetic: true,
+    };
+    const registry = createExecutorAgentExtensions([
+      { surfaceProfiles: [{ id: profile.id, surface: 'fixture-surface', build: () => profile }] },
+    ]);
+    const ctx = { executionId: 'e', logger, contributedToolNames: ['tool_a'] };
+    expect(registry.resolveSurfaceProfile('fixture-surface', ctx)).toEqual(profile);
+    expect(registry.resolveSurfaceProfile('unclaimed-surface', ctx)).toBeUndefined();
   });
 
   it('wraps decompose, then plan-completion, then brief over one shared run state', () => {

@@ -108,7 +108,7 @@ describe('hostChat', () => {
 
     it('keeps the section out of the host request and files the new session locally', async () => {
       const { chat, request, local } = setup({ 'session/create': created });
-      const result = await chat.createCodeSession({ directory: '/work', sectionId: 'sec-1' });
+      const result = await chat.createCodeSession(LOCAL_HOST_ID, { directory: '/work', sectionId: 'sec-1' });
       expect(request).toHaveBeenCalledWith(LOCAL_HOST_ID, 'session/create', { directory: '/work' });
       expect(local.moveToSection).toHaveBeenCalledWith('code-1', 'sec-1');
       expect(result).toEqual({ ok: true, session: summary('code-1'), sidebarSections: sections });
@@ -117,7 +117,7 @@ describe('hostChat', () => {
     it('reports a placement that could not be saved, with the session still created', async () => {
       const { chat, local } = setup({ 'session/create': created });
       local.moveToSection.mockRejectedValueOnce(new Error('disk full'));
-      expect(await chat.createCodeSession({ directory: '/work', sectionId: 'sec-1' })).toEqual({
+      expect(await chat.createCodeSession(LOCAL_HOST_ID, { directory: '/work', sectionId: 'sec-1' })).toEqual({
         ok: true,
         session: summary('code-1'),
         placementFailed: true,
@@ -126,7 +126,7 @@ describe('hostChat', () => {
 
     it('places nothing for a refused create', async () => {
       const { chat, local } = setup({ 'session/create': () => ({ ok: false, error: 'gone' }) });
-      expect(await chat.createCodeSession({ directory: '/gone', sectionId: 'sec-1' })).toEqual({
+      expect(await chat.createCodeSession(LOCAL_HOST_ID, { directory: '/gone', sectionId: 'sec-1' })).toEqual({
         ok: false,
         error: 'gone',
       });
@@ -135,7 +135,10 @@ describe('hostChat', () => {
 
     it('places nothing when no section was asked for', async () => {
       const { chat, local } = setup({ 'session/create': created });
-      expect(await chat.createCodeSession({ directory: '/work' })).toEqual({ ok: true, session: summary('code-1') });
+      expect(await chat.createCodeSession(LOCAL_HOST_ID, { directory: '/work' })).toEqual({
+        ok: true,
+        session: summary('code-1'),
+      });
       expect(local.moveToSection).not.toHaveBeenCalled();
     });
   });
@@ -159,7 +162,7 @@ describe('hostChat', () => {
 
   it('forgets a recent folder by path and returns the list that is left', async () => {
     const { chat, request } = setup({ 'project/forgetRecent': () => ({ folders: [{ path: '/b', name: 'b' }] }) });
-    expect(await chat.removeRecentFolder('/a')).toEqual([{ path: '/b', name: 'b' }]);
+    expect(await chat.removeRecentFolder(LOCAL_HOST_ID, '/a')).toEqual([{ path: '/b', name: 'b' }]);
     expect(request).toHaveBeenCalledWith(LOCAL_HOST_ID, 'project/forgetRecent', { path: '/a' });
   });
 });

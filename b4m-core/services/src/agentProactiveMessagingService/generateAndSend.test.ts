@@ -1,13 +1,19 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError, ORG_MODEL_NOT_ALLOWED_ERROR_CODE, type ReadOrgModelPolicy } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  getToolSideEffects,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  type ReadOrgModelPolicy,
+} from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
 import { createToolModelAdmission } from '../llm/tools/helpers/modelAdmission';
 import {
   buildProactiveMessageMessages,
   generateAndSendProactiveMessage,
   proactiveMessageTools,
+  proactiveMessageToolsFor,
 } from './generateAndSend';
 
 const h = vi.hoisted(() => ({
@@ -43,11 +49,31 @@ describe('generateAndSendProactiveMessage tool deps', () => {
   it('never offers decide, which has no injected runner on this surface', () => {
     expect(Object.keys(b4mTools)).toContain('decide'); // non-vacuous: the registry still has it
     expect(Object.keys(proactiveMessageTools)).not.toContain('decide');
-    expect(Object.keys(proactiveMessageTools)).toHaveLength(Object.keys(b4mTools).length - 1);
+  });
+
+  it('offers only tools that declare no side effect beyond the reply', () => {
+    const names = Object.keys(proactiveMessageTools);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) expect(['none', 'local']).toContain(getToolSideEffects(name));
+    for (const name of ['blog_publish', 'blog_edit', 'blog_draft', 'image_generation', 'edit_image', 'edit_file']) {
+      expect(Object.keys(b4mTools)).toContain(name);
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it('never offers the model-chosen URL fetchers', () => {
+    expect(Object.keys(proactiveMessageTools)).not.toContain('web_fetch');
+    expect(Object.keys(proactiveMessageTools)).not.toContain('deep_research');
+    expect(Object.keys(proactiveMessageTools)).toContain('web_search');
+  });
+
+  it("drops the session's disabledTools", () => {
+    expect(Object.keys(proactiveMessageToolsFor({ disabledTools: ['web_search'] }))).not.toContain('web_search');
+    expect(proactiveMessageToolsFor({})).toBe(proactiveMessageTools);
   });
 
   it('hands generateTools the filtered map rather than the whole registry', () => {
-    expect(source).toMatch(/^\s+proactiveMessageTools, \/\/ tools: full server-side tool set/m);
+    expect(source).toMatch(/^\s+proactiveMessageToolsFor\(session\), \/\/ tools:/m);
     expect(source).not.toMatch(/^\s+b4mTools, \/\/ tools:/m);
   });
 

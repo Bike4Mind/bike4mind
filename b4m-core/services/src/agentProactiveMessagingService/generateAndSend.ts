@@ -26,6 +26,7 @@ import {
   IScopedSettingsRepository,
   type ReadOrgModelPolicy,
   isTerminalCreditRefusal,
+  getToolSideEffects,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
@@ -34,12 +35,29 @@ import { isOrgModelNotAllowedError } from '../llm/modelAdmission';
 import { isAiAccessRefusal } from '../userService/accountState';
 
 /**
- * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
- * would be advertised with a toolFn that can only throw. `buildSharedTools` derives the same rule
- * from its deps; a registry-wide build has to drop the entry itself.
+ * Tools a scheduled turn never offers: `decide` has no injected runner on this host, and the URL
+ * fetchers would request a model-chosen address with no user present to see it.
  */
-const { decide: _noDecisionRunner, ...proactiveMessageTools } = b4mTools;
-export { proactiveMessageTools };
+const PROACTIVE_EXCLUDED_TOOLS: ReadonlySet<string> = new Set(['decide', 'web_fetch', 'deep_research']);
+
+/**
+ * A scheduled turn runs with nobody to approve a call, so it is offered only tools that declare no
+ * side effect beyond the reply itself (`none` / `local` in toolSideEffects.ts).
+ */
+export const proactiveMessageTools = Object.fromEntries(
+  Object.entries(b4mTools).filter(([name]) => {
+    if (PROACTIVE_EXCLUDED_TOOLS.has(name)) return false;
+    const sideEffects = getToolSideEffects(name);
+    return sideEffects === 'none' || sideEffects === 'local';
+  })
+) as Partial<typeof b4mTools>;
+
+/** `proactiveMessageTools` less the session's `disabledTools`, which a curated surface sets. */
+export function proactiveMessageToolsFor(session: Pick<ISessionDocument, 'disabledTools'>): Partial<typeof b4mTools> {
+  const disabled = new Set(session.disabledTools ?? []);
+  if (disabled.size === 0) return proactiveMessageTools;
+  return Object.fromEntries(Object.entries(proactiveMessageTools).filter(([name]) => !disabled.has(name)));
+}
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -192,7 +210,7 @@ export async function generateAndSendProactiveMessage({
       { web_search: { imageUrlSigningSecret } },
       model,
       undefined, // imageProcessorLambdaName
-      proactiveMessageTools, // tools: full server-side tool set, minus the host-injected `decide`
+      proactiveMessageToolsFor(session), // tools: side-effect-free tools only, see proactiveMessageTools
       undefined, // allowedDirectories
       undefined, // entitlementKeys
       session.id, // sessionId: attribute proactive-message tool spend to its session
