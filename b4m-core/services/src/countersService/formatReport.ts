@@ -239,7 +239,7 @@ function formatAIInsights(insights: string | string[] | null): { sections: strin
 
 /**
  * Render the "Usage by Source" line as `web: 89% · cli: 10% · agent: 1%`.
- * Source order: web -> cli -> desktop -> agent -> api -> system (any unknown sources appear
+ * Source order: web -> cli -> desktop -> mcp -> agent -> api -> system (any unknown sources appear
  * after these in their original sort order from the aggregation).
  */
 export function formatUsageBySource(usage?: Array<{ source: CompletionSource; count: number }>): string | null {

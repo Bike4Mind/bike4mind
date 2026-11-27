@@ -245,7 +245,7 @@ export type ClientSurface = (typeof CLIENT_SURFACES)[number];
 
 export interface ClientSurfaceSignal {
   surface: ClientSurface;
-  /** The `<ver>` of a `b4m-desktop/<ver>` or `b4m-cli/<ver>` client, when it is well-formed. */
+  /** The `<ver>` of a `b4m-desktop/<ver>`, `b4m-cli/<ver>` or `b4m-mcp/<client>/<ver>` client, when well-formed. */
   version?: string;
 }
 

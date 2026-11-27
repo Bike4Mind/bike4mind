@@ -297,7 +297,7 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   /**
    * Platform-wide endpoint/latency rollup over a trailing window (default 30
    * days; pass `hours` for finer windows). Every row here is API-key-authed
-   * traffic, so `source` only ever narrows to api vs cli (the handler decides
+   * traffic, so `source` is only ever an ApiKeyCompletionSource (the handler decides
    * whether the section applies to other sources). `source` / `ownerType` match
    * the stamped fields, so either filter excludes rows logged before they
    * existed. Beyond the collection's 90-day TTL there is simply no data; callers
