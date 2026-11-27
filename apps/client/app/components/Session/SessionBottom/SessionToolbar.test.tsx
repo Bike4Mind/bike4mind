@@ -310,12 +310,14 @@ describe('SessionToolbar - dark send button fill', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {
       wrapper: ModeWrapper('dark'),
     });
-    expect(fill()).not.toBe('var(--joy-palette-reading-accent)');
+    expect(fill()).toBe(
+      'var(--variant-solidDisabledBg, var(--joy-palette-primary-solidDisabledBg, var(--joy-palette-neutral-100, #F0F4F8)))'
+    );
   });
 
   it('leaves light mode on the primary solid fill', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('light') });
-    expect(fill()).not.toBe('var(--joy-palette-reading-accent)');
+    expect(fill()).toBe('var(--variant-solidBg, var(--joy-palette-primary-solidBg, #0066C1))');
   });
 
   // getComputedStyle cannot see pseudo-classes, so pin the emitted hover/press rules as text.
