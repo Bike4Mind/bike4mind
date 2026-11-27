@@ -51,6 +51,7 @@ import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import {
   getDefaultChatCompletionOptions,
@@ -308,6 +309,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
         apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
         oauthClientId: apiKeyInfo?.oauthExchangeClientId,
         adminRoleWithheld: adminRoleWithheldFor(apiKeyInfo),
+        contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       });
       if (!quest) throw new NotFoundError('Failed to create quest');
       const questId = quest.id;
