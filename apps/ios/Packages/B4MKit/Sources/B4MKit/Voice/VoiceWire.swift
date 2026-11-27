@@ -166,6 +166,7 @@ enum VoiceWire {
     case .rateLimited: .rateLimited
     case .forbidden: .rejected(status: 403)
     case .notFound: .rejected(status: 404)
+    case .conflict: .rejected(status: 409)
     case .upgradeRequired: .rejected(status: 426)
     case .server(let status): .server(status: status)
     case .malformedResponse: .malformedResponse

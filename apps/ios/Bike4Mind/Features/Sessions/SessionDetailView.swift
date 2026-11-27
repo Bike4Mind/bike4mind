@@ -132,8 +132,7 @@ private struct ChatScreen: View {
     let transcript = model.transcript
     switch (transcript.state, model.messages.isEmpty) {
     case (.idle, true), (.loading, true):
-      ProgressView("Loading conversation")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      TranscriptSkeleton()
         .accessibilityIdentifier("transcript-loading")
     case (.failed(let error), true):
       ContentUnavailableView {
@@ -248,6 +247,31 @@ private struct SendFailureRow: View {
       Button("Retry", action: retry)
         .font(Tokens.Typography.meta.weight(.semibold))
         .frame(minHeight: 44)
+    }
+  }
+}
+
+/// Mirrors `MessageBubble`: a trailing prompt bubble, then a leading multi-line reply.
+private struct TranscriptSkeleton: View {
+  private static let replyFractions: [[CGFloat]] = [[0.95, 0.9, 0.6], [0.92, 0.85, 0.9, 0.45]]
+
+  var body: some View {
+    SkeletonContainer(label: "Loading conversation") {
+      VStack(spacing: Tokens.Spacing.l) {
+        ForEach(Self.replyFractions.indices, id: \.self) { turn in
+          SkeletonBlock(
+            widthFraction: Tokens.Layout.promptWidthFraction * 0.7, height: 40, alignment: .trailing,
+            cornerRadius: Tokens.Radius.md)
+          VStack(spacing: Tokens.Spacing.s) {
+            ForEach(Self.replyFractions[turn].indices, id: \.self) { line in
+              SkeletonBlock(widthFraction: Self.replyFractions[turn][line])
+            }
+          }
+        }
+      }
+      .frame(maxWidth: Tokens.Layout.transcriptMaxWidth)
+      .padding(.horizontal, Tokens.Spacing.m)
+      .padding(.vertical, Tokens.Spacing.s)
     }
   }
 }

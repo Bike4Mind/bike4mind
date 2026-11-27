@@ -116,6 +116,12 @@ describe('buildAdminUsersMatch', () => {
     ]);
   });
 
+  it('matches the accounts that signed up through one client, stating the partial index filter', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ signupClient: 'b4m_app_0011aabb' }, context))).toEqual([
+      { signupClientId: { $type: 'string', $eq: 'b4m_app_0011aabb' } },
+    ]);
+  });
+
   it('maps the signup chart window, end exclusive, alongside a signed-up window', () => {
     expect(
       conditionsOf(

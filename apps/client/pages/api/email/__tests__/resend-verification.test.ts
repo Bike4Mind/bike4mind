@@ -39,9 +39,13 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   buildEmailLogoImg: () => '',
   escapeHtml: (value: string) => value,
 }));
-vi.mock('@bike4mind/database', () => ({ userRepository: {}, withTransaction: (fn: () => Promise<unknown>) => fn() }));
+vi.mock('@bike4mind/database', async () => ({
+  userRepository: {},
+  ...(await import('@server/utils/__tests__/fakeTransaction')),
+}));
 vi.mock('@bike4mind/services', () => ({ userService: { resendEmailVerification: mockResend } }));
 
+import { fakeTransaction } from '@server/utils/__tests__/fakeTransaction';
 import handler from '../resend-verification';
 
 function invoke(isAdmin: boolean) {
@@ -57,6 +61,7 @@ describe('POST /api/email/resend-verification', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeTransaction.reset();
     mockResend.mockImplementation(async (_params: unknown, adapters: Adapters) => {
       await adapters.mailer.sendEmailVerificationEmail({ username: 'ada', email: 'ada@example.com' }, 'tok');
     });
@@ -142,5 +147,61 @@ describe('POST /api/email/resend-verification', () => {
     expect(mockPublish).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'ada@example.com', subject: 'Verify Your Email Address' })
     );
+  });
+
+  describe('when mail is configured', () => {
+    beforeEach(() => {
+      mockStatus.mockReturnValue({
+        configured: true,
+        transport: 'ses',
+        missingSecrets: [],
+        optionalSecrets: [],
+        secrets: { MAIL_FROM: true },
+      });
+    });
+
+    it('publishes once when the transaction callback is retried', async () => {
+      fakeTransaction.outcome = 'retryOnce';
+      const { res, done } = invoke(false);
+      await done;
+
+      expect(fakeTransaction.runs).toBe(2);
+      expect(mockResend).toHaveBeenCalledTimes(2);
+      expect(mockPublish).toHaveBeenCalledTimes(1);
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('publishes nothing and sends no success response when the transaction aborts', async () => {
+      fakeTransaction.outcome = 'abort';
+      const { res, done } = invoke(false);
+
+      await expect(done).rejects.toThrow('Transaction aborted');
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(res._isEndCalled()).toBe(false);
+    });
+
+    it('publishes only after the transaction callback has finished', async () => {
+      let callbackDone = false;
+      mockResend.mockImplementation(async (_params: unknown, adapters: Adapters) => {
+        await adapters.mailer.sendEmailVerificationEmail({ username: 'ada', email: 'ada@example.com' }, 'tok');
+        expect(mockPublish).not.toHaveBeenCalled();
+        callbackDone = true;
+      });
+      mockPublish.mockImplementation(async () => {
+        expect(callbackDone).toBe(true);
+      });
+      const { done } = invoke(false);
+      await done;
+
+      expect(mockPublish).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails the request when the publish after commit fails', async () => {
+      mockPublish.mockRejectedValueOnce(new Error('bus down'));
+      const { res, done } = invoke(false);
+
+      await expect(done).rejects.toThrow('bus down');
+      expect(res._isEndCalled()).toBe(false);
+    });
   });
 });

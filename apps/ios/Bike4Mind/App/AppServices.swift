@@ -308,6 +308,27 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+
+  @ObservationIgnored private var sessionsState: (environment: ServerEnvironment, model: SessionsViewModel)?
+
+  /// The one sessions list the drawer and the Notebooks screen share, so a rename or delete in one shows in
+  /// the other. One per server.
+  var sessionsModel: SessionsViewModel {
+    let environment = auth.environment
+    if let sessionsState, sessionsState.environment == environment { return sessionsState.model }
+    let widgets = widgets
+    let model = SessionsViewModel(
+      api: api, cache: sessionListCache,
+      onDeleted: { [weak self] sessionID in
+        self?.transcriptCache.remove(sessionID: sessionID)
+        await widgets.recordDeleted(sessionID: sessionID)
+      },
+      onRenamed: { sessionID, name in
+        await widgets.recordRename(sessionID: sessionID, title: name)
+      })
+    sessionsState = (environment, model)
+    return model
+  }
   var transcriptCache: SettledTranscriptCache { current.transcriptCache }
   var sessionHandoff: SessionHandoffClient {
     SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
