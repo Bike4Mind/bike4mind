@@ -1696,8 +1696,11 @@ describe('GET /api/publish/serve - link-card image and share-token card', () => 
     );
   });
 
-  it('gives a reply reached by token the author card only', async () => {
-    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'private' }));
+  it.each([
+    ['public', {}],
+    ['private', { visibility: 'private' }],
+  ])('gives a %s reply reached by token the author card only', async (_label, over) => {
+    mockArtifactFindOne.mockReturnValue(reply(over));
 
     const { res, promise } = run(['a', 'tok123']);
     await promise;

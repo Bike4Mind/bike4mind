@@ -759,23 +759,25 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
-    // Same open-public / ungated-share split as the bundle wrapper's shareMeta. The page is
-    // already server-rendered text, so it needs no noscript excerpt.
+    // Same open-public / ungated-share split as the bundle wrapper's shareMeta: a token link
+    // to an open-public artifact still gets only the token card. The page is already
+    // server-rendered text, so it needs no noscript excerpt.
     const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
     const canonicalUrl = `${docOrigin}/p/${sourcePrefix}/${artifact.publicId}`;
-    const shareMeta = isOpenPublic
-      ? prepareShareMeta({
-          title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
-          description: artifact.description,
-          bodyForExcerpt: viewerExcerptSource(artifact),
-          canonicalUrl,
-          rawUrl: `${canonicalUrl}?format=raw`,
-          siteName: process.env.APP_NAME || '',
-          image: defaultShareImage(process.env.APP_NAME),
-        })
-      : isShare && !artifact.accessGate
-        ? shareTokenMeta(artifact)
-        : null;
+    const shareMeta =
+      !isShare && isOpenPublic
+        ? prepareShareMeta({
+            title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
+            description: artifact.description,
+            bodyForExcerpt: viewerExcerptSource(artifact),
+            canonicalUrl,
+            rawUrl: `${canonicalUrl}?format=raw`,
+            siteName: process.env.APP_NAME || '',
+            image: defaultShareImage(process.env.APP_NAME),
+          })
+        : isShare && !artifact.accessGate
+          ? shareTokenMeta(artifact)
+          : null;
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
       noReferrer: isShare,
