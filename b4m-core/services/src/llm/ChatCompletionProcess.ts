@@ -75,6 +75,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  withoutNonOwnerSessionAuthoring,
   respondFromWorkspace,
   respondFromCoreTutorial,
   createReasoningWithholder,
@@ -2544,7 +2545,7 @@ export class ChatCompletionProcess {
         return;
       }
       const workspaceSession = await applyWorkspaceSessionSettings(
-        loadedSession,
+        withoutNonOwnerSessionAuthoring(loadedSession, this.user.id),
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
