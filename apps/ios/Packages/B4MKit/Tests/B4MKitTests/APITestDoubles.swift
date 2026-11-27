@@ -63,7 +63,9 @@ actor FakeAPI: B4MAPI {
     renames.append((id, name))
     if holdingMutations { await withCheckedContinuation { heldMutations.append($0) } }
     if let renameFailure { throw renameFailure }
-    let existing = sessionsByID[id] ?? SessionSummary(
+    let existing =
+      sessionsByID[id]
+      ?? SessionSummary(
         id: id, name: name, lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
     let renamed = SessionSummary(
       id: id, name: name, lastUsedModel: existing.lastUsedModel, firstCreated: existing.firstCreated,
