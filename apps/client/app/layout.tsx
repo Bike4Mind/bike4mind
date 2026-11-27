@@ -7,7 +7,6 @@ import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
 import { gaBootstrapScript, getGaMeasurementIds } from './utils/gaConsentBootstrap';
 import { authFragmentCaptureScript } from './utils/authParams';
-import { shareFragmentCaptureScript } from './utils/shareFragment';
 import { Metadata } from 'next';
 
 // Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
@@ -96,7 +95,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         {/* Before the GA tag below: its page_view records the full URL. */}
         <script dangerouslySetInnerHTML={{ __html: authFragmentCaptureScript() }} />
-        <script dangerouslySetInnerHTML={{ __html: shareFragmentCaptureScript() }} />
         <ColorSchemeScript />
         {GA_MEASUREMENT_IDS.length > 0 && (
           <>
