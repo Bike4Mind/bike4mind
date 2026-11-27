@@ -33,10 +33,10 @@ export function PromptStep({ step, sessionId, quests, complete, setAnchor }: Tut
     input.requestFocus();
   }, [sessionId, step.prompt]);
 
-  // Turn 0 is sent from the host's start box and may still be in flight, so it is pasted only on request
-  // (a resume whose opening never landed). Never over text the user is typing.
+  // Every prompt step starts with its message in the box, never over text the user is typing. A turn already in
+  // flight is safe to paste over: once it lands, the effect below clears the stale copy.
   useEffect(() => {
-    if (step.turn !== 0 && !sent && !useChatInput.getState().chatInputValue.trim()) paste();
+    if (!sent && !useChatInput.getState().chatInputValue.trim()) paste();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -72,7 +72,7 @@ export function PromptStep({ step, sessionId, quests, complete, setAnchor }: Tut
         </Typography>
       ) : (
         <Button size="sm" variant="plain" onClick={paste} data-testid="tutorial-step-paste">
-          {step.turn === 0 ? 'Paste the message' : 'Paste it again'}
+          Paste it again
         </Button>
       )}
     </Stack>
