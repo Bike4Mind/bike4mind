@@ -4,6 +4,7 @@ import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclus
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
+import type { UrlProvenance } from './urlProvenance';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
@@ -123,6 +124,11 @@ export interface ToolContext {
    */
   questId?: string;
   requestConfirmation?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  /**
+   * The URLs this turn has seen in text the model did not write. When set, web_fetch and edit_image
+   * fetch only those; when absent (hosts that do not track it) they fetch any URL.
+   */
+  urlProvenance?: UrlProvenance;
   slackDestination?: { workspaceId: string; channelId: string; threadTs: string };
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {

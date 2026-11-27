@@ -9,6 +9,7 @@ import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
 import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 import { refuseFetch, resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
+import { URL_NOT_IN_CONVERSATION_MESSAGE } from '../../base/urlProvenance';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
@@ -475,6 +476,11 @@ export const webFetchTool: ToolDefinition = {
     toolFn: async value => {
       const params = value as WebFetchParams;
       Logger.globalInstance.log('🌐 WebFetch Tool: Starting fetch for URL:', params.url);
+
+      if (context.urlProvenance && !context.urlProvenance.allows(params.url)) {
+        context.logger.warn('WebFetch refused a URL not present in the conversation');
+        throw new ExpectedToolError(URL_NOT_IN_CONVERSATION_MESSAGE);
+      }
 
       try {
         await context.statusUpdate({}, `Fetching content from ${params.url}...`);

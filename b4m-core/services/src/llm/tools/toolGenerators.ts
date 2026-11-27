@@ -53,6 +53,7 @@ export const generateTools = (
     apiKeyId,
     questId,
     requestConfirmation,
+    urlProvenance,
     slackDestination,
     numberCitables,
     decide,
@@ -79,6 +80,7 @@ export const generateTools = (
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
     requestConfirmation?: ToolContext['requestConfirmation'];
+    urlProvenance?: ToolContext['urlProvenance'];
     slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
@@ -114,6 +116,7 @@ export const generateTools = (
     sessionId,
     questId,
     requestConfirmation,
+    urlProvenance,
     slackDestination,
     logger,
     db,

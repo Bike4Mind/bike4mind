@@ -4,6 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import { isObjectIdShaped } from '../../base/objectId';
+import { URL_NOT_IN_CONVERSATION_MESSAGE } from '../../base/urlProvenance';
 import { resolveAttachmentLakeAccess } from '../../base/resolveAttachmentLakeAccess';
 import { resolveOwnedGeneratedImageUrl } from '../../base/resolveOwnedGeneratedImage';
 import {
@@ -24,6 +25,7 @@ import {
   type OpenAIImageBackground,
   type GeneratedAssetLineageEntry,
   resolveLegacyImageModel,
+  ExpectedToolError,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -174,6 +176,9 @@ async function getGeneratedImageUrl(storageKey: string, context: ToolContext): P
  */
 async function resolveImageInputUrl(input: string, context: ToolContext): Promise<ResolvedImageUrl> {
   if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('data:')) {
+    if (!input.startsWith('data:') && context.urlProvenance && !context.urlProvenance.allows(input)) {
+      throw new ExpectedToolError(URL_NOT_IN_CONVERSATION_MESSAGE);
+    }
     // A literal caller-supplied URL - never trusted, even if it happens to share the
     // configured storage origin.
     return { url: input, trustConfiguredStorageOrigin: false };

@@ -45,6 +45,7 @@ const mockPlainFetch = vi.mocked(plainFetchScrape);
 import type { ToolContext } from '../../base/types';
 import { isExpectedToolError, type CitableSource } from '@bike4mind/common';
 import { aggregateWebFetchContentTelemetry } from '../../../../telemetry';
+import { UrlProvenance, URL_NOT_IN_CONVERSATION_MESSAGE } from '../../base/urlProvenance';
 
 const CAP = 50_000;
 
@@ -254,6 +255,37 @@ describe('webFetchTool result + citable', () => {
     expect(citable.metadata.truncated).toBe(false);
     expect(citable.metadata.originalContentLength).toBe(10_000);
     expect(citable.metadata.contentLength).toBe(10_000);
+  });
+});
+
+describe('webFetchTool URL provenance', () => {
+  function contextWith(provenance: UrlProvenance) {
+    return { ...makeContext(vi.fn(async () => {})), urlProvenance: provenance } as ToolContext;
+  }
+
+  it('refuses a URL the conversation never contained, without fetching', async () => {
+    const provenance = new UrlProvenance();
+    provenance.recordText('Please read https://example.com/doc');
+    const call = webFetchTool
+      .implementation(contextWith(provenance), {})
+      .toolFn({ url: 'https://example.com/doc?q=secret' });
+
+    await expect(call).rejects.toSatisfy(
+      (err: unknown) => isExpectedToolError(err) && (err as Error).message === URL_NOT_IN_CONVERSATION_MESSAGE
+    );
+    expect(scrapeUrl).not.toHaveBeenCalled();
+  });
+
+  it('fetches a URL the conversation contained', async () => {
+    scrapeMarkdown = 'page';
+    const provenance = new UrlProvenance();
+    provenance.recordText('Please read https://example.com/doc.');
+    const result = await webFetchTool
+      .implementation(contextWith(provenance), {})
+      .toolFn({ url: 'https://example.com/doc' });
+
+    expect(result).toContain('page');
+    expect(scrapeUrl).toHaveBeenCalledTimes(1);
   });
 });
 

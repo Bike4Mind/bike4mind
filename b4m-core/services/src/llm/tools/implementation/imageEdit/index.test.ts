@@ -10,6 +10,7 @@ import { ImageModerationBlockedError as OpenAIModerationBlockedError } from '@bi
 import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { UrlProvenance, URL_NOT_IN_CONVERSATION_MESSAGE } from '../../base/urlProvenance';
 
 // The agent-tool edit_image path must run the SAME moderation gate the
 // queue-handler ImageEdit service uses, before context.imageGenerateStorage.upload().
@@ -754,6 +755,43 @@ describe('imageEditTool - self-host storage provenance (source and mask)', () =>
 
     expect(mockAxiosGet).toHaveBeenCalled();
     expect(mockEditSpy).toHaveBeenCalled();
+  });
+});
+
+describe('imageEditTool - URL provenance', () => {
+  beforeEach(() => {
+    mockAxiosGet.mockReset();
+    mockEditSpy.mockReset();
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  function toolFnWith(seen: string) {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+    context.urlProvenance = new UrlProvenance();
+    context.urlProvenance.recordText(seen);
+    return imageEditTool.implementation(context, { model: ImageModels.GPT_IMAGE_1_5 } as GenerateImageToolCall).toolFn;
+  }
+
+  it('refuses a source image URL the conversation never contained, without downloading', async () => {
+    const toolFn = toolFnWith('edit https://images.test/cat.png');
+    await expect(toolFn({ image: 'https://images.test/cat.png?d=secret', prompt: 'x' })).rejects.toThrow(
+      URL_NOT_IN_CONVERSATION_MESSAGE
+    );
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mask URL the conversation never contained', async () => {
+    const toolFn = toolFnWith('nothing here');
+    await expect(toolFn({ image: PNG_DATA_URL, mask: 'https://images.test/mask.png', prompt: 'x' })).rejects.toThrow(
+      URL_NOT_IN_CONVERSATION_MESSAGE
+    );
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a data URL', async () => {
+    const toolFn = toolFnWith('nothing here');
+    await expect(toolFn({ image: PNG_DATA_URL, prompt: 'x' })).resolves.toMatch(/stop-after-dispatch/);
   });
 });
 

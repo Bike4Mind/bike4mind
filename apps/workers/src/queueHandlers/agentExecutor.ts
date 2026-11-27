@@ -120,6 +120,7 @@ import {
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
+  UrlProvenance,
   resolveToolAvailability,
   ServerAgentStore,
   ServerSubagentOrchestrator,
@@ -2127,7 +2128,9 @@ async function runExecution(
     const inlinedAttachmentIds: string[] = [];
     const fullyInlinedAttachmentIds: string[] = [];
 
+    const urlProvenance = new UrlProvenance();
     const toolDeps: ToolBuilderDeps = {
+      urlProvenance,
       userId: execution.userId,
       user: user as IUserDocument,
       getEntitlements: () => getUserEntitlements(user),
@@ -2725,6 +2728,7 @@ async function runExecution(
     // Restore from checkpoint if continuing
     if (!isNewExecution && execution.checkpoint) {
       agent.fromCheckpoint(execution.checkpoint as AgentCheckpoint);
+      urlProvenance.recordMessages((execution.checkpoint as AgentCheckpoint).messages ?? []);
       logger.info('[Checkpoint] Restored agent from checkpoint', {
         iteration: (execution.checkpoint as AgentCheckpoint).iteration,
       });
@@ -3576,6 +3580,8 @@ async function runExecution(
           ? composeFirstIterationMessage(firstIterationQuery, materialized)
           : firstIterationQuery;
 
+      urlProvenance.recordMessages(previousMessages);
+      urlProvenance.recordText([firstIterationMessage, systemContext]);
       resetLastIterationConfidence();
       // The watchdog above only checks BETWEEN iterations, so a single iteration whose LLM
       // call runs longer than the remaining Lambda time would otherwise be hard-killed
@@ -4777,7 +4783,11 @@ async function processSubagentDispatch(
       ),
       deniedTools: child.deniedTools ?? [],
     };
+    // A subagent's task is written by its parent model, so its URLs are the root run's.
+    const urlProvenance = new UrlProvenance();
+    urlProvenance.recordMessages((mediaRoot?.checkpoint as AgentCheckpoint | undefined)?.messages ?? []);
     const toolDeps: ToolBuilderDeps = {
+      urlProvenance,
       userId: child.userId,
       user: user as IUserDocument,
       getEntitlements: () => getUserEntitlements(user),
