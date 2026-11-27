@@ -56,10 +56,10 @@ describe('getDiscoveryCredentials', () => {
   });
 
   it('treats the unset-secret placeholder as unconfigured on either tier', async () => {
-    // DISCOVERY_ENV_KEYS is live on hosted, so on a stage where the secret was
-    // never set the placeholder would otherwise beat the AdminSettings key and
+    // The placeholder on the env tier must not beat the AdminSettings key, or
     // every call would go out as `Bearer not-configured`.
     const creds = await getDiscoveryCredentials(adapters(keys({ anthropic: 'not-configured' })), {
+      B4M_SELF_HOST: 'true',
       OPENAI_API_KEY: 'not-configured',
     });
 
@@ -105,14 +105,48 @@ describe('getDiscoveryCredentials', () => {
   });
 
   it('prefers the discovery-only env secrets over the demo-key tier', async () => {
-    const creds = await getDiscoveryCredentials(adapters(keys({ openai: 'demo-openai', xai: 'demo-xai' })), {
-      OPENAI_API_KEY: 'secret-openai',
+    const creds = await getDiscoveryCredentials(adapters(keys({ gemini: 'demo-gemini', xai: 'demo-xai' })), {
+      GEMINI_API_KEY: 'secret-gemini',
       XAI_API_KEY: '   ',
     });
 
-    expect(creds.openai).toBe('secret-openai');
+    expect(creds.gemini).toBe('secret-gemini');
     // A blank secret is not a credential, so the demo tier still wins.
     expect(creds.xai).toBe('demo-xai');
+  });
+
+  it.each([
+    ['openai', 'OPENAI_API_KEY'],
+    ['anthropic', 'ANTHROPIC_API_KEY'],
+  ] as const)('never uses the %s env value on hosted: the admin-setting key wins', async (provider, envVar) => {
+    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `admin-${provider}` })), {
+      [envVar]: 'stage-secret-sentinel',
+    });
+
+    expect(creds[provider]).toBe(`admin-${provider}`);
+  });
+
+  it.each([
+    ['openai', 'OPENAI_API_KEY'],
+    ['anthropic', 'ANTHROPIC_API_KEY'],
+  ] as const)('leaves %s unconfigured on hosted when only the env value is set', async (provider, envVar) => {
+    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: null })), {
+      [envVar]: 'stage-secret-sentinel',
+    });
+
+    expect(creds[provider]).toBeNull();
+  });
+
+  it.each([
+    ['openai', 'OPENAI_API_KEY'],
+    ['anthropic', 'ANTHROPIC_API_KEY'],
+  ] as const)('still prefers the %s .env value on self-host', async (provider, envVar) => {
+    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `admin-${provider}` })), {
+      B4M_SELF_HOST: 'true',
+      [envVar]: 'selfhost-env',
+    });
+
+    expect(creds[provider]).toBe('selfhost-env');
   });
 
   it('forwards skipCache to the key resolver and asks for nothing without it', async () => {
@@ -141,13 +175,17 @@ describe('getDiscoveryCredentials', () => {
     });
   });
 
-  it.each(Object.entries(DISCOVERY_ENV_KEYS))('prefers %s from its env secret %s', async (provider, envVar) => {
-    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `demo-${provider}` })), {
-      [envVar]: `secret-${provider}`,
-    });
+  it.each(Object.entries(DISCOVERY_ENV_KEYS))(
+    'prefers %s from its env secret %s on self-host',
+    async (provider, envVar) => {
+      const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `demo-${provider}` })), {
+        B4M_SELF_HOST: 'true',
+        [envVar]: `secret-${provider}`,
+      });
 
-    expect(creds[provider as keyof typeof DISCOVERY_ENV_KEYS]).toBe(`secret-${provider}`);
-  });
+      expect(creds[provider as keyof typeof DISCOVERY_ENV_KEYS]).toBe(`secret-${provider}`);
+    }
+  );
 
   it('leaves every unset provider null instead of inventing a placeholder', async () => {
     const allUnset = Object.fromEntries(Object.keys(keys()).map(field => [field, null])) as Partial<ResolvedKeys>;

@@ -13,7 +13,7 @@ import {
   resolveShadowSubstitute,
 } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
-import { batchAnthropicKeys } from '@server/billing/batchAnthropicKeys';
+import { batchSubmitKey } from '@server/billing/batchAnthropicKeys';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
@@ -85,7 +85,7 @@ const handler = baseApi({
   // The provider queues this work; its lifetime is independent of the HTTP request.
   await admitRequestCompletion(req, { holdSlot: false });
 
-  const [apiKey] = await batchAnthropicKeys();
+  const apiKey = await batchSubmitKey();
   if (!apiKey) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }

@@ -136,7 +136,8 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
 
   // ── External AI/LLM API Keys ───────────────────────────────────────────────
   ANTHROPIC_API_KEY: {
-    description: 'Anthropic Claude API key (system fallback; primary path uses per-user keys)',
+    description:
+      'Anthropic Claude API key (deployment secret; no longer a completion fallback, read only to drain in-flight batches)',
     rotationIntervalDays: 90,
     isAutomatic: false,
     rotationProcess: 'Generate new key in Anthropic console and update SST Secret',

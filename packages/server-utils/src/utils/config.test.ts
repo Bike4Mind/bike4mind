@@ -92,6 +92,23 @@ describe('Config eager-read hardening', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_URL'));
   });
 
+  it('resolves an unlinked ANTHROPIC_API_KEY to undefined instead of throwing on import', async () => {
+    const { ANTHROPIC_API_KEY: _omitted, ...withoutAnthropic } = NON_PREMIUM_BASE;
+    vi.doMock('sst', () => ({
+      Resource: new Proxy(withoutAnthropic as Record<string, unknown>, {
+        get(target, prop: string) {
+          if (prop in target) return target[prop];
+          throw new Error(`${prop} is not linked`);
+        },
+      }),
+    }));
+    mockWarn();
+
+    const { Config } = await import('./config');
+
+    expect(Config.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
   it('does not let one unlinked premium secret take down the hard-required reads', async () => {
     mockResourceWithUnlinked();
 

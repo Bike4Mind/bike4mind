@@ -212,6 +212,33 @@ describe('POST /api/data-lakes/rlm-answer - in-REPL retrieval credential', () =>
     expect(mockBuildDataLakeTools).not.toHaveBeenCalled();
   });
 
+  describe('sub-LLM Anthropic key', () => {
+    const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+
+    afterEach(() => {
+      if (originalAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+    });
+
+    it('does not fall back to the ANTHROPIC_API_KEY environment value', async () => {
+      process.env.ANTHROPIC_API_KEY = 'stage-secret-sentinel';
+      mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: null });
+
+      const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+      expect(res.statusCode).toBe(500);
+      expect(mockBuildDataLakeTools).not.toHaveBeenCalled();
+    });
+
+    it('refuses a placeholder key from the resolver', async () => {
+      mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'not-configured' });
+
+      const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
   // The trap this route used to sit in: the credential-less path 500'd, and setting
   // B4M_LOCAL_API_KEY was the obvious way to "fix" it - which would have run every
   // in-REPL retrieval as that key's principal instead of the caller's.

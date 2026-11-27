@@ -13,7 +13,14 @@ import {
   recordReplSandboxUnavailable,
 } from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { BadRequestError, ForbiddenError, getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
+import {
+  BadRequestError,
+  ForbiddenError,
+  getTextModelCost,
+  isPlaceholderApiKey,
+  type IMessage,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import {
   geminiThinkingOutputCap,
@@ -190,20 +197,20 @@ async function handleRlmAnswer(req: Request, res: Response) {
   // model that runs - for `global.anthropic.*` that's Bedrock (no Anthropic
   // API key needed; AWS creds handle it). For sub-LLM calls inside the REPL,
   // tools.ts uses the Anthropic SDK directly, so we need a direct Anthropic
-  // key. Fall back to env if the user-scoped key isn't configured (spike
-  // deployment is local-dev; production will route sub-LLM through Bedrock too).
+  // key. getEffectiveLLMApiKeys already covers the self-host .env fallback; the
+  // hosted stage secret is deliberately not read.
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
   };
   const userId = req.user?.id || 'system';
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
-  const subLlmAnthropicKey = apiKeyTable?.anthropic || process.env.ANTHROPIC_API_KEY || '';
-  if (!subLlmAnthropicKey) {
+  const subLlmAnthropicKey = apiKeyTable?.anthropic;
+  if (!subLlmAnthropicKey || isPlaceholderApiKey(subLlmAnthropicKey)) {
     return res.status(500).json({
       error:
         'No Anthropic API key available for sub-LLM calls. ' +
-        'Configure user/system Anthropic key or set ANTHROPIC_API_KEY env var.',
+        'Configure a user key or the platform Anthropic key in admin settings.',
     });
   }
 

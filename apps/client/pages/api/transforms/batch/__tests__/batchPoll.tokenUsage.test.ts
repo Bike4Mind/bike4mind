@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/billing/batchAnthropicKeys', () => ({
-  batchAnthropicKeys: async () => ['sk-test'],
+  batchPollKeys: async () => ['sk-test'],
   firstKeyHolding: async (keys: string[], read: (key: string) => Promise<unknown>) => ({
     key: keys[0],
     value: await read(keys[0]),
