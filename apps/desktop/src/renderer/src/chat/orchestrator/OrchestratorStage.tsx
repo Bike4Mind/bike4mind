@@ -139,6 +139,11 @@ export interface OrchestratorStageProps {
   onFocusAgentConsumed?(): void;
   /** An example quest picked on the empty stage: put its prompt in the composer. */
   onExampleQuest?(prompt: string): void;
+  /**
+   * Whether this session could start an agent (ChatShell's orchestrateCapable). False when only the
+   * orchestratorLabel override offers Agent View, so the empty stage says why none can start.
+   */
+  canStartAgents?: boolean;
   /** The panes and the view in each (orchestratorLayout.ts); one pane is the stage as a single view. */
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -190,6 +195,7 @@ const pulse = keyframes`
 export function OrchestratorStage({
   agents: rosterAgents,
   archivedAgents = NO_ARCHIVED,
+  canStartAgents = true,
   selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
@@ -651,6 +657,7 @@ export function OrchestratorStage({
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
               office={view === 'office'}
               archived={archivedAgents}
+              canStart={canStartAgents}
               presenting={presenting}
               onOpen={actions.open}
             />
@@ -708,12 +715,17 @@ interface EmptyStageProps {
   scene: ReactNode;
   office: boolean;
   archived: readonly ArchivedAgent[];
+  canStart: boolean;
   presenting: boolean;
   onOpen(id: string): void;
 }
 
+const CANNOT_START_HINT =
+  'This session cannot start agents. That needs a project folder, a model that supports tools, and room below the sub-session depth limit.';
+
 /** `plain` is the wording without the Tavern's Innkeeper, for the Office and for a stage with no scene. */
-function emptyStageHint(plain: boolean, archivedCount: number): string {
+function emptyStageHint(plain: boolean, archivedCount: number, canStart: boolean): string {
+  if (!canStart) return CANNOT_START_HINT;
   if (archivedCount > 0) {
     return plain
       ? 'Every agent has finished and been archived. Describe more work to start new ones.'
@@ -724,7 +736,7 @@ function emptyStageHint(plain: boolean, archivedCount: number): string {
     : 'No quests yet. Describe the work and the Innkeeper will split it across agents.';
 }
 
-function EmptyStage({ scene, office, archived, presenting, onOpen }: EmptyStageProps) {
+function EmptyStage({ scene, office, archived, canStart, presenting, onOpen }: EmptyStageProps) {
   const archivedList = archived.length > 0 && (
     <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
   );
@@ -737,7 +749,7 @@ function EmptyStage({ scene, office, archived, presenting, onOpen }: EmptyStageP
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {emptyStageHint(office, archived.length)}
+            {emptyStageHint(office, archived.length, canStart)}
           </Typography>
           {archivedList}
         </Box>
@@ -758,7 +770,7 @@ function EmptyStage({ scene, office, archived, presenting, onOpen }: EmptyStageP
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        {emptyStageHint(true, archived.length)}
+        {emptyStageHint(true, archived.length, canStart)}
       </Typography>
       {archivedList}
     </Box>

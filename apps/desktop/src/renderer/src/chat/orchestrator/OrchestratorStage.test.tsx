@@ -4,7 +4,7 @@ import type { ChatSession } from '@shared/chat';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
-import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
+import { OrchestratorStage, type OrchestratorStageProps, type OrchestratorViewProps } from './OrchestratorStage';
 import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
@@ -29,9 +29,10 @@ const onLayoutChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
-const renderStage = (agents: AgentView[]) =>
+const renderStage = (agents: AgentView[], extra: Partial<OrchestratorStageProps> = {}) =>
   themed.render(
     <OrchestratorStage
+      {...extra}
       agents={agents}
       layout={singlePaneLayout('table')}
       onLayoutChange={onLayoutChange}
@@ -125,6 +126,13 @@ describe('OrchestratorStage', () => {
       expect([...buttons].map(button => button.textContent)).toEqual(['Fix the parser', 'Write the docs']);
       act(() => buttons[1].click());
       expect(actions.open).toHaveBeenCalledWith('a1');
+    });
+
+    it('says why no agent can start when only the label offers the stage', async () => {
+      await renderStage([], { canStartAgents: false });
+      const empty = el('orchestrator-empty-state');
+      expect(empty.textContent).toContain('This session cannot start agents.');
+      expect(empty.textContent).not.toContain('Describe the work');
     });
 
     it('lists no archived agent titles while presenting', async () => {

@@ -2218,6 +2218,7 @@ export function ChatShell({
                     preparing={preparing}
                     background={backgroundJobs}
                     prSummaries={prSummaries}
+                    canStartAgents={orchestrateCapable}
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
