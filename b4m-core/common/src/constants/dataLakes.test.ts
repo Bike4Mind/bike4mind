@@ -20,7 +20,29 @@ import {
   MIN_DATA_LAKE_SLUG_LENGTH,
   MAX_DATA_LAKE_SLUG_LENGTH,
   DATA_LAKE_SLUG_REGEX,
+  isRegistryLakeKey,
+  registryOverridingSlugs,
 } from './dataLakes';
+
+describe('registry lake keys', () => {
+  it('isRegistryLakeKey matches every registry id and slug, and nothing else', () => {
+    for (const config of DATA_LAKES) {
+      expect(isRegistryLakeKey(config.id)).toBe(true);
+      expect(isRegistryLakeKey(config.slug)).toBe(true);
+    }
+    expect(isRegistryLakeKey('not-a-registry-lake')).toBe(false);
+  });
+
+  it('registryOverridingSlugs keeps only org-scoped lakes', () => {
+    const slugs = registryOverridingSlugs([
+      { slug: 'org-lake', organizationId: 'org-1' },
+      { slug: 'null-org', organizationId: null },
+      { slug: 'blank-org', organizationId: '' },
+      { slug: 'no-org' },
+    ]);
+    expect([...slugs]).toEqual(['org-lake']);
+  });
+});
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
 // hardcoded DATA_LAKES fallbacks so each case tests exactly the lakes it declares.

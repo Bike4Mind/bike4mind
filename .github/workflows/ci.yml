@@ -224,6 +224,10 @@ jobs:
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
+      # Linux runners cannot see a casing collision themselves, so check the tracked paths directly.
+      - name: Check tracked paths do not differ only in casing
+        run: bash scripts/check-no-case-collisions.sh
+
       # Added core migrations must carry a generator-made id (fresh UTC timestamp), so two PRs
       # cannot pick the same one. PR-only: the PR head gives the real fork point, and on push the
       # squash commit would make a long-lived PR's id look stale after it already passed here.

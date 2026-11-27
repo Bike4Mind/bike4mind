@@ -773,6 +773,9 @@ export interface ChatChildWaiting {
   summary?: string;
 }
 
+/** Marks a prompt the renderer drew before main stored it; main assigns the real id. */
+export const OPTIMISTIC_ID_PREFIX = 'pending-';
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -1574,6 +1577,11 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  /**
+   * The host the renderer listed this session from. Stamped by the client when a row arrives
+   * (renderer/src/host/sessionDirectory.ts); a host never sends it. Absent means the local host.
+   */
+  hostId?: string;
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
   messageCount: number;

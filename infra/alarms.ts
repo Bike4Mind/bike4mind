@@ -1801,7 +1801,7 @@ if (isMonitoredStage) {
    * a single error class to dominate.
    *
    * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
-   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * failure path of internal /process. The CLI SSE/WS, session turns and embed chat surfaces emit the same metric
    * under their own Surface value but are deliberately not alarmed until a base rate exists: their
    * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */

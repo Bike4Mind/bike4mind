@@ -137,6 +137,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions',
   },
+  createSessionTurn: {
+    method: 'POST',
+    path: '/api/v1/turns',
+  },
   createSkill: {
     method: 'POST',
     path: '/api/v1/skills',

@@ -4,9 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSessionSummary, OrchestratorLabel } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -107,6 +108,10 @@ const press = async (key: string, init: KeyboardEventInit = {}) => {
   });
   await settle();
 };
+
+beforeEach(() => {
+  Object.assign(window, { b4m: { host: localHostConnections() } });
+});
 
 afterEach(() => {
   act(() => root?.unmount());

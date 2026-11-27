@@ -21,6 +21,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { readSession } from '@server/sessions/readSession';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
@@ -37,8 +38,9 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
   // session still live. Matches the revokeSharing route, which wraps the sibling cascade for the
   // same reason; the service's own ordering comment already assumes a retry sees an all-or-nothing
   // state. That all-or-nothing is what sessionDeleteContract's 409 promises.
-  const newLastNotebook = await withTransaction(() =>
-    sessionService.deleteSession(
+  const { newLastNotebook, affectedUserIds } = await withTransaction(async () => {
+    const affected = new Set<string>();
+    const newLastNotebook = await sessionService.deleteSession(
       userId,
       { id },
       {
@@ -51,9 +53,12 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
           sessionAgentConfigs: sessionAgentConfigRepository,
         },
         logger: req.logger,
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
       }
-    )
-  );
+    );
+    return { newLastNotebook, affectedUserIds: [...affected] };
+  });
+  await rescopeUserSubscriptions(affectedUserIds, req.logger);
 
   // Published replies are snapshots that outlive their notebook; take the owner's down with it, as
   // the bulk DELETE /api/sessions does. After the delete, so a refused or conflicting one keeps them.

@@ -487,6 +487,7 @@ export const handler = withEventContext(async (event, logger) => {
       body: requestBody,
       logger,
       externalTools,
+      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
       callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });

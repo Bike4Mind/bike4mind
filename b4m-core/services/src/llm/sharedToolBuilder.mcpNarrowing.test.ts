@@ -448,6 +448,35 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
     expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search']));
   });
 
+  it('keeps an org-disallowed contributed tool out of parentTools only when its name is in the contributed set', () => {
+    const probe = {
+      name: 'contributed_probe',
+      implementation: () => ({
+        toolFn: async () => 'ok',
+        toolSchema: { name: 'contributed_probe', description: 'probe', parameters: { type: 'object', properties: {} } },
+      }),
+    };
+    const build = (contributedToolNames?: ReadonlySet<string>) => {
+      buildSharedTools(
+        { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+        callbacks,
+        {
+          enabledTools: ['dice_roll', 'contributed_probe'],
+          mcpToolsByServer,
+          externalTools: { contributed_probe: probe } as never,
+          contributedToolNames,
+          orgToolPolicy: { allowedProviders: null, allowedModels: null, allowedTools: ['dice_roll'] },
+        }
+      );
+      const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+        []) as ICompletionOptionTools[];
+      return parentTools.map(t => t.toolSchema.name);
+    };
+
+    expect(build(new Set(['contributed_probe']))).not.toContain('contributed_probe');
+    expect(build()).toContain('contributed_probe');
+  });
+
   it('routes an agent-only MCP tool into parentTools for delegation, denylist still applied', () => {
     buildSharedTools(
       { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },

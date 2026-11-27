@@ -12,6 +12,10 @@ const apiGet = vi.hoisted(() => vi.fn());
 const apiPost = vi.hoisted(() => vi.fn());
 const openProfile = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet, post: apiPost } }));
+vi.mock('@client/app/utils/oauthClientAPICalls', () => ({
+  OAUTH_CLIENTS_QUERY_KEY: 'admin-oauth-clients',
+  fetchOAuthClients: async () => [],
+}));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));

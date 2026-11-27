@@ -9,6 +9,7 @@ import { EMPTY_SIDEBAR_SECTIONS, type SidebarSectionsState } from '@shared/sideb
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -129,6 +130,7 @@ function typeSearch(text: string) {
 }
 
 beforeEach(() => {
+  Object.assign(window, { b4m: { host: localHostConnections() } });
   directory = `/work/project-${++projectSeq}`;
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -317,6 +319,7 @@ describe('SessionList local history', () => {
     unsubscribe.mockReset();
     Object.assign(window, {
       b4m: {
+        host: localHostConnections(),
         chat: {
           searchHistory,
           onHistoryChanged: (listener: () => void) => {

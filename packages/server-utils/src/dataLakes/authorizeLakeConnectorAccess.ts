@@ -1,6 +1,6 @@
 import { lakeConnectionOwnerForLake, type LakeConnectionOwner } from '@bike4mind/common';
 import { verifyOrgPermission, verifyOrgAdminRead } from '../utils/orgAccess';
-import { NotFoundError } from '../utils/errors';
+import { BadRequestError, NotFoundError } from '../utils/errors';
 
 type LakeConnectorAccessUser = { id: string; isAdmin: boolean };
 type LakeConnectorAccessLake = { organizationId?: string | null; createdByUserId: string };
@@ -36,6 +36,23 @@ export async function authorizeLakeConnectorAccess(
     assertPersonalLakeCreator(owner, user);
   }
   return owner;
+}
+
+/**
+ * Whether a connection's `connectedBy` user would still pass the connect door. Sync workers write
+ * lake files as that user, so every run re-asks; a refusal is false, any other failure throws.
+ */
+export async function connectingUserCanStillManage(
+  user: LakeConnectorAccessUser,
+  lake: LakeConnectorAccessLake
+): Promise<boolean> {
+  try {
+    await authorizeLakeConnectorAccess(user, lake);
+    return true;
+  } catch (error) {
+    if (error instanceof NotFoundError || error instanceof BadRequestError) return false;
+    throw error;
+  }
 }
 
 /**

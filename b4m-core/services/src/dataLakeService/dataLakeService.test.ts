@@ -378,8 +378,8 @@ describe('assertLakeAccess - hardcoded fallback lakes (no backing document)', ()
   });
 
   // #2510: the grant arm must NOT be skipped just because the slug matches a registry id.
-  // disambiguateSlug only reserves the org-less meta-tag (datalake:<slug>), so an ORG-SCOPED lake
-  // may legitimately carry a registry slug; skipping the query for it hands back the synthetic
+  // An ORG-SCOPED lake created before disambiguateSlug reserved registry keys may still carry a
+  // registry slug; skipping the query for it hands back the synthetic
   // registry lake in place of the caller's own grant-held lake - a wrong lake, not a denial.
   it('an org-scoped DB lake carrying a registry slug still resolves via a foreign-org grant', async () => {
     const shadow = lake({
@@ -3010,15 +3010,16 @@ describe('createDataLake', () => {
     });
   });
 
-  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
-    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+  it('suffixes a registry slug inside an org too, though the minted tag cannot collide', async () => {
+    // The tag is safe, but the slug is not: a later move out of the org would leave an org-less
+    // lake holding a registry key.
     const registrySlug = DATA_LAKES[0].slug;
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
     const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
 
     await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
 
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: `${registrySlug}-1` }));
   });
 });
 

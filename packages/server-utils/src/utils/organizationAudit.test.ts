@@ -17,6 +17,14 @@ describe('organization audit writer contract', () => {
       occurredAt: expect.any(Date),
     });
   });
+  it('stores an ObjectId organization id in its canonical lower-case form', async () => {
+    await recordOrganizationAuditEvent({
+      organizationId: '65A1B2C3D4E5F60718293A4B',
+      actorUserId: 'actor',
+      action: 'policy.updated',
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: '65a1b2c3d4e5f60718293a4b' }));
+  });
   it('rejects metadata and non-catalogued events at runtime', async () => {
     const input = {
       organizationId: 'org',

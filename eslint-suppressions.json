@@ -232,7 +232,7 @@
   "packages/database/src/models/infra/admin/SpaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/infra/email/EmailJobModel.ts": { "b4m/require-update-validators": { "count": 4 } },
   "packages/database/src/models/infra/email/EmailPreferencesModel.ts": { "b4m/require-update-validators": { "count": 4 } },
-  "packages/database/src/models/infra/email/EmailSendAttemptModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/EmailSendAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/infra/email/IngestedEmailModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/integrations/GitHubLakeAuthGrantModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/integrations/IntegrationHealthCheckModel.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -2110,11 +2110,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/elabs/voice/[id]/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -2634,7 +2629,7 @@
   },
   "apps/client/pages/api/projects/[id]/index.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 2
     }
   },
   "apps/client/pages/api/projects/[id]/invites.ts": {
@@ -4485,7 +4480,7 @@
   "b4m-core/slack/src/github/GitHubSlackNotifier.ts": {
     "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 5
     }
   },
   "b4m-core/slack/src/handlers/WorkflowStepHandler.ts": {

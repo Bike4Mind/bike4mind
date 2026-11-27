@@ -33,6 +33,10 @@ describe('projectService - listFiles', () => {
       fileIds: ['file-blocked', 'file-pending', 'file-clean-image', 'file-non-image'],
     });
     (mockFabFileRepo.update as Mock).mockResolvedValue(undefined);
+    // Everything listed is readable unless a test says otherwise.
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockImplementation(
+      async () => (await (mockFabFileRepo.findAllByIds as Mock)([])) ?? []
+    );
   });
 
   const adapters = () => ({
@@ -214,5 +218,21 @@ describe('projectService - listFiles', () => {
     expect(pending.fileUrl).toBeUndefined();
     expect(contentUrl).toHaveBeenCalledTimes(1);
     expect(mockStorage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('lists only the project files the caller can still read', async () => {
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      { id: 'file-non-image', fileName: 'kept.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
+      { id: 'file-clean-image', fileName: 'revoked.png', mimeType: 'image/png', moderationStatus: 'clean' },
+    ]);
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([{ id: 'file-non-image' }]);
+
+    const files = await listFiles(userId, { projectId }, adapters());
+
+    expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: userId }),
+      ['file-blocked', 'file-pending', 'file-clean-image', 'file-non-image']
+    );
+    expect(files.map(file => file.id)).toEqual(['file-non-image']);
   });
 });

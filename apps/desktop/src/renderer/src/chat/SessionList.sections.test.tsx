@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
 import { useSidebarSections } from './useSidebarSections';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -132,7 +133,7 @@ async function mount(
   mode: ChatSessionMode = 'chat'
 ) {
   bridge = fakeSidebarBridge(initial);
-  (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge };
+  (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge, host: localHostConnections() };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);

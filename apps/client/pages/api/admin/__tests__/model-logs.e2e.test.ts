@@ -8,7 +8,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { Quest, AdminSupportAccessAuditLog, adminSupportAccessAuditLogRepository } from '@bike4mind/database';
+import { Quest, User, AdminSupportAccessAuditLog, adminSupportAccessAuditLogRepository } from '@bike4mind/database';
 import { AdminSupportAccessAction } from '@bike4mind/common';
 
 // This route's fix is a MongoDB query-semantics question (does $elemMatch actually match an
@@ -450,6 +450,74 @@ describe('GET /api/admin/model-logs', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().total).toBe(1);
       expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+  });
+
+  describe('search scope for a support:read delegate', () => {
+    const TERM = 'scoped search term';
+    let customerId: string;
+    let adminOwnerIds: string[];
+
+    const seedLog = (userId: string | undefined, model: string) =>
+      Quest.create({
+        sessionId: `session-${model}`,
+        type: 'message',
+        timestamp: new Date(),
+        prompt: 'scoped',
+        promptMeta: {
+          ...(userId ? { session: { id: `session-${model}`, userId } } : {}),
+          model: { name: model },
+          prompt: `a prompt with the ${TERM}`,
+        },
+      });
+
+    const runAs = (user: Record<string, unknown>) => {
+      const { req, res } = run({ search: TERM });
+      (req as Record<string, unknown>).user = user;
+      return { req, res };
+    };
+
+    beforeEach(async () => {
+      const makeUser = (name: string, admin: Record<string, unknown> = {}) =>
+        User.create({ username: name, name, email: `${name}@example.com`, aupAcceptedVersion: '2026-01-01', ...admin });
+      customerId = (await makeUser('customer')).id;
+      adminOwnerIds = [
+        (await makeUser('fulladmin', { isAdmin: true })).id,
+        (await makeUser('delegated', { adminPermissions: ['support:read'] })).id,
+        (await makeUser('roled', { adminRoleIds: [new mongoose.Types.ObjectId()] })).id,
+      ];
+      await seedLog(customerId, 'customer-model');
+      for (const [i, ownerId] of adminOwnerIds.entries()) await seedLog(ownerId, `admin-model-${i}`);
+      // Written past the schema, which requires the recorded owner that older logs lack.
+      await Quest.collection.insertOne({
+        sessionId: 'session-ownerless',
+        type: 'message',
+        timestamp: new Date(),
+        deletedAt: null,
+        promptMeta: { model: { name: 'ownerless-model' }, prompt: `a prompt with the ${TERM}` },
+      });
+    });
+
+    it('leaves logs owned by accounts with admin access, and owner-less logs, out of the page and the total', async () => {
+      const { req, res } = runAs({ id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] });
+      await handler(req, res);
+      const body = res._getJSONData();
+      expect(body.total).toBe(1);
+      expect(body.logs.map((log: { modelName: string }) => log.modelName)).toEqual(['customer-model']);
+    });
+
+    it('serves a full admin every matching log', async () => {
+      const { req, res } = runAs({ id: 'admin1', isAdmin: true });
+      await handler(req, res);
+      expect(res._getJSONData().total).toBe(adminOwnerIds.length + 2);
+    });
+
+    it('keeps browsing without a search unscoped for a delegate', async () => {
+      const { req, res } = createMocks({ method: 'GET', query: { model: 'admin-model-0' } });
+      (req as Record<string, unknown>).user = { id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] };
+      (req as Record<string, unknown>).logger = { error: vi.fn() };
+      await handler(req, res);
+      expect(res._getJSONData().total).toBe(1);
     });
   });
 });

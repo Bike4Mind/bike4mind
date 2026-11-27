@@ -156,9 +156,21 @@ export interface NotebookImportAdapters {
    * would silently admit files that door refuses.
    */
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+  /**
+   * The subset of `keys` the importing user may reference as message media (findImportableMediaKeys
+   * in server-utils). Required: export, signed-URL and account-erasure paths trust a message's
+   * `images`, so a key from the file is written only once it is proven the user's own.
+   */
+  findOwnedMediaKeys: (keys: string[], userId: string) => Promise<Set<string>>;
   logger: ILogger;
   generateId: () => string;
 }
+
+/** Nothing validates the uploaded file's messages, so `images` may hold anything. */
+const imageKeys = (message: ExportedChatMessage): string[] =>
+  Array.isArray(message.images)
+    ? message.images.filter((key): key is string => typeof key === 'string' && key.length > 0)
+    : [];
 
 /** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
  * know would otherwise fail the write and lose the file. */
@@ -586,9 +598,17 @@ export class NotebookImportService {
         return null;
 
       case 'overwrite': {
+        // Resolved before the delete: the messages it removes may be what proves the user's keys.
+        const ownedImages = await this.ownedImageKeys(notebook.chatHistory, existingSession.userId);
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
+        await this.importChatHistory(
+          notebook.chatHistory,
+          existingSession.id,
+          existingSession.userId,
+          options,
+          ownedImages
+        );
 
         const imported = await this.importAttachments(notebook, existingSession.userId, existingSession.id, options);
 
@@ -655,8 +675,10 @@ export class NotebookImportService {
     chatHistory: ExportedChatMessage[],
     sessionId: string,
     ownerUserId: string,
-    options: NotebookImportOptions
+    options: NotebookImportOptions,
+    ownedImages?: Set<string>
   ): Promise<void> {
+    ownedImages ??= await this.ownedImageKeys(chatHistory, ownerUserId);
     const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
       // A generated id is not a valid key for the message store; omit the field so it assigns one.
       ...(options.preserveIds && message.id && { id: message.id }),
@@ -667,7 +689,7 @@ export class NotebookImportService {
       reply: message.reply,
       replies: message.replies,
       questMasterReply: message.questMasterReply,
-      images: message.images || [],
+      images: imageKeys(message).filter(key => ownedImages.has(key)),
       fabFileIds: message.attachedFiles || [],
       // The store requires the owning session on promptMeta. The export carries metrics only,
       // and an imported message belongs to the new notebook, so this is rebuilt rather than
@@ -689,6 +711,17 @@ export class NotebookImportService {
     }));
 
     await this.adapters.chatHistoryRepository.bulkCreate(chatItems);
+  }
+
+  private async ownedImageKeys(chatHistory: ExportedChatMessage[], userId: string): Promise<Set<string>> {
+    const requested = [...new Set(chatHistory.flatMap(imageKeys))];
+    if (requested.length === 0) return new Set();
+    const owned = await this.adapters.findOwnedMediaKeys(requested, userId);
+    const dropped = requested.filter(key => !owned.has(key)).length;
+    if (dropped > 0) {
+      this.adapters.logger.warn('Dropped imported message images not owned by the importing user', { dropped });
+    }
+    return owned;
   }
 
   private async importKnowledgeFiles(knowledgeFiles: ExportedKnowledgeFile[], targetUserId: string): Promise<string[]> {

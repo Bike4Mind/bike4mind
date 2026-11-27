@@ -113,6 +113,7 @@ function makeService(attachmentAdapters: Partial<Record<string, unknown>> = {}) 
     createArtifact: async () => null,
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async () => ({ id: USER }) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
