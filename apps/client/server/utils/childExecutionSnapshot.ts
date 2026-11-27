@@ -38,7 +38,7 @@ export type ChildExecutionSnapshot = z.infer<typeof ChildExecutionSnapshotSchema
 type PersistedResult = { answer?: string; steps?: IAgentStep[]; totalIterations?: number };
 type PersistedCheckpoint = { steps?: IAgentStep[]; iteration?: number };
 
-/** `isOwner` false (a session share holder) blanks tool output in every nested step, see redactAgentStepsForViewer. */
+/** `isOwner` false (a session share holder) strips tool output, tool input and confidence text from every nested step, see redactAgentStepsForViewer. */
 export async function buildChildExecutionSnapshots(
   parentExecutionId: string,
   { isOwner }: { isOwner: boolean },
