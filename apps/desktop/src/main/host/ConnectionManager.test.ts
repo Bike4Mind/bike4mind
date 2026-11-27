@@ -295,6 +295,18 @@ describe('ConnectionManager: connection states', () => {
     expect(state()).toMatchObject({ status: 'connected' });
   });
 
+  it("does not charge the connector's prepare step to the connect timeout", async () => {
+    const { state, host, manager } = setUp({ connect: false, tuning: { connectTimeoutMs: 10_000 } });
+    host.prepareDelayMs = 25_000;
+    host.connectDelayMs = 5_000;
+    manager.connect('devbox');
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(state()).toEqual({ status: 'connecting' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+    expect(host.connections).toHaveLength(1);
+  });
+
   it('retries at once on wake instead of waiting out the backoff', async () => {
     const { state, wake } = setUp({
       tuning: { backoff: { baseMs: 60_000, capMs: 60_000 } },

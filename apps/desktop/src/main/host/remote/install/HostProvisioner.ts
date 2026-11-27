@@ -86,9 +86,11 @@ export class HostProvisioner {
   constructor(private readonly options: HostProvisionerOptions) {}
 
   /**
-   * Called by the host's connector before it opens a connection through `alias`. Resolves when the
-   * connection may go ahead; rejects with HostConnectError (ssh failed: retried; the machine cannot
-   * run the host program: failed) or HostNeedsUserError. A probe answer it cannot read lets the
+   * Called by the host's connector before it opens a connection through `alias`, outside the
+   * connect timeout (the probe and the install have bounds of their own, HostInstallerTimeouts);
+   * a quiet install reports install progress while the host shows `connecting` or `reconnecting`.
+   * Resolves when the connection may go ahead; rejects with HostConnectError (ssh failed: retried;
+   * the machine cannot run the host program: failed) or HostNeedsUserError. A probe answer it cannot read lets the
    * connection go ahead, so the connection itself reports what is wrong.
    */
   beforeConnect(hostId: string, alias: string): Promise<void> {

@@ -14,6 +14,7 @@ import { isHostVersion } from './hostArtifact';
  *   versions/<version>.tmp/  an install in progress; removed by the next install
  *   bin/b4m-host             the launcher REMOTE_CONNECT_COMMAND (sshCommand.ts) runs
  *   install.lock             a symlink to `<token>-<epoch seconds>`; one install at a time
+ *   install.lock.<token>     an abandoned lock being cleared; swept once older than the stale age
  */
 
 /** Node.js paths the installer writes into a launcher: absolute, no quote or control character. */
@@ -167,7 +168,8 @@ const LAUNCHER_END = 'B4M_LAUNCHER_END';
 /**
  * The script head, everything before the upload. Takes the install lock (waiting for a live one,
  * clearing an abandoned one), and on any exit removes this install's unfinished files and releases
- * it. Also clears what an install killed before its trap ran left behind.
+ * it. Also clears what an install killed before its trap ran left behind, abandoned locks another
+ * install was clearing among them.
  */
 function lockedHead(input: LockedScriptInput): string {
   const wait = input.lockWaitSeconds ?? INSTALL_LOCK_WAIT_SECONDS;
@@ -219,6 +221,14 @@ while :; do
   sleep 1
   waited=$((waited + 1))
 done
+for aside in "$LOCK".*; do
+  if [ -L "$aside" ]; then
+    since=$(readlink "$aside" 2>/dev/null || true)
+    since=\${since##*-}
+    case $since in ''|*[!0-9]*) since=0 ;; esac
+    if [ $(( $(date +%s) - since )) -gt ${INSTALL_LOCK_STALE_SECONDS} ]; then rm -f "$aside"; fi
+  fi
+done
 for leftover in "$H/versions"/*.tmp "$H/versions"/*.tmp.tar "$H/bin"/b4m-host.*.tmp; do
   if [ -e "$leftover" ]; then rm -rf "$leftover"; fi
 done
@@ -230,8 +240,9 @@ done
  * reports the expected version, renames it into place, then (unless `activate` is false) replaces
  * the launcher (written beside it and renamed, so a connect never runs half a launcher) and prunes
  * every other version except the running daemon's. Prints `b4m-install phase <name>` as it moves
- * on, and `b4m-install error <code>` before failing for a reason of its own. Re-running it after any interruption converges:
- * a version already in place and working is kept instead of unpacked again.
+ * on, and `b4m-install error <code>` before failing for a reason of its own. Re-running it after
+ * any interruption converges: a version already in place and working is kept instead of unpacked
+ * again.
  *
  * The upload is a here-document inside the `if`, so the shell has read all of it before running
  * any of that block: an upload cut short is a syntax error that runs nothing, and the lock and the

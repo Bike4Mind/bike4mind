@@ -350,6 +350,20 @@ describe('HostInstaller.install', () => {
     expect(runLauncher('version').stdout.trim()).toBe('1.0.0');
     expect(lockHeld()).toBe(false);
   });
+
+  it('sweeps abandoned locks another install left aside, once they are older than the stale age', async () => {
+    mkdirSync(hostDirectory(), { recursive: true });
+    const now = Math.floor(Date.now() / 1000);
+    const old = join(hostDirectory(), `install.lock.${'cd'.repeat(8)}`);
+    const recent = join(hostDirectory(), `install.lock.${'ef'.repeat(8)}`);
+    symlinkSync(`${'ab'.repeat(16)}-1000`, old);
+    symlinkSync(`${'ab'.repeat(16)}-${now}`, recent);
+
+    await installFresh(installer(), artifact('1.0.0'));
+
+    const names = readdirSync(hostDirectory()).filter(name => name.startsWith('install.lock'));
+    expect(names).toEqual([`install.lock.${'ef'.repeat(8)}`]);
+  });
 });
 
 describe('HostInstaller refuses machines it cannot install on', () => {

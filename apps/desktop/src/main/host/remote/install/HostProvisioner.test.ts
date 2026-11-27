@@ -279,6 +279,37 @@ describe('HostProvisioner.install and update', () => {
     expect(installer.stopDaemon).toHaveBeenCalled();
   });
 
+  it('ends in failed with the reason when the old daemon will not stop after the switch', async () => {
+    const old = machine({ daemon: { state: 'running', version: '1.0.0' } });
+    const { provisioner, installer, reconnect, phases } = setup(old);
+    await provisioner.beforeConnect('h1', 'box');
+    const refusal = {
+      kind: 'installFailed' as const,
+      detail: 'Could not stop the host on box (it timed out)',
+      stderrTail: 'busy',
+    };
+    installer.stopDaemon.mockRejectedValueOnce(new HostInstallError(refusal));
+
+    await expect(provisioner.update('h1', { force: false })).resolves.toEqual({ status: 'failed', failure: refusal });
+    expect(phases().slice(-2)).toEqual(['restarting', 'failed']);
+    expect(reconnect).not.toHaveBeenCalled();
+
+    // The next connection probes again: this version is active behind the old daemon, so it goes
+    // ahead and the launcher's version check answers it (daemonVersionMismatch: needsUpdate).
+    installer.probe.mockResolvedValue({ ...old, launcher: { state: 'works', version: VERSION } });
+    await expect(provisioner.beforeConnect('h1', 'box')).resolves.toBeUndefined();
+    expect(installer.probe).toHaveBeenCalledTimes(3);
+    expect(installer.install).toHaveBeenCalledTimes(1);
+
+    // A second update only restarts.
+    await expect(provisioner.update('h1', { force: false })).resolves.toMatchObject({
+      status: 'installed',
+      restarted: true,
+    });
+    expect(installer.install).toHaveBeenCalledTimes(1);
+    expect(installer.stopDaemon).toHaveBeenCalledTimes(2);
+  });
+
   it('reports failures as a result and as progress', async () => {
     const { provisioner, installer, phases } = setup(machine({ hasTar: false }));
     await expect(provisioner.update('h1', { force: false })).resolves.toMatchObject({

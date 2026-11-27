@@ -14,7 +14,8 @@ export type SshHostDirectoryOptions = {
   listConfigHosts(): Promise<SshConfigListing>;
   /**
    * Runs before each connection through `alias` and may refuse it by rejecting, as the connector
-   * would (in Desktop, HostProvisioner.beforeConnect).
+   * would (in Desktop, HostProvisioner.beforeConnect). It is the connector's `prepare` step, so
+   * the time it takes is not charged to the connect timeout.
    */
   prepareConnection?(id: string, alias: string): Promise<void>;
   now?: () => number;
@@ -142,18 +143,30 @@ export class SshHostDirectory {
   }
 
   private connectorFor(id: string): HostConnector {
+    // prepare and connect pick the same alias: only a failure moves the host on to its next one.
+    const route = () => {
+      const record = this.records.find(candidate => candidate.id === id);
+      if (!record || record.aliases.length === 0) {
+        throw new HostConnectError(lostWith('No SSH alias in ~/.ssh/config reaches this host any more'));
+      }
+      const index = (this.nextRoute.get(id) ?? 0) % record.aliases.length;
+      return { alias: record.aliases[index], advance: () => this.nextRoute.set(id, index + 1) };
+    };
     return {
-      connect: async () => {
-        const record = this.records.find(candidate => candidate.id === id);
-        if (!record || record.aliases.length === 0) {
-          throw new HostConnectError(lostWith('No SSH alias in ~/.ssh/config reaches this host any more'));
+      prepare: async () => {
+        if (!this.options.prepareConnection) return;
+        const { alias, advance } = route();
+        try {
+          await this.options.prepareConnection(id, alias);
+        } catch (error) {
+          advance();
+          throw error;
         }
-        const index = (this.nextRoute.get(id) ?? 0) % record.aliases.length;
-        const alias = record.aliases[index];
-        const advance = () => this.nextRoute.set(id, index + 1);
+      },
+      connect: async () => {
+        const { alias, advance } = route();
         let transport: HostTransport;
         try {
-          await this.options.prepareConnection?.(id, alias);
           transport = await this.options.openTransport(alias);
         } catch (error) {
           advance();
