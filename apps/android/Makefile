@@ -4,7 +4,7 @@ GRADLE := ./gradlew
 CLIENT := client
 SPEC_PATH_IN_REPO := apps/client/public/openapi.json
 
-.PHONY: build test lint clean generate-client
+.PHONY: build test lint clean generate-client generate-tokens
 
 build:
 	$(GRADLE) assemble
@@ -33,3 +33,8 @@ generate-client:
 	python3 -I $(CLIENT)/scripts/filter_operations.py $(CLIENT)/operations.txt $(CLIENT)/build/openapi-open-enums.json $(CLIENT)/build/openapi-filtered.json
 	rm -rf $(CLIENT)/generated/src $(CLIENT)/generated/.openapi-generator
 	$(GRADLE) --quiet :client:openApiGenerate
+
+# Regenerates app/.../ui/BrandTokens.kt (and the iOS token files) from packages/design-tokens. The design-tokens
+# tests fail when a committed generated file drifts from the tokens.
+generate-tokens:
+	cd ../.. && pnpm --filter @bike4mind/design-tokens generate:native

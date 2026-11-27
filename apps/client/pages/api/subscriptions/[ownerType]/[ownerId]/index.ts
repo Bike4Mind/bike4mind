@@ -1,4 +1,6 @@
 import { BadRequestError } from '@bike4mind/utils';
+import type { IMongoDocument } from '@bike4mind/common';
+import { toCustomerFacingSubscription } from '@bike4mind/server-utils/lib/subscriptions/customerFacing';
 import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { verifyOrgMemberOrManager } from '@bike4mind/server-utils/utils/orgAccess';
@@ -7,7 +9,7 @@ import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscript
 const handler = baseApi().get(async (req, res) => {
   const { ownerType, ownerId } = req.query;
 
-  let subscriptions: ISubscription[] = [];
+  let subscriptions: (ISubscription & IMongoDocument)[] = [];
 
   switch (ownerType) {
     case SubscriptionOwnerType.Organization: {
@@ -30,7 +32,7 @@ const handler = baseApi().get(async (req, res) => {
       throw new BadRequestError('Invalid owner type');
   }
 
-  return res.json(subscriptions);
+  return res.json(subscriptions.map(toCustomerFacingSubscription));
 });
 
 export default handler;

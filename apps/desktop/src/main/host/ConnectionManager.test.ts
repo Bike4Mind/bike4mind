@@ -809,3 +809,47 @@ describe('ConnectionManager: resuming across a cut', () => {
     expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
   });
 });
+
+describe('user actions and saved state', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('tells a registrant about connect, disconnect and remove, and never about register or unregister', async () => {
+    const manager = new ConnectionManager({
+      client: CLIENT,
+      account: { current: () => ACCOUNT, onChanged: () => () => undefined },
+      tuning: TUNING,
+    });
+    const actions: string[] = [];
+    const register = (hostId: string) =>
+      manager.register(hostId, new FakeHost().connector, {
+        label: hostId,
+        kind: 'remote',
+        onUserAction: action => actions.push(`${hostId}:${action}`),
+      });
+    register('a');
+    register('b');
+    await settle();
+
+    manager.disconnect('a');
+    manager.connect('a');
+    manager.remove('a');
+    manager.unregister('b');
+
+    expect(actions).toEqual(['a:disconnect', 'a:connect', 'a:remove']);
+  });
+
+  it('reports a saved last-seen time while a host has not been reached in this run', () => {
+    const manager = new ConnectionManager({
+      client: CLIENT,
+      account: { current: () => ACCOUNT, onChanged: () => () => undefined },
+      tuning: TUNING,
+    });
+    manager.register('a', new FakeHost().connector, { label: 'a', kind: 'remote', connect: false, lastSeenAt: 42 });
+    expect(manager.list()[0].state).toEqual({ status: 'offline', reason: 'disconnected', lastSeenAt: 42 });
+  });
+});

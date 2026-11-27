@@ -1,10 +1,10 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
+import { withTransactionThenEmail } from '@server/utils/withTransactionThenEmail';
 import { ApiKeyScope, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   generateVerificationLink,
   getLogoUrl,
@@ -36,7 +36,7 @@ const handler = adminApi({
       const target = await userRepository.findById(userId);
       if (target) assertCanActOnAdminTarget(req.user, target, 'resend email verification to');
 
-      await withTransaction(async () => {
+      await withTransactionThenEmail(async queueEmail => {
         await userService.resendEmailVerification(
           { userId },
           {
@@ -104,7 +104,7 @@ const handler = adminApi({
           </body>
         </html>
       `;
-                await EmailEvents.Send.publish({
+                queueEmail({
                   to: user.email!,
                   subject: 'Verify Your Email Address',
                   body: emailBody,
@@ -122,9 +122,9 @@ const handler = adminApi({
         });
 
         req.logger.info(`Admin ${req.user.id} resent email verification for user ${userId}`);
-
-        return res.json({ message: 'Verification email resent successfully' });
       });
+
+      return res.json({ message: 'Verification email resent successfully' });
     })
   );
 

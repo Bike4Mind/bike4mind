@@ -512,11 +512,16 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
   }
 }
 
-const CacheSchema = new mongoose.Schema<ICacheDocument>({
-  key: { type: String, required: true, unique: true },
-  result: { type: mongoose.Schema.Types.Mixed, required: true },
-  expiresAt: { type: Date, required: true },
-});
+// minimize: false so a cache hit (findOne -> toJSON) returns `result` as stored; the default drops
+// empty objects, e.g. a spend timeline bucket's `series: {}`.
+const CacheSchema = new mongoose.Schema<ICacheDocument>(
+  {
+    key: { type: String, required: true, unique: true },
+    result: { type: mongoose.Schema.Types.Mixed, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { minimize: false }
+);
 
 // Create the TTL index on expiresAt
 CacheSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

@@ -81,6 +81,8 @@ export interface PythonFunctionSave {
 }
 
 interface PythonFunctionPanelProps {
+  /** The artifact id; the sandbox is replaced when it differs from the last code's. */
+  sandboxOwner: string;
   code: string;
   packages: string[];
   /** True while Pyodide is loading or a script run is in flight. */
@@ -1099,8 +1101,8 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
  * `run`. The contract and every returned value are checked here against the contract. The owner can save the
  * artifact's current version as a draft tool.
  */
-const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, packages, disabled, save }) => {
-  const { callFunction } = usePyodide();
+const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ sandboxOwner, code, packages, disabled, save }) => {
+  const { callFunction } = usePyodide(sandboxOwner);
   const [described, setDescribed] = useState<Described>({ status: 'reading' });
   const [values, setValues] = useState<FormValues>({});
   const [calling, setCalling] = useState(false);

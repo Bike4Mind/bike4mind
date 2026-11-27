@@ -127,6 +127,10 @@ export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   'signupGrantUnprotectedMaxCredits',
   // The From line of every system email, sign-in codes and password resets included.
   'mailFrom',
+  // Turn the status tick, its public page and the paid synthetic LLM probe on or off.
+  'statusPageEnabled',
+  'statusPagePublicEnabled',
+  'statusPageSyntheticLlmEnabled',
 ]);
 
 type AdminIdentity = {

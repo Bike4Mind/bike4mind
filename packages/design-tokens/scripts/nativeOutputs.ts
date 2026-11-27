@@ -2,14 +2,14 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { designTokens } from '../src/tokens';
+import { kotlinEmitter } from '../src/emitters/native/kotlin';
 import { swiftEmitter } from '../src/emitters/native/swift';
 import type { TokenEmitter } from '../src/emitters/types';
 import type { EmittedFiles } from '../src/emitters/native/types';
 
 // Where each native emitter's files live in the repo. The generated files are
 // committed, and nativeOutputs.test.ts fails when they drift from the tokens
-// (the same reproducibility rule as apps/ios `make generate-client`). A Kotlin
-// target for Android adds one entry here.
+// (the same reproducibility rule as apps/ios `make generate-client`).
 
 type NativeOutput = {
   readonly emitter: TokenEmitter<EmittedFiles>;
@@ -29,6 +29,13 @@ export const NATIVE_OUTPUTS: readonly NativeOutput[] = [
         'Bike4Mind/Resources/Assets.xcassets/AccentColor.colorset/Contents.json',
         'Widgets/Assets.xcassets/AccentColor.colorset/Contents.json',
       ],
+    },
+  },
+  {
+    emitter: kotlinEmitter,
+    root: 'apps/android',
+    destinations: {
+      'BrandTokens.kt': ['app/src/main/kotlin/com/bike4mind/app/ui/BrandTokens.kt'],
     },
   },
 ];

@@ -11,6 +11,9 @@ import groundedAnswersTranscript from './modules/grounded-answers/transcript.jso
 import { artifactsModule } from './modules/artifacts/module';
 import { ARTIFACTS_STEPS } from './modules/artifacts/steps';
 import artifactsTranscript from './modules/artifacts/transcript.json';
+import { projectsModule } from './modules/projects/module';
+import { PROJECTS_STEPS } from './modules/projects/steps';
+import projectsTranscript from './modules/projects/transcript.json';
 
 // Server-only, like the registry: the page gets a tutorial's content only from the run route, overrides applied.
 export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
@@ -30,4 +33,5 @@ export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
     transcript: groundedAnswersTranscript,
   },
   { intro: artifactsModule, version: 1, enabled: true, steps: ARTIFACTS_STEPS, transcript: artifactsTranscript },
+  { intro: projectsModule, version: 1, enabled: true, steps: PROJECTS_STEPS, transcript: projectsTranscript },
 ];

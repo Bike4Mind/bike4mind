@@ -24,6 +24,7 @@ import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@serv
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import { notifyInvitees, reserveInviteSendBudget } from '@server/utils/inviteSendLimits';
 import type { ProjectMutationContext } from './attachSessionsToProject';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 
 /**
  * The member, invite and system-prompt writes behind /api/projects/[id]/(members|invites|systemPrompts)
@@ -44,7 +45,8 @@ export async function removeProjectMember(
   // Read before the leave: its cascade prunes the project's file list.
   const cleanUpTargets = await projectRevokeCleanupTargets(projectId, memberId || user.id, logger);
 
-  const project = await withTransaction(async () => {
+  const committed = await withTransaction(async () => {
+    const affected = new Set<string>();
     const left = await projectService.leaveProject(
       user,
       { id: projectId, userIdToRemove: memberId },
@@ -55,6 +57,7 @@ export async function removeProjectMember(
           fabFiles: fabFileRepository,
           users: userRepository,
         },
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
       }
     );
 
@@ -83,8 +86,10 @@ export async function removeProjectMember(
       );
     }
 
-    return left;
+    return { project: left, affectedUserIds: [...affected] };
   });
+  const { project } = committed;
+  await rescopeUserSubscriptions(committed.affectedUserIds, logger);
 
   // After the commit, outside its session (see cleanUpDeletedFileReferences).
   await cleanUpRevokedFileReferences(cleanUpTargets, logger);
@@ -120,9 +125,19 @@ export async function addProjectSystemPrompts(ctx: Ctx, projectId: string, fileI
 }
 
 export async function removeProjectSystemPrompts(ctx: Ctx, projectId: string, fileIds: string[]) {
-  const project = await withTransaction(() =>
-    projectService.removeSystemPrompts(ctx.user, { projectId, fileIds }, systemPromptAdapters())
-  );
+  const { project, affectedUserIds } = await withTransaction(async () => {
+    const affected = new Set<string>();
+    const project = await projectService.removeSystemPrompts(
+      ctx.user,
+      { projectId, fileIds },
+      {
+        ...systemPromptAdapters(),
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
+      }
+    );
+    return { project, affectedUserIds: [...affected] };
+  });
+  await rescopeUserSubscriptions(affectedUserIds, ctx.logger);
 
   await Promise.all(
     fileIds.map(promptId =>

@@ -56,8 +56,7 @@ export const LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE =
 
 /**
  * The minimum a client-side row must expose for the display pickers below.
- * `source` is optional because it only reaches the client as a leaked field of the
- * repository row, and rows written before that field existed read back without it.
+ * `source` is optional because rows written before that field existed read back without it.
  */
 type DisplayableSubscription = {
   status: Stripe.Subscription.Status;

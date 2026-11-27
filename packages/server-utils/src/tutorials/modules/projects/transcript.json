@@ -1,0 +1,6 @@
+[
+  {
+    "prompt": "Using sample-project-plan.csv, what is due in week 2, and who owns each task?",
+    "reply": "Two tasks are due in **week 2**:\n\n| Task | Owner | Status |\n| --- | --- | --- |\n| Write the homepage text | **Priya** | In progress |\n| Pick the photos | **Lee** | Not started |\n\nBoth come from the project file sample-project-plan.csv. The photos have not been started yet, so that is the one to check on first."
+  }
+]

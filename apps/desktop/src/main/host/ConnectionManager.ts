@@ -55,9 +55,26 @@ export type ConnectionManagerOptions = {
   log?: (message: string) => void;
 };
 
-export type HostRegistration = { label: string; kind: HostKind; /** Default true. */ connect?: boolean };
+/** What the user asked of a host through connect, disconnect or remove, for a registrant that keeps its own record. */
+export type HostUserAction = 'connect' | 'disconnect' | 'remove';
 
-type RegisteredHost = { link: HostLink; label: string; windows: Map<number, WindowConnection> };
+export type HostRegistration = {
+  label: string;
+  kind: HostKind;
+  /** Default true. */
+  connect?: boolean;
+  /** When the host was last reachable, from an earlier run; offline states report it until the host is seen again. */
+  lastSeenAt?: number | null;
+  /** Called after connect, disconnect or remove has acted on this host; never for register or unregister. */
+  onUserAction?(action: HostUserAction): void;
+};
+
+type RegisteredHost = {
+  link: HostLink;
+  label: string;
+  windows: Map<number, WindowConnection>;
+  onUserAction(action: HostUserAction): void;
+};
 
 /** The `host/*` methods reach a host whose control connection is up, signed in or not; the rest need `connected`. */
 const servesMethod = (state: HostConnectionState, method: string): boolean =>
@@ -117,9 +134,10 @@ export class ConnectionManager {
   register(hostId: string, connector: HostConnector, registration: HostRegistration): void {
     if (this.hosts.has(hostId)) throw new Error(`Host ${hostId} is already registered`);
     const host: RegisteredHost = {
-      link: this.createLink(hostId, connector, registration.kind),
+      link: this.createLink(hostId, connector, registration.kind, registration.lastSeenAt ?? null),
       label: registration.label,
       windows: new Map(),
+      onUserAction: registration.onUserAction ?? (() => undefined),
     };
     this.hosts.set(hostId, host);
     if (registration.connect === false) host.link.disconnect('disconnected');
@@ -138,6 +156,14 @@ export class ConnectionManager {
     this.emit();
   }
 
+  /** Changes the name a host is shown under, e.g. when the route it is reached by changes. */
+  relabel(hostId: string, label: string): void {
+    const host = this.require(hostId);
+    if (host.label === label) return;
+    host.label = label;
+    this.emit();
+  }
+
   list(): HostEntry[] {
     return [...this.hosts].map(([hostId, host]) => ({
       hostId,
@@ -153,20 +179,25 @@ export class ConnectionManager {
   }
 
   connect(hostId: string): void {
-    this.require(hostId).link.connect();
+    const host = this.require(hostId);
+    host.link.connect();
+    host.onUserAction('connect');
   }
 
   /** Disconnects a remote host; the local host serves local chat, so it is never taken offline. */
   disconnect(hostId: string): void {
-    const { link } = this.require(hostId);
-    if (link.kind === 'local') throw new Error('The local host cannot be disconnected');
-    link.disconnect('disconnected');
+    const host = this.require(hostId);
+    if (host.link.kind === 'local') throw new Error('The local host cannot be disconnected');
+    host.link.disconnect('disconnected');
+    host.onUserAction('disconnect');
   }
 
   /** Unregisters a remote host; the local host is part of Desktop and cannot be removed. */
   remove(hostId: string): void {
-    if (this.require(hostId).link.kind === 'local') throw new Error('The local host cannot be removed');
+    const host = this.require(hostId);
+    if (host.link.kind === 'local') throw new Error('The local host cannot be removed');
     this.unregister(hostId);
+    host.onUserAction('remove');
   }
 
   /** The sessions a window is subscribed to on a host, as of the host's last answer. */
@@ -225,10 +256,11 @@ export class ConnectionManager {
     this.listeners.clear();
   }
 
-  private createLink(hostId: string, connector: HostConnector, kind: HostKind): HostLink {
+  private createLink(hostId: string, connector: HostConnector, kind: HostKind, lastSeenAt: number | null): HostLink {
     return new HostLink({
       hostId,
       kind,
+      lastSeenAt,
       connector,
       client: this.options.client,
       desktopAccount: () => this.account,

@@ -23,6 +23,7 @@ struct MediaDetailView: View {
 
   var body: some View {
     ZStack {
+      // Media canvas: black in both appearances, like the system photo viewer.
       Color.black.ignoresSafeArea()
       content
     }

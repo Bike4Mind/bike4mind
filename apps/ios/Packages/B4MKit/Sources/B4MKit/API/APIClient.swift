@@ -42,6 +42,42 @@ public struct APIClient: B4MAPI {
     }
   }
 
+  public func renameSession(id: String, name: String) async throws -> SessionSummary {
+    try await call {
+      let output = try await client.updateSession(path: .init(id: id), body: .json(.init(name: name)))
+      switch output {
+      case .ok(let ok):
+        let body = try ok.body.json
+        return SessionSummary(
+          id: body.id, name: body.name, lastUsedModel: body.lastUsedModel,
+          firstCreated: body.firstCreated, lastUpdated: body.lastUpdated)
+      case .unauthorized: throw APIError.signedOut
+      case .forbidden: throw APIError.forbidden
+      case .notFound: throw APIError.notFound
+      case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
+      case .undocumented(let status, _): throw APIError(status: status)
+      default: throw APIError.malformedResponse
+      }
+    }
+  }
+
+  public func deleteSession(id: String) async throws {
+    try await call {
+      let output = try await client.deleteSession(path: .init(id: id))
+      switch output {
+      case .ok, .notFound: return
+      case .unauthorized: throw APIError.signedOut
+      case .forbidden: throw APIError.forbidden
+      case .conflict: throw APIError.conflict
+      case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
+      case .undocumented(let status, _): throw APIError(status: status)
+      default: throw APIError.malformedResponse
+      }
+    }
+  }
+
   public func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
     try await call {
       let output = try await client.listSessions(query: .init(limit: limit, cursor: cursor))

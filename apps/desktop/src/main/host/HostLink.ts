@@ -32,6 +32,8 @@ export const DEFAULT_HOST_LINK_TUNING: HostLinkTuning = {
 export type HostLinkOptions = {
   hostId: string;
   kind: HostKind;
+  /** When the host was last reachable before this link existed, e.g. in an earlier run. */
+  lastSeenAt?: number | null;
   connector: HostConnector;
   client: ClientIdentity;
   /** Desktop's own account; a remote host must be signed in to the same one. */
@@ -69,14 +71,16 @@ export class HostLink {
   private generation = 0;
   private attempting = false;
   private attempt = 0;
-  private lastSeenAt: number | null = null;
+  private lastSeenAt: number | null;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private stableTimer: ReturnType<typeof setTimeout> | undefined;
   private settledWaiters: Array<() => void> = [];
   private disposed = false;
 
-  constructor(private readonly options: HostLinkOptions) {}
+  constructor(private readonly options: HostLinkOptions) {
+    this.lastSeenAt = options.lastSeenAt ?? null;
+  }
 
   get state(): HostConnectionState {
     return this.current;

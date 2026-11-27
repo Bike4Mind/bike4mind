@@ -82,6 +82,9 @@ const api: DesktopApi = {
     connect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostConnect, hostId),
     disconnect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostDisconnect, hostId),
     remove: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostRemove, hostId),
+    sshAliases: () => ipcRenderer.invoke(IPC_CHANNELS.hostSshAliases),
+    describeSshAlias: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshDescribe, alias),
+    addSshHost: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshAdd, alias),
   },
   library: {
     page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),
