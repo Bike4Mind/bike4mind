@@ -140,13 +140,17 @@ private struct SessionsListScreen: View {
             Button("Delete", systemImage: "trash") { deleting = session }
               .tint(Tokens.Palette.destructive)
               .accessibilityIdentifier("sessions-row-delete-btn")
+              .disabled(model.isMutating(session.id))
             Button("Rename", systemImage: "pencil") { beginRename(session) }
               .tint(Tokens.Palette.brand)
               .accessibilityIdentifier("sessions-row-rename-btn")
+              .disabled(model.isMutating(session.id))
           }
           .contextMenu {
             Button("Rename", systemImage: "pencil") { beginRename(session) }
+              .disabled(model.isMutating(session.id))
             Button("Delete", systemImage: "trash", role: .destructive) { deleting = session }
+              .disabled(model.isMutating(session.id))
           }
           .task { await model.loadMoreIfNeeded(currentItem: session) }
         }

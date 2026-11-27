@@ -176,6 +176,20 @@ final class SessionMutationTests: XCTestCase {
     XCTAssertEqual(model.sessions[1].name, "First")
   }
 
+  func testIsMutatingCoversOnlyTheRowInFlight() async {
+    let (model, api, _, _) = await makeModel()
+    await api.holdMutations()
+
+    let rename = Task { await model.rename("b", to: "First") }
+    await waitForMutation(api)
+    XCTAssertTrue(model.isMutating("b"))
+    XCTAssertFalse(model.isMutating("a"))
+    await api.releaseMutations()
+    await rename.value
+
+    XCTAssertFalse(model.isMutating("b"))
+  }
+
   func testResetClearsRowsForTheNextAccount() async {
     let (model, _, _, _) = await makeModel()
 

@@ -23,7 +23,7 @@ public final class SessionsViewModel {
   /// The refresh in flight. Unstructured so one view going away (the drawer closing) cannot cancel a refresh
   /// another view is waiting on.
   @ObservationIgnored private var refreshTask: Task<Void, Never>?
-  @ObservationIgnored private var mutatingIDs: Set<String> = []
+  private var mutatingIDs: Set<String> = []
   @ObservationIgnored private let onDeleted: @MainActor (String) async -> Void
   @ObservationIgnored private let onRenamed: @MainActor (String, String) async -> Void
   /// Bumped by `reset()`. Work that awaited across a reset belongs to the previous account and must not write.
@@ -67,6 +67,8 @@ public final class SessionsViewModel {
     await task.value
   }
 
+  // A refresh requested before a rename commits can bring back the old name (and cache it) until the next
+  // refresh. Accepted: the server copy is what the list shows, and the window is one round trip.
   private func performRefresh() async {
     let generation = self.generation
     defer { if generation == self.generation { refreshTask = nil } }
@@ -183,6 +185,9 @@ public final class SessionsViewModel {
     guard generation == self.generation else { return }
     await cache.save(sessions)
   }
+
+  /// `true` while a rename or delete of `id` is in flight; a second one would be ignored, so the UI disables both.
+  public func isMutating(_ id: String) -> Bool { mutatingIDs.contains(id) }
 
   public func dismissMutationError() { mutationError = nil }
 
