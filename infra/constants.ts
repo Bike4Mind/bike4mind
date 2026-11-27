@@ -72,6 +72,9 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   APP_NAME: process.env.APP_NAME || '',
   WEBSITE_URL: process.env.WEBSITE_URL || '',
   PLATFORM_EMAIL_DOMAIN: process.env.PLATFORM_EMAIL_DOMAIN || '',
+  // Absolute https URL of the default link-card image (1200x630) for shared artifacts.
+  // Empty means shared links unfurl without an image.
+  PUBLISH_SHARE_IMAGE_URL: process.env.PUBLISH_SHARE_IMAGE_URL || '',
   USE_DOCUMENTDB_COMPATIBILITY: process.env.USE_DOCUMENTDB_COMPATIBILITY || '',
   // Account-tied Stripe price ids, externalized for open-core (issue #9306). `next build`
   // inlines the NEXT_PUBLIC_* values into the client bundle, but the Stripe fulfillment

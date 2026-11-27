@@ -1563,6 +1563,154 @@ describe('GET /api/publish/serve - public share agent readability', () => {
   });
 });
 
+describe('GET /api/publish/serve - link-card image and share-token card', () => {
+  const IMAGE = 'https://cdn.example.com/share-card.png';
+  const BODY = '<html><head></head><body><p>Private body text that must not unfurl.</p></body></html>';
+  const reply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r1',
+    title: 'A reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: 'Reply body text that must not unfurl on a token link.',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'x',
+    ...over,
+  });
+  const headOf = (res: ReturnType<typeof run>['res']) => String(res._getData()).split('</head>')[0];
+
+  beforeEach(() => {
+    vi.stubEnv('PUBLISH_SHARE_IMAGE_URL', IMAGE);
+    vi.stubEnv('APP_NAME', 'ExampleApp');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('puts the default image on an open-public bundle as a large card', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'A concise summary.' }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const head = headOf(res);
+    expect(head).toContain(`<meta property="og:image" content="${IMAGE}">`);
+    expect(head).toContain('<meta property="og:image:alt" content="ExampleApp">');
+    expect(head).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(head).toContain(`<meta name="twitter:image" content="${IMAGE}">`);
+  });
+
+  it('emits no image and a small card when the deploy sets no image', async () => {
+    vi.stubEnv('PUBLISH_SHARE_IMAGE_URL', '');
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const head = headOf(res);
+    expect(head).not.toMatch(/og:image|twitter:image/);
+    expect(head).toContain('<meta name="twitter:card" content="summary">');
+  });
+
+  it.each([
+    ['public', {}],
+    ['private', { visibility: 'private' }],
+  ])('gives a %s bundle reached by token the author card, never body text or the token', async (_label, over) => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'Author summary.', ...over }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const head = headOf(res);
+    expect(head).toContain('<meta property="og:title" content="My Artifact">');
+    expect(head).toContain(
+      '<meta property="og:description" content="Author summary. - Build and share with ExampleApp.">'
+    );
+    expect(head).toContain('<meta property="og:type" content="article">');
+    expect(head).toContain('<meta property="og:site_name" content="ExampleApp">');
+    expect(head).toContain(`<meta property="og:image" content="${IMAGE}">`);
+    expect(head).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(head).not.toContain('Private body text');
+    expect(head).not.toContain('tok123');
+    expect(head).not.toMatch(/og:url|rel="canonical"|rel="alternate"/);
+    expect(String(res._getData())).not.toContain('<noscript>');
+  });
+
+  it('falls back to the brand line, not body text, when a token-linked bundle has no description', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const head = headOf(res);
+    expect(head).toContain('<meta property="og:description" content="Build and share with ExampleApp.">');
+    expect(head).not.toContain('<meta name="description"');
+    expect(head).not.toContain('Private body text');
+  });
+
+  it('gives a gated token link no card, even once the passphrase is proven', async () => {
+    const { signGateToken } = await import('@bike4mind/server-utils/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' }, description: 'Gated summary.' }));
+    mockDownload.mockResolvedValue(Buffer.from(BODY));
+
+    const { res, promise } = run(['a', 'tok123'], { cookie: `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const head = headOf(res);
+    expect(head).not.toMatch(/og:|twitter:/);
+    expect(head).not.toContain('Gated summary.');
+  });
+
+  it('gives an open-public reply the full card, with a canonical and plain-text alternate', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ description: 'Reply summary.' }));
+
+    const { res, promise } = run(['r', 'r1']);
+    await promise;
+
+    const head = headOf(res);
+    expect(head).toContain('<meta name="description" content="Reply summary.">');
+    expect(head).toContain('<meta property="og:url" content="https://app.bike4mind.com/p/r/r1">');
+    expect(head).toContain('<link rel="canonical" href="https://app.bike4mind.com/p/r/r1">');
+    expect(head).toContain('href="https://app.bike4mind.com/p/r/r1?format=raw"');
+    expect(head).toContain(`<meta property="og:image" content="${IMAGE}">`);
+    expect(head).not.toContain('Shared from');
+  });
+
+  it('describes an open-public reply with no description from its body', async () => {
+    mockArtifactFindOne.mockReturnValue(reply());
+
+    const { res, promise } = run(['r', 'r1']);
+    await promise;
+
+    expect(headOf(res)).toContain(
+      '<meta name="description" content="Reply body text that must not unfurl on a token link.">'
+    );
+  });
+
+  it('gives a reply reached by token the author card only', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'private' }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const head = headOf(res);
+    expect(head).toContain(`<meta property="og:image" content="${IMAGE}">`);
+    expect(head).toContain('<meta property="og:description" content="Build and share with ExampleApp.">');
+    expect(head).not.toContain('Reply body text');
+    expect(head).not.toMatch(/og:url|rel="canonical"|rel="alternate"/);
+  });
+});
+
 describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
   it('serves a public bundle as text/plain with title + description + body excerpt', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ description: 'A summary.' }));

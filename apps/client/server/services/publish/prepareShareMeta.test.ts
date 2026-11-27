@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { prepareShareMeta, stripToText } from './prepareShareMeta';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { defaultShareImage, prepareShareMeta, prepareShareTokenMeta, stripToText } from './prepareShareMeta';
 
 describe('stripToText', () => {
   it('drops script/style contents rather than surfacing them as excerpt text', () => {
@@ -150,5 +150,100 @@ describe('prepareShareMeta', () => {
       canonicalUrl: 'https://example.com/p/u/scope/slug',
     });
     expect(noscriptBody).not.toContain('View as plain text');
+  });
+});
+
+describe('share image', () => {
+  const image = { url: 'https://cdn.example.com/card.png?a=1&b="2"', alt: 'Example <App>' };
+
+  it('emits og:image and a large twitter card when an image is given, escaped', () => {
+    const { metaTags } = prepareShareMeta({
+      title: 'Hello',
+      canonicalUrl: 'https://example.com/p/u/scope/slug',
+      image,
+    });
+
+    expect(metaTags).toContain(
+      '<meta property="og:image" content="https://cdn.example.com/card.png?a=1&amp;b=&quot;2&quot;">'
+    );
+    expect(metaTags).toContain('<meta property="og:image:alt" content="Example &lt;App&gt;">');
+    expect(metaTags).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(metaTags).toContain(
+      '<meta name="twitter:image" content="https://cdn.example.com/card.png?a=1&amp;b=&quot;2&quot;">'
+    );
+    expect(metaTags).toContain('<meta name="twitter:image:alt" content="Example &lt;App&gt;">');
+  });
+
+  it('omits the alt tags when the image has no alt text', () => {
+    const { metaTags } = prepareShareMeta({
+      title: 'Hello',
+      canonicalUrl: 'https://example.com/p/u/scope/slug',
+      image: { url: 'https://cdn.example.com/card.png' },
+    });
+    expect(metaTags).toContain('og:image"');
+    expect(metaTags).not.toContain('image:alt');
+  });
+});
+
+describe('defaultShareImage', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads an https URL from PUBLISH_SHARE_IMAGE_URL, using the site name as alt text', () => {
+    vi.stubEnv('PUBLISH_SHARE_IMAGE_URL', ' https://cdn.example.com/card.png ');
+    expect(defaultShareImage('ExampleApp')).toEqual({ url: 'https://cdn.example.com/card.png', alt: 'ExampleApp' });
+    expect(defaultShareImage()).toEqual({ url: 'https://cdn.example.com/card.png', alt: undefined });
+  });
+
+  it.each(['', 'http://cdn.example.com/card.png', '/share-card.png', 'not a url', 'javascript:alert(1)'])(
+    'returns nothing for %j',
+    value => {
+      vi.stubEnv('PUBLISH_SHARE_IMAGE_URL', value);
+      expect(defaultShareImage('ExampleApp')).toBeUndefined();
+    }
+  );
+});
+
+describe('prepareShareTokenMeta', () => {
+  it('carries the title, author description, site and image', () => {
+    const { metaTags } = prepareShareTokenMeta({
+      title: 'Hello <World>',
+      description: 'Author summary.',
+      siteName: 'ExampleApp',
+      image: { url: 'https://cdn.example.com/card.png', alt: 'ExampleApp' },
+    });
+
+    expect(metaTags).toContain('<meta name="description" content="Author summary.">');
+    expect(metaTags).toContain('<meta property="og:title" content="Hello &lt;World&gt;">');
+    expect(metaTags).toContain(
+      '<meta property="og:description" content="Author summary. - Build and share with ExampleApp.">'
+    );
+    expect(metaTags).toContain('<meta property="og:type" content="article">');
+    expect(metaTags).toContain('<meta property="og:site_name" content="ExampleApp">');
+    expect(metaTags).toContain('<meta property="og:image" content="https://cdn.example.com/card.png">');
+    expect(metaTags).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(metaTags).toContain('<meta name="twitter:title" content="Hello &lt;World&gt;">');
+  });
+
+  it('never carries a URL, canonical, alternate or noscript excerpt', () => {
+    const out = prepareShareTokenMeta({ title: 'Hello', description: 'Author summary.', siteName: 'ExampleApp' });
+
+    expect(out.metaTags).not.toMatch(/og:url|rel="canonical"|rel="alternate"/);
+    expect(out.noscriptBody).toBe('');
+    expect(out.alternateLink).toBe('');
+    expect(out.metaTags).toContain('<meta name="twitter:card" content="summary">');
+  });
+
+  it('clamps a long author description like the public card does', () => {
+    const { metaTags } = prepareShareTokenMeta({ title: 'Hello', description: 'x'.repeat(400) });
+    expect(metaTags).toContain(`<meta name="description" content="${'x'.repeat(297)}...">`);
+  });
+
+  it('emits only the brand line, or nothing, when there is no description', () => {
+    expect(prepareShareTokenMeta({ title: 'Hello', siteName: 'ExampleApp' }).metaTags).toContain(
+      '<meta property="og:description" content="Build and share with ExampleApp.">'
+    );
+    expect(prepareShareTokenMeta({ title: 'Hello' }).metaTags).not.toMatch(/description/);
   });
 });
