@@ -15,10 +15,10 @@ import { EMPTY_WATCH_SNAPSHOT, buildWatchSnapshot, type WatchDecision, type Watc
 export type WatchSources = {
   /** The signed-in scope's sessions, as the needs-you monitor reads them. */
   listSessions(): Promise<ChatSessionSummary[]>;
-  /** Every session's current status: the snapshot `chat:get-session-statuses` serves. */
+  /** Every session's current status: the snapshot `session/statuses` serves. */
   sessionStatuses(): ChatSessionStatusEvent[];
   sessionMessages(sessionId: string): Promise<readonly ChatMessage[]>;
-  /** The approval gate's own resolve: the one `chat:respond-to-approval` calls. */
+  /** The approval gate's own resolve: the one the host server's request/respond calls. */
   resolveApproval(approvalId: string, answer: ChatApprovalAnswer): unknown;
   warn(message: string): void;
   now?(): number;

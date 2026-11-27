@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError } from '@bike4mind/common';
+import { DATA_LAKES, ForbiddenError } from '@bike4mind/common';
 
 // The @datalake grammar parser is unit-tested in the slack package; here we mock it and exercise
 // the handler's dispatch, listing and ingest-reply behavior in isolation.
@@ -437,6 +437,17 @@ describe('handleDataLakeCommand', () => {
         expect(slugTier(foreign, scope, new Set(['x']))).toBe(2);
         expect(slugTier({ ...foreign, organizationId: 'org-a' }, scope, new Set())).toBe(0);
         expect(slugTier({ ...foreign, organizationId: undefined }, scope, new Set())).toBe(1);
+      });
+
+      it('slugTier ranks an org-less DB lake holding a registry key null, but not the registry lake itself', () => {
+        const scope: ListScope = { isAdmin: false, organizationIds: ['org-a'] };
+        const registry = DATA_LAKES[0];
+        const registryRow = { id: registry.id, slug: registry.slug, name: registry.name, canManage: false };
+        const orgless = { id: 'db-id', slug: registry.id, name: 'Org-less', canManage: true };
+
+        expect(slugTier(registryRow, scope, new Set())).toBe(1);
+        expect(slugTier(orgless, scope, new Set(['db-id']))).toBeNull();
+        expect(slugTier({ ...orgless, organizationId: 'org-a' }, scope, new Set())).toBe(0);
       });
     });
   });

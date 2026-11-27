@@ -31,8 +31,10 @@ import {
   type PermissionScope,
   type PermissionsState,
 } from '@shared/permissions';
+import { hostChat } from '../host/hostChat';
 import { ChevronIcon } from './icons';
 import { thinScrollbarSx } from './layout';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 
 const LIST_LABEL: Record<PermissionList, string> = { allow: 'Allow', ask: 'Ask', deny: 'Deny' };
 const LIST_COLOR: Record<PermissionList, 'success' | 'warning' | 'danger'> = {
@@ -265,8 +267,8 @@ export function PermissionsSettings({
   }, []);
 
   useEffect(() => {
-    window.b4m.chat
-      .listRecentFolders()
+    hostChat
+      .listRecentFolders(LOCAL_HOST_ID)
       .then(setFolders)
       .catch(() => undefined);
   }, []);

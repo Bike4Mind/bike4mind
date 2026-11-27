@@ -19,8 +19,11 @@ import { SlackClient } from '../SlackClient';
 import { KnownBlock } from '@slack/web-api';
 import { resolveNotificationDestination } from '../notificationDestination';
 import { getSlackDb } from '../di/registry';
+import { organizationService } from '@bike4mind/services-core';
 
 const MAX_NOTIFICATIONS_PER_DAY = 100;
+
+type OrgMembershipRoster = Parameters<typeof organizationService.isCurrentOrgMember>[0];
 
 export type GitHubNotificationEventType =
   | 'prOpened'
@@ -98,10 +101,12 @@ export class GitHubSlackNotifier {
     // than throwing - preserves the "never throws" contract on this method.
     let User: unknown;
     let webhookSubscriptionRepository: unknown;
+    let Organization: unknown;
     try {
       const db = getSlackDb();
       User = db.User;
       webhookSubscriptionRepository = db.webhookSubscriptionRepository;
+      Organization = db.Organization;
     } catch (error) {
       const message = extractErrorMessage(error);
       this.logger.error('[GITHUB-NOTIFY] Failed to resolve Slack DB dependencies', { eventType, error });
@@ -160,16 +165,29 @@ export class GitHubSlackNotifier {
     // checks "notification targets" (users whose githubUsername appears in the payload, e.g. a
     // PR reviewer). These are different populations - a subscriber might not be a notification
     // target, and vice versa. This check prevents non-subscribers from receiving notifications.
+    // Subscription rows outlive org membership, so each recipient must also be a current member
+    // of the org that owns the webhook; every org-scoped handler resolves recipients here.
     if (options?.orgId && users.length > 0) {
       try {
         const userIds = users.map((u: any) => u.id);
-        const subscribedUserIds = await (webhookSubscriptionRepository as any).findActiveSubscriberUserIds(
-          options.orgId,
-          userIds
-        );
+        const [subscribedUserIds, organization] = await Promise.all([
+          (webhookSubscriptionRepository as any).findActiveSubscriberUserIds(options.orgId, userIds),
+          (
+            Organization as {
+              findById(id: string): {
+                select(fields: string): { lean(): Promise<OrgMembershipRoster | null> };
+              };
+            }
+          )
+            .findById(options.orgId)
+            .select('userId users.userId')
+            .lean(),
+        ]);
         const subscribedSet = new Set(subscribedUserIds);
         const preFilterCount = users.length;
-        users = users.filter((u: any) => subscribedSet.has(u.id));
+        users = organization
+          ? users.filter(u => subscribedSet.has(u.id) && organizationService.isCurrentOrgMember(organization, u.id))
+          : [];
 
         if (users.length < preFilterCount) {
           this.logger.debug('[GITHUB-NOTIFY] Filtered non-subscribed users', {

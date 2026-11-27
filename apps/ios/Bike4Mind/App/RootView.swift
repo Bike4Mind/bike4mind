@@ -74,7 +74,7 @@ struct RootView: View {
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
       guard auth.state == .signedIn else { return }
       let syncer = services.busyBlockSyncer
-      Task { await syncer.sync(force: true) }
+      syncer.scheduleSync(force: true)
     }
   }
 
@@ -125,7 +125,7 @@ struct RootView: View {
       services.refreshWidgetCredits()
       services.refreshWidgetPendingDecisions()
       let syncer = services.busyBlockSyncer
-      Task { await syncer.sync() }
+      syncer.scheduleSync()
     }
   }
 
@@ -169,6 +169,7 @@ struct RootView: View {
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }
+    services.sessionsModel.reset()
     Task { await services.sessionListCache.clear() }
     let mediaFirstPages = services.mediaFirstPages
     Task { await mediaFirstPages.invalidate() }

@@ -72,7 +72,7 @@ const makeReq = () =>
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   }) as unknown as Request & { logger: { warn: ReturnType<typeof vi.fn> } };
 
-const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
+const makeRes = () => ({ once: vi.fn(), setHeader: vi.fn(), statusCode: 200 }) as unknown as Response;
 
 /** Runs the middleware and reports whether it called next() or threw. */
 const run = async (
@@ -119,6 +119,27 @@ describe('apiKeyAuth scope gate', () => {
     // Exact match: the key's held scope (AI_CHAT) must not appear.
     expect(error).toBeInstanceOf(ForbiddenError);
     expect((error as ForbiddenError).additionalInfo).toEqual({ required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE] });
+  });
+
+  it('tells a key its own scopes, on the scope 403 as on an admitted call, and nothing for a key that fails', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.FUNCTIONS_INVOKE],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    const scopesHeader = async (required: ApiKeyScope[]) => {
+      const res = makeRes();
+      await apiKeyAuth(required)(makeReq(), res, vi.fn() as unknown as NextFunction).catch(() => undefined);
+      return vi.mocked(res.setHeader).mock.calls.filter(([name]) => name === 'X-Api-Key-Scopes');
+    };
+
+    expect(await scopesHeader([ApiKeyScope.API_KEYS_MANAGE])).toEqual([['X-Api-Key-Scopes', 'functions:invoke']]);
+    expect(await scopesHeader([ApiKeyScope.FUNCTIONS_INVOKE])).toEqual([['X-Api-Key-Scopes', 'functions:invoke']]);
+
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+    expect(await scopesHeader([ApiKeyScope.FUNCTIONS_INVOKE])).toEqual([]);
   });
 
   it('admits a key that holds a required scope', async () => {
@@ -852,8 +873,17 @@ describe('apiKeyAuth with an exchange key', () => {
     });
 
     it('admits a legacy ordinary key that lacks ai:generate', async () => {
-      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT] }));
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date('2026-01-01T00:00:00Z') })
+      );
       expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
+
+    it('refuses an ordinary key created after the legacy cutoff that lacks ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date() }));
+      const { passed, error } = await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering);
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
     });
   });
 });

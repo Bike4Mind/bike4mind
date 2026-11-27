@@ -50,8 +50,22 @@ vi.mock('@bike4mind/database/content', () => {
   return { AppFile };
 });
 
+// Mirrors withTransaction: work queued with runAfterCommit runs only once the callback resolves.
 vi.mock('@bike4mind/database', () => ({
-  withTransaction: async (fn: (session: unknown) => unknown) => fn({}),
+  withTransaction: async (fn: (session: unknown) => unknown) => {
+    const queue = new Map<string, () => Promise<unknown>>();
+    const result = await fn({ queue });
+    for (const work of queue.values()) await work();
+    return result;
+  },
+  runAfterCommit: (
+    session: { queue: Map<string, () => Promise<unknown>> },
+    key: string,
+    work: () => Promise<unknown>
+  ) => {
+    session.queue.set(key, work);
+    return true;
+  },
 }));
 
 const storageDelete = vi.hoisted(() => vi.fn(async () => undefined));
@@ -92,7 +106,8 @@ const invoke = async (user: { id: string; isAdmin: boolean }, orgId = ORG_ID) =>
     query: { id: orgId },
     body: { fileName: 'logo.png', mimeType: 'image/png', fileSize: 1024 },
   });
-  (req as unknown as { user: unknown }).user = user;
+  (req as unknown as { user: unknown; logger: unknown }).user = user;
+  (req as unknown as { logger: unknown }).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await mockRefs.postHandler!(req, res);
   return res;
 };
@@ -144,18 +159,28 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     );
   });
 
-  it('still invalidates the old logo when the transaction fails after its bytes were deleted', async () => {
+  it('keeps the old logo and purges nothing when the transaction fails', async () => {
     storageGetSignedUrl.mockRejectedValueOnce(new Error('presign failed'));
 
     await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('presign failed');
-    expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
-    expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+    expect(storageDelete).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('does not invalidate the old logo when deleting its bytes fails', async () => {
+  it('deletes the old bytes before invalidating the CDN, both after the writes', async () => {
+    await invoke({ id: OWNER, isAdmin: false });
+
+    expect(storageDelete.mock.invocationCallOrder[0]).toBeLessThan(invalidate.mock.invocationCallOrder[0]);
+    expect(appFileFindByIdAndDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      storageDelete.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('answers 200 and skips the CDN purge when the post-commit delete fails', async () => {
     storageDelete.mockRejectedValueOnce(new Error('s3 down'));
 
-    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('s3 down');
+    const res = await invoke({ id: OWNER, isAdmin: false });
+    expect(res._getStatusCode()).toBe(200);
     expect(invalidate).not.toHaveBeenCalled();
   });
 

@@ -3,7 +3,6 @@ import { Box, Chip, Divider, Stack, Switch, Typography } from '@mui/joy';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
 import VideocamIcon from '@mui/icons-material/Videocam';
-import { toast } from 'sonner';
 import {
   MUSIC_MODEL_CATALOG,
   MUSIC_MODEL_IDS,
@@ -18,7 +17,7 @@ import {
 } from '@bike4mind/common';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
-import { useSettingsDraft } from './SettingsDraftProvider';
+import { useRequiredSettingsDraft } from './SettingsDraftProvider';
 import { SettingsSection } from './shared/SettingsSection';
 
 // Shared by both settings: per-model overrides of the catalog's defaultEnabled.
@@ -77,7 +76,6 @@ const EMPTY_SETTINGS: GenerationModelSettings = { enabledModels: {} };
 
 function GenerationModelsSection<M extends Modality>({ section }: { section: GenerationModality<M> }) {
   const { modality, settingKey, title, icon, ids, catalog, schema, isEnabled } = section;
-  // One mutation per section, so a pending save locks only this section's switches.
   const updateSettings = useUpdateSettings();
   const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // getSettingObject does not validate; malformed stored data falls back to catalog defaults.
@@ -85,28 +83,14 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
     const parsed = schema.safeParse(getSettingObject(settingKey, EMPTY_SETTINGS));
     return parsed.success ? parsed.data : EMPTY_SETTINGS;
   }, [getSettingObject, schema, settingKey]);
-  const draft = useSettingsDraft(settingKey, storedSettings, {
+  const draft = useRequiredSettingsDraft('AdminGenerationModelsSetting', settingKey, storedSettings, {
     name: title,
     save: value => updateSettings.mutateAsync({ key: settingKey, value }),
   });
-  const settings = draft.staged ? draft.value : storedSettings;
+  const settings = draft.value;
 
   const handleToggle = (id: ModalityTypes[M]['id'], enabled: boolean) => {
-    if (draft.staged) {
-      draft.setValue({ enabledModels: { ...settings.enabledModels, [id]: enabled } });
-      return;
-    }
-    updateSettings.mutate(
-      { key: settingKey, value: { enabledModels: { ...settings.enabledModels, [id]: enabled } } },
-      {
-        onSuccess: () => {
-          toast.success(`${catalog[id].displayName} ${enabled ? 'enabled' : 'disabled'}`);
-        },
-        onError: (error: Error) => {
-          toast.error(`Failed to update ${modality} generation models: ${error.message}`);
-        },
-      }
-    );
+    draft.setValue({ enabledModels: { ...settings.enabledModels, [id]: enabled } });
   };
 
   const testId = `admin-generation-models-${modality}`;
@@ -148,7 +132,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
               <Switch
                 checked={isEnabled(id, settings)}
                 // Until the stored value loads, a toggle would save over every other override with defaults.
-                disabled={!authedSettingsLoaded || updateSettings.isPending || draft.pending || Boolean(retired)}
+                disabled={!authedSettingsLoaded || draft.pending || Boolean(retired)}
                 onChange={event => handleToggle(id, event.target.checked)}
                 slotProps={{ input: { 'aria-label': `Enable ${displayName}` } }}
                 data-testid={`${testId}-${id}-switch`}

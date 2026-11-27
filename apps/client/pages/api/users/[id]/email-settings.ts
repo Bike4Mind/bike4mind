@@ -72,18 +72,24 @@ const handler = baseApi()
       try {
         const emailSettings = EmailSettingsSchema.parse(req.body);
 
-        // If platform email is being set, check if it's already taken
+        const updateFields: Record<string, unknown> = {};
+        let releasedAddress: string | undefined;
+
         if (emailSettings.platformEmailAddress) {
-          if (isReservedPlatformEmail(emailSettings.platformEmailAddress)) {
-            const current = await User.findById(userId).select('platformEmailAddress');
-            if (current?.platformEmailAddress?.toLowerCase() !== emailSettings.platformEmailAddress) {
-              return res.status(400).json({ error: 'Platform email local part is reserved' });
-            }
+          const requested = emailSettings.platformEmailAddress;
+          const current = await User.findById(userId).select('platformEmailAddress');
+          const currentAddress = current?.platformEmailAddress?.toLowerCase();
+
+          if (isReservedPlatformEmail(requested) && currentAddress !== requested) {
+            return res.status(400).json({ error: 'Platform email local part is reserved' });
           }
 
+          // An address stays bound to every user who has held it, so mail still sent to a
+          // released address can never be routed to a different account. releasedAt is kept so
+          // a cool-down can be added later without a backfill.
           const existingUser = await User.findOne({
-            platformEmailAddress: emailSettings.platformEmailAddress,
             _id: { $ne: userId },
+            $or: [{ platformEmailAddress: requested }, { 'releasedPlatformEmailAddresses.address': requested }],
           });
 
           if (existingUser) {
@@ -91,20 +97,25 @@ const handler = baseApi()
               error: 'This platform email address is already in use by another user',
             });
           }
+
+          updateFields.platformEmailAddress = requested;
+          if (currentAddress && currentAddress !== requested) {
+            releasedAddress = currentAddress;
+          }
         }
 
-        // Update user's email settings
-        const updateFields: any = {};
-        if (emailSettings.platformEmailAddress !== undefined) {
-          updateFields.platformEmailAddress = emailSettings.platformEmailAddress;
-        }
         if (emailSettings.authorizedEmailAddresses !== undefined) {
           updateFields.authorizedEmailAddresses = emailSettings.authorizedEmailAddresses;
         }
 
         const updatedUser = await User.findByIdAndUpdate(
           userId,
-          { $set: updateFields },
+          releasedAddress
+            ? {
+                $set: updateFields,
+                $push: { releasedPlatformEmailAddresses: { address: releasedAddress, releasedAt: new Date() } },
+              }
+            : { $set: updateFields },
           { new: true, runValidators: true }
         ).select('platformEmailAddress authorizedEmailAddresses');
 

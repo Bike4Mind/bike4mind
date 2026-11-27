@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { singlePaneLayout } from './orchestratorLayout';
@@ -73,6 +74,7 @@ const themed = createThemedMount();
 beforeEach(() => {
   answerTaskDecision.mockClear();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),

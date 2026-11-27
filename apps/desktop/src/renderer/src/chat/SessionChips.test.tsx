@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +55,7 @@ const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' }
 const listRecentFolders = async (): Promise<RecentFolder[]> => [];
 
 const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
   busy: false,
   error: null,
   dismissError: vi.fn(),
@@ -81,7 +84,11 @@ describe('the branch chip against what git answers', () => {
 
   beforeEach(() => {
     inspectProject.mockReset();
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -300,7 +307,11 @@ describe('the workspace form', () => {
     addContextDirectory.mockReset();
     removeContextDirectory.mockReset();
     inspectProject.mockResolvedValue(inspection());
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -410,7 +421,11 @@ describe('the chip row once the session has run here', () => {
   beforeEach(() => {
     inspectProject.mockReset();
     inspectProject.mockResolvedValue(inspection());
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -511,7 +526,11 @@ describe('a branch another worktree has checked out', () => {
         checkedOutElsewhere: { 'feat/held': { path: HELD } },
       })
     );
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -677,6 +696,7 @@ describe("the folder chip's recent folders", () => {
     inspectProject.mockResolvedValue(inspection());
     listRecent.mockResolvedValue(recent);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { inspectProject, listRecentFolders: listRecent, removeRecentFolder },
       getAppInfo,
     };
@@ -802,7 +822,7 @@ describe("a Chat session's granted folders", () => {
 
   beforeEach(() => {
     onRemove.mockClear();
-    (window as unknown as { b4m: unknown }).b4m = { getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);

@@ -1,4 +1,4 @@
-import { chatMessageResponseSchema, redactPromptMetaForViewer } from '@bike4mind/common';
+import { chatMessageResponseSchema, redactChatMessageForViewer } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -35,7 +35,7 @@ const handler = baseApi({ recordsActivity: false }).post(async (req: Request<{},
     throw new NotFoundError('Quest not found');
   }
   // A sharee reads the conversation, not what the owner's tools returned - same boundary as the
-  // sibling quest/chat routes; see redactPromptMetaForViewer.
+  // sibling quest/chat routes; see redactChatMessageForViewer.
   const isOwner = session.userId === userId;
 
   // Recovery is a pure function of liveness (see resolveQuestTimeoutRecovery). A live quest keeps
@@ -45,10 +45,7 @@ const handler = baseApi({ recordsActivity: false }).post(async (req: Request<{},
   // intact).
   const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
   if (!recovery) {
-    return respond(res, chatMessageResponseSchema, {
-      ...quest,
-      promptMeta: redactPromptMetaForViewer(quest.promptMeta, isOwner),
-    });
+    return respond(res, chatMessageResponseSchema, redactChatMessageForViewer(quest, isOwner));
   }
 
   // Conditional, so a real answer that landed after the read above is returned rather than
@@ -67,10 +64,7 @@ const handler = baseApi({ recordsActivity: false }).post(async (req: Request<{},
     req.logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'check-timeout' });
     await dispatchQuestCallback(quest.id, req.logger);
   }
-  return respond(res, chatMessageResponseSchema, {
-    ...updatedQuest,
-    promptMeta: redactPromptMetaForViewer(updatedQuest.promptMeta, isOwner),
-  });
+  return respond(res, chatMessageResponseSchema, redactChatMessageForViewer(updatedQuest, isOwner));
 });
 
 export default handler;

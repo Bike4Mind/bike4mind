@@ -3,6 +3,7 @@ import type { ChatMessage } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
 import type { ViewApproval } from '@shared/viewSnapshot';
 import { approvalSummary, isQuickApproval } from '@shared/watch';
+import { hostChat } from '../../host/hostChat';
 import { activityLabel } from './activity';
 import { refreshKeyOf } from './AgentPeekDrawer';
 import type { AgentView, ParentView } from './roster';
@@ -53,7 +54,7 @@ export function useQuickApprovals(
   useEffect(() => {
     let stale = false;
     const reads = sessions.map(({ sessionId }) =>
-      window.b4m.chat.getSession(sessionId).then(
+      hostChat.getSession(sessionId).then(
         session => quickApprovalsIn(sessionId, session?.messages ?? []),
         (): ViewApproval[] => []
       )

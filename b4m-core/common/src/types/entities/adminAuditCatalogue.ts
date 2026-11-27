@@ -467,6 +467,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
+  // The `platform` trust label on a person's callable function (pages/api/admin/callable-functions).
+  'callable_function.platform.marked': { category: 'settings', severity: 'notice', write: 'strict' },
+  'callable_function.platform.cleared': { category: 'settings', severity: 'notice', write: 'strict' },
+  // Offering a marked function to every signed-in person, set and withdrawn on the same route.
+  'callable_function.audience.set': { category: 'settings', severity: 'notice', write: 'strict' },
+  'callable_function.audience.cleared': { category: 'settings', severity: 'notice', write: 'strict' },
 
   // Two-person approvals (apps/client/server/admin/approvals). executed/failed are bestEffort because
   // the gated action has already run (or failed) when they are written; the record keeps the outcome.

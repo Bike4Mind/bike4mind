@@ -47,6 +47,26 @@ export const ANN_MODELS_QUERIED_METRIC = 'AnnModelsQueried';
  */
 export const ANN_QUERY_DURATION_METRIC = 'AnnQueryDurationMs';
 
+// Fallback-to-scan signals: one datapoint of 1 per search in which the case occurred, never a 0.
+// The first two feed the dataLakeVectorSearchFallback alarm in infra/alarms.ts.
+/** The Atlas index status check reported the primary model's index as not queryable (a check error counts). */
+export const VECTOR_INDEX_NOT_QUERYABLE_METRIC = 'VectorIndexNotQueryable';
+/** The primary model's ANN query threw and its files fell back to the scan. */
+export const ANN_QUERY_FAILED_METRIC = 'AnnQueryFailed';
+/** Vector search was enabled but served no file, so retrieval was scan-only. Reason dimension says why. */
+export const ANN_SERVED_NOTHING_METRIC = 'AnnServedNothing';
+
+/** Why the primary model's ANN path did not engage. Dimension value - keep stable. */
+export type AnnBlockedReason =
+  'no-backend' | 'index-not-queryable' | 'no-ready-files' | 'ready-files-within-lag' | 'no-index-resident-files';
+
+export interface VectorSearchFallbacks {
+  indexNotQueryable: boolean;
+  annQueryFailed: boolean;
+  /** Null unless vector search was enabled and served nothing on a search with rankable files. */
+  annServedNothingReason: AnnBlockedReason | null;
+}
+
 /**
  * Which retrieval backend served the search. Dimension value - keep stable.
  *
@@ -70,6 +90,11 @@ export interface DataLakeSearchMetrics {
    * than the one that ran, and CloudWatch cannot relabel published datapoints afterwards.
    */
   annSlowestQueryMs: number | null;
+  /**
+   * Carried on this one PutMetricData rather than a separate call, so a degraded search spends no
+   * extra round trip on reporting that it degraded.
+   */
+  fallbacks: VectorSearchFallbacks;
 }
 
 /**
@@ -142,10 +167,33 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
             Dimensions,
           }));
 
+    const fallbackDatapoint = (MetricName: string, Dimensions: { Name: string; Value: string }[]) => ({
+      MetricName,
+      Value: 1,
+      Unit: StandardUnit.Count,
+      Timestamp: timestamp,
+      Dimensions,
+    });
+    const { fallbacks } = metrics;
+    const servedNothingReason = fallbacks.annServedNothingReason;
+    const fallbackData = [
+      ...(fallbacks.indexNotQueryable
+        ? [stageOnly, withBackend].map(d => fallbackDatapoint(VECTOR_INDEX_NOT_QUERYABLE_METRIC, d))
+        : []),
+      ...(fallbacks.annQueryFailed
+        ? [stageOnly, withBackend].map(d => fallbackDatapoint(ANN_QUERY_FAILED_METRIC, d))
+        : []),
+      ...(servedNothingReason === null
+        ? []
+        : [stageOnly, [...stageOnly, { Name: 'Reason', Value: servedNothingReason }]].map(d =>
+            fallbackDatapoint(ANN_SERVED_NOTHING_METRIC, d)
+          )),
+    ];
+
     await client.send(
       new PutMetricDataCommand({
         Namespace: DATA_LAKE_RETRIEVAL_NAMESPACE,
-        MetricData: [...countData, ...durationData],
+        MetricData: [...countData, ...durationData, ...fallbackData],
       })
     );
   } catch (error) {
@@ -153,6 +201,7 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
     // for a partial logger too, or the catch itself takes down the search it was protecting.
     (logger ?? Logger.globalInstance)?.warn?.('[semanticSearch] Failed to emit data-lake search metrics', {
       backend: metrics.backend,
+      fallbacks: metrics.fallbacks,
       error: error instanceof Error ? error.message : String(error),
     });
   }

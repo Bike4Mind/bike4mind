@@ -4,7 +4,7 @@ import BaseRepository from '@bike4mind/db-core';
 
 /**
  * When an OAuth client first and last got a sign-in for a user: one row per (user, client), written
- * when an authorization code is issued. Unlike OAuthGrant it outlives a revoked consent, so it
+ * when an authorization code is redeemed for tokens. Unlike OAuthGrant it outlives a revoked consent, so it
  * answers which apps a person has signed in to, not which they may still sign in to.
  */
 export interface IOAuthClientSignInDocument extends IMongoDocument {
@@ -36,9 +36,11 @@ const OAuthClientSignInSchema = new Schema<IOAuthClientSignInDocument>(
   { timestamps: true }
 );
 
-// One row per (client, user); the upsert keys on it, and the clientId prefix serves per-client counts.
+// One row per (client, user); the upsert keys on it.
 OAuthClientSignInSchema.index({ clientId: 1, userId: 1 }, { unique: true });
 OAuthClientSignInSchema.index({ userId: 1, lastSignInAt: -1 });
+// Serves the per-client active-user counts.
+OAuthClientSignInSchema.index({ clientId: 1, lastSignInAt: -1 });
 
 const isDuplicateKey = (error: unknown) =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;

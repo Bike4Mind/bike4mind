@@ -330,3 +330,22 @@ describe('sendToClient - which failed sends delete a connection row', () => {
     expect(sendToClientMocks.deleteOne).not.toHaveBeenCalled();
   });
 });
+
+describe('sendToClient - key scope', () => {
+  it('skips sockets opened with a key that does not receive user fanout', async () => {
+    sendToClientMocks.find.mockReset();
+    sendToClientMocks.send.mockReset();
+    sendToClientMocks.find.mockResolvedValue([
+      { connectionId: 'c-jwt', scopes: [] },
+      { connectionId: 'c-generate-key', scopes: ['ai:generate'] },
+      { connectionId: 'c-bridge-key', scopes: ['cc-bridge:connect'] },
+      { connectionId: 'c-me-key', scopes: ['me:read'] },
+    ]);
+    sendToClientMocks.send.mockResolvedValue({});
+
+    await sendToClient('user-1', 'https://ws.example.com/test', { action: 'heartbeat' } as never);
+
+    const sentTo = sendToClientMocks.send.mock.calls.map(([command]) => command.input.ConnectionId);
+    expect(sentTo).toEqual(['c-jwt', 'c-generate-key']);
+  });
+});

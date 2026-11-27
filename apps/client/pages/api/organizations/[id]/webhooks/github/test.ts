@@ -41,7 +41,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 
 const isRedirectStatus = (status: number) => status >= 300 && status < 400;
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, TestResponse, TestRequest, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;

@@ -6,6 +6,7 @@ import { ApiKeyScope, updateOAuthClientSchema } from '@bike4mind/common';
 
 const handler = adminApi({
   adminPermissions: { PATCH: 'settings:manage' },
+  fullAdminMethods: ['PATCH'],
   requiredScopes: [ApiKeyScope.ADMIN],
 }).patch(async (req, res) => {
   const { id } = req.query;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assignPersonas } from '@shared/agentPersona';
@@ -56,7 +57,7 @@ beforeEach(() => {
   );
   chat.getHeldRelays.mockImplementation(async (id: string) => (id === 'g' ? [heldFor('g', 'h1')] : []));
   chat.resolveHeldRelay.mockResolvedValue(undefined);
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
 });
 
 afterEach(() => themed.unmount());
@@ -72,7 +73,7 @@ describe('NeedsYouStrip', () => {
       'Quest > Child > Grandchild'
     );
     // A working agent's transcript is never read.
-    expect(chat.getSession).not.toHaveBeenCalledWith('c', false);
+    expect(chat.getSession).not.toHaveBeenCalledWith('c');
   });
 
   it('resolves a grandchild held relay and drops it on the refetch', async () => {
@@ -97,7 +98,7 @@ describe('NeedsYouStrip', () => {
     await flush();
     expect(document.querySelector('[data-decision-id="held:h2"]')).not.toBeNull();
     expect(chat.getHeldRelays.mock.calls).toEqual([['g']]);
-    expect(chat.getSession.mock.calls).toEqual([['g', false]]);
+    expect(chat.getSession.mock.calls).toEqual([['g']]);
   });
 
   it('hides what was read under an older state until the refetch lands', async () => {

@@ -13,6 +13,7 @@ const {
   mockFindByIdWithCredentials,
   mockSendMessage,
   mockFindActiveSubscriberUserIds,
+  mockOrgFindById,
 } = vi.hoisted(() => ({
   mockAccounts: vi.fn(),
   mockDestination: vi.fn(),
@@ -32,6 +33,7 @@ const {
   mockFindByIdWithCredentials: vi.fn(),
   mockSendMessage: vi.fn(),
   mockFindActiveSubscriberUserIds: vi.fn(),
+  mockOrgFindById: vi.fn(),
 }));
 
 vi.mock('../../di/registry', () => ({
@@ -42,6 +44,9 @@ vi.mock('../../di/registry', () => ({
       findById: (...args: unknown[]) => ({ select: () => mockUserFindById(...args) }),
       findOneAndUpdate: mockUserFindOneAndUpdate,
       findByIdAndUpdate: mockUserFindByIdAndUpdate,
+    },
+    Organization: {
+      findById: (...args: unknown[]) => ({ select: () => ({ lean: () => mockOrgFindById(...args) }) }),
     },
     webhookSubscriptionRepository: {
       findActiveSubscriberUserIds: mockFindActiveSubscriberUserIds,
@@ -404,6 +409,13 @@ describe('GitHubSlackNotifier', () => {
   });
 
   describe('org subscription filtering', () => {
+    beforeEach(() => {
+      mockOrgFindById.mockResolvedValue({
+        userId: 'owner-1',
+        users: [{ userId: 'user-1' }, { userId: 'user-2' }],
+      });
+    });
+
     it('should NOT send notification when user is found by githubUsername but NOT subscribed to org', async () => {
       const user = createMockUser();
       mockUserFind.mockResolvedValue([user]);
@@ -458,6 +470,75 @@ describe('GitHubSlackNotifier', () => {
       expect(mockFindActiveSubscriberUserIds).toHaveBeenCalledWith('org-123', ['user-1', 'user-2']);
       // Only one user should receive notification
       expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('org membership filtering', () => {
+    it('does not notify a subscriber who is no longer a member of the org', async () => {
+      const departed = createMockUser({ id: 'user-2' });
+      mockUserFind.mockResolvedValue([departed]);
+      mockUserFindById.mockResolvedValue(departed);
+      mockUserFindOneAndUpdate.mockResolvedValue(departed);
+      mockFindActiveSubscriberUserIds.mockResolvedValue(['user-2']);
+      mockOrgFindById.mockResolvedValue({ userId: 'owner-1', users: [{ userId: 'user-1' }] });
+
+      const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage, { orgId: 'org-123' });
+
+      expect(mockOrgFindById).toHaveBeenCalledWith('org-123');
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(result).toEqual({ notifiedUserIds: [], failedNotifications: [] });
+    });
+
+    it('notifies only the current members among several subscribers', async () => {
+      const member = createMockUser({ id: 'user-1' });
+      const departed = createMockUser({ id: 'user-2' });
+      mockUserFind.mockResolvedValue([member, departed]);
+      mockUserFindById.mockResolvedValue(member);
+      mockUserFindOneAndUpdate.mockResolvedValue(member);
+      mockFindActiveSubscriberUserIds.mockResolvedValue(['user-1', 'user-2']);
+      mockOrgFindById.mockResolvedValue({ userId: 'owner-1', users: [{ userId: 'user-1' }] });
+
+      const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage, { orgId: 'org-123' });
+
+      expect(mockSendMessage).toHaveBeenCalledTimes(1);
+      expect(result.notifiedUserIds).toEqual(['user-1']);
+    });
+
+    it('notifies the org owner, who holds no users[] row', async () => {
+      const owner = createMockUser({ id: 'owner-1' });
+      mockUserFind.mockResolvedValue([owner]);
+      mockUserFindById.mockResolvedValue(owner);
+      mockUserFindOneAndUpdate.mockResolvedValue(owner);
+      mockFindActiveSubscriberUserIds.mockResolvedValue(['owner-1']);
+      mockOrgFindById.mockResolvedValue({ userId: 'owner-1', users: [] });
+
+      const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage, { orgId: 'org-123' });
+
+      expect(result.notifiedUserIds).toEqual(['owner-1']);
+    });
+
+    it('notifies nobody when the org no longer exists', async () => {
+      const user = createMockUser();
+      mockUserFind.mockResolvedValue([user]);
+      mockFindActiveSubscriberUserIds.mockResolvedValue(['user-1']);
+      mockOrgFindById.mockResolvedValue(null);
+
+      const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage, { orgId: 'org-123' });
+
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(result).toEqual({ notifiedUserIds: [], failedNotifications: [] });
+    });
+
+    it('fails closed with a dispatchError when the org lookup throws', async () => {
+      const user = createMockUser();
+      mockUserFind.mockResolvedValue([user]);
+      mockFindActiveSubscriberUserIds.mockResolvedValue(['user-1']);
+      mockOrgFindById.mockRejectedValue(new Error('mongo timeout'));
+
+      const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage, { orgId: 'org-123' });
+
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(result.dispatchError).toMatch(/Subscription check failed.*mongo timeout/);
     });
   });
 

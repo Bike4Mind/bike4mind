@@ -6,6 +6,7 @@ import { ApiKeyScope, createOAuthClientSchema } from '@bike4mind/common';
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

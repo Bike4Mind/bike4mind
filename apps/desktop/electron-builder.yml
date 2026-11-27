@@ -18,6 +18,8 @@ directories:
 # so they have to ship.
 files:
   - out/**
+  # The headless host (`pnpm build:host`) is a separate program, not part of the app.
+  - "!out/host/**"
   - package.json
   # node-pty ships prebuilt binaries for every platform, plus Windows debug symbols (~20 MB)
   # and the sources it would compile from without them; none of that is needed to run.

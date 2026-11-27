@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ApiKeyScope, type IDataLakeDocument } from '@bike4mind/common';
+import { ApiKeyScope, FILE_READ_TOOL_NAMES, type IDataLakeDocument } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '../middlewares/apiKeyScopeGate';
 import {
   DATA_LAKE_READ_SCOPES,
@@ -172,7 +172,10 @@ describe('dataLakeToolsDeniedFor', () => {
 describe('credentialExecutionFields', () => {
   it('carries the denials and key id for a key lacking datalake:write', () => {
     expect(
-      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ] })
+      credentialExecutionFields({
+        keyId: 'key-1',
+        scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ, ApiKeyScope.READ_FILES],
+      })
     ).toEqual({
       scopeDeniedTools: ['create_data_lake', 'save_content_to_data_lake'],
       adminRoleWithheld: true,
@@ -182,16 +185,33 @@ describe('credentialExecutionFields', () => {
   });
 
   it('omits the denials but keeps the key id for a key holding datalake:write', () => {
-    expect(credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toEqual({
+    expect(
+      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES] })
+    ).toEqual({
       adminRoleWithheld: true,
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
     });
   });
 
+  it('denies the knowledge-base tools to a key without files:read', () => {
+    expect(
+      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE] })
+    ).toMatchObject({ scopeDeniedTools: [...FILE_READ_TOOL_NAMES] });
+    expect(
+      credentialExecutionFields({
+        keyId: 'key-1',
+        scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES],
+      })
+    ).not.toHaveProperty('scopeDeniedTools');
+  });
+
   it('does not withhold the admin role from a key holding admin:*', () => {
     expect(
-      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.ADMIN, ApiKeyScope.DATALAKE_WRITE] })
+      credentialExecutionFields({
+        keyId: 'key-1',
+        scopes: [ApiKeyScope.ADMIN, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES],
+      })
     ).toEqual({ authOrigin: 'apiKey', apiKeyId: 'key-1' });
   });
 

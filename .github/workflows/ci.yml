@@ -224,6 +224,10 @@ jobs:
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
+      # Linux runners cannot see a casing collision themselves, so check the tracked paths directly.
+      - name: Check tracked paths do not differ only in casing
+        run: bash scripts/check-no-case-collisions.sh
+
       # Added core migrations must carry a generator-made id (fresh UTC timestamp), so two PRs
       # cannot pick the same one. PR-only: the PR head gives the real fork point, and on push the
       # squash commit would make a long-lived PR's id look stale after it already passed here.
@@ -756,9 +760,19 @@ jobs:
         env:
           CI: 'true'
 
+      # The mongod version is pinned once, in the root package.json (config.mongodbMemoryServer);
+      # mongodb-memory-server reads it from there. Exporting it also keys the binary cache below
+      # and feeds the turbo test context (MONGOMS_* in scripts/turbo-test-cache.mjs).
+      - name: Export pinned MongoDB version
+        if: steps.select.outputs.setup == 'true'
+        run: |
+          v=$(node -p "require('./package.json').config?.mongodbMemoryServer?.version ?? ''")
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "MONGOMS_VERSION=$v" >> "$GITHUB_ENV"
+
       # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
-      # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
-      # then tops up any new version) instead of a cold download every time.
+      # no-op restore. restore-keys lets a lockfile bump reuse the prior binary for the same
+      # pinned Mongo version instead of a cold download every time.
       # Every cache key here hashes the root lockfile only: `**/pnpm-lock.yaml` walks the installed
       # node_modules (~14s per evaluation, paid again by each Post step) and matches lockfiles that
       # dependencies ship, so the key drifted after install and never hit. ciCacheKeys.test.ts.
@@ -767,15 +781,15 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/mongodb-binaries
-          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-mongodb-binaries-${{ env.MONGOMS_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-mongodb-binaries-
+            ${{ runner.os }}-mongodb-binaries-${{ env.MONGOMS_VERSION }}-
 
       # Resolve (download if absent) the mongod binary in a dedicated step, OUTSIDE any test's
       # beforeAll hook budget. Under CI load a cold download + createMongoServer's port-retry
       # loop can blow that budget, timing out the hook and silently skipping the whole file -
       # the #1 flake in #1098. Fail-soft: tests still download on demand if this misses. Uses
-      # the same package + default version as createMongoServer, so the same binary is cached.
+      # the same package and pinned version as createMongoServer, so the same binary is cached.
       - name: Pre-warm mongodb-memory-server binary
         if: steps.select.outputs.setup == 'true' && matrix.shard.mongod != 'skip'
         continue-on-error: true
@@ -1011,13 +1025,12 @@ jobs:
       # means every setup step before it passed. A failure here fails this leg, so it reddens
       # Run Tests and CI Complete like any shard failure.
       #
-      # Fast typecheck: tsgo (TypeScript 7.0 native) per package. server-utils, workers
-      # and client run tsgo only, so PR gating there is tsgo-only; the other packages
-      # still fall back to classic tsc on a tsgo failure. Pure tsc for every package
-      # runs in nightly-tsc-baseline.yml. See typecheck-report.md.
-      - name: Type check (tsgo; tsc fallback in some packages)
+      # Typecheck: tsgo (TypeScript 7.0 native) per package, with no classic tsc fallback.
+      # Pure tsc for every package (`typecheck:tsc`) runs in nightly-tsc-baseline.yml.
+      # See typecheck-report.md.
+      - name: Type check (tsgo)
         if: ${{ !cancelled() && matrix.shard.typecheck == 'true' && steps.sst-types.outcome == 'success' }}
-        run: pnpm -w typecheck:fast && pnpm --recursive typecheck:fast
+        run: pnpm -w typecheck && pnpm --recursive typecheck
 
       # The root /infra SST files are excluded from the root tsconfig and have no
       # package.json, so neither -w nor --recursive covers them. Typecheck them

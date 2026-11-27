@@ -10,6 +10,7 @@ import {
   STUDIO_COMPOSITION_LIMITS,
   studioFileMediaKind,
   type IFabFileDocument,
+  type StudioCharacter,
   type StudioCompositionResponse,
   type StudioShot,
   type StudioTimeline,
@@ -18,6 +19,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
+import { toggleShotCharacter } from './characterEdits';
 import FieldSaveStatus from './FieldSaveStatus';
 import LibraryThumb from './LibraryThumb';
 import {
@@ -185,6 +187,10 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
               onChoose={fileId => edit(current => chooseTake(current, shot.id, fileId))}
               onRemoveTake={fileId => edit(current => removeTake(current, shot.id, fileId))}
               onSend={() => void sendOne(shot)}
+              characters={composition.brandKit.characters}
+              onToggleCharacter={characterId =>
+                edit(current => toggleShotCharacter(current, shot.id, characterId, composition.brandKit.characters))
+              }
             />
           ))}
         </ShotList>
@@ -205,6 +211,8 @@ type ShotRowProps = {
   onChoose: (fileId: string) => void;
   onRemoveTake: (fileId: string) => void;
   onSend: () => void;
+  characters: readonly StudioCharacter[];
+  onToggleCharacter: (characterId: string) => void;
 };
 
 const ShotRow = ({
@@ -218,6 +226,8 @@ const ShotRow = ({
   onChoose,
   onRemoveTake,
   onSend,
+  characters,
+  onToggleCharacter,
 }: ShotRowProps) => {
   const testId = `production-shot-${index}`;
   return (
@@ -285,6 +295,28 @@ const ShotRow = ({
         testId={`${testId}-prompt-input`}
         onCommit={prompt => onPatch({ prompt })}
       />
+
+      {characters.length > 0 && (
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography level="body-xs">Features:</Typography>
+          {characters.map(character => {
+            const featured = shot.characterIds?.includes(character.id) ?? false;
+            return (
+              <Chip
+                key={character.id}
+                size="sm"
+                variant={featured ? 'solid' : 'outlined'}
+                color={featured ? 'primary' : 'neutral'}
+                aria-pressed={featured}
+                onClick={() => onToggleCharacter(character.id)}
+                data-testid={`${testId}-character-${character.id}-chip`}
+              >
+                {character.name}
+              </Chip>
+            );
+          })}
+        </Stack>
+      )}
 
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         {shot.fileIds.map(fileId => {

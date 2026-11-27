@@ -14,7 +14,7 @@ export const hostProtocolVersionSchema = z.object({
 });
 export type HostProtocolVersion = z.infer<typeof hostProtocolVersionSchema>;
 
-export const HOST_PROTOCOL_VERSION = { major: 1, minor: 1 } as const satisfies HostProtocolVersion;
+export const HOST_PROTOCOL_VERSION = { major: 1, minor: 3 } as const satisfies HostProtocolVersion;
 
 export type HostProtocolNegotiation =
   { ok: true; minor: number } | { ok: false; reason: 'client-too-old' | 'host-too-old' };

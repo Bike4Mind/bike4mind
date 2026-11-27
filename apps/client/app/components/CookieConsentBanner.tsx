@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -12,6 +12,8 @@ import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 import { releaseVisitBeacon } from '@client/app/utils/visitBeacon';
 import { beaconPage } from '@client/app/utils/pageBeacon';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
+import { COOKIE_BANNER_HEIGHT_VAR } from '@client/app/utils/cookieBannerSpace';
 
 type Consent = 'granted' | 'denied';
 
@@ -99,12 +101,35 @@ function describeCookieKinds(): string {
   return joinList([...kinds, 'campaign attribution']);
 }
 
+/** A ref that keeps the bar's height in COOKIE_BANNER_HEIGHT_VAR while it is mounted, and clears it after. */
+function usePublishedHeight() {
+  const observerRef = useRef<ResizeObserver | null>(null);
+  return useCallback((node: HTMLElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    const rootStyle = document.documentElement.style;
+    if (!node) {
+      rootStyle.removeProperty(COOKIE_BANNER_HEIGHT_VAR);
+      return;
+    }
+    const publish = () => rootStyle.setProperty(COOKIE_BANNER_HEIGHT_VAR, `${node.offsetHeight}px`);
+    publish();
+    if (typeof ResizeObserver === 'undefined') return;
+    observerRef.current = new ResizeObserver(publish);
+    observerRef.current.observe(node);
+  }, []);
+}
+
 export function CookieConsentBanner() {
   const [asking, setAsking] = useState(false);
   const settingsOpen = useCookieSettings(s => s.isOpen);
   const closeSettings = useCookieSettings(s => s.close);
+  // The unprompted ask waits out a tutorial walk, whose steps point at the composer this bar covers. Consent stays
+  // unset meanwhile, which tracks nothing; a reopen from settings still shows at once.
+  const walkOnScreen = useTutorialPicker(s => s.walkOnScreen);
   const firstActionRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const bannerRef = usePublishedHeight();
 
   useEffect(() => {
     const consent = resolveConsent();
@@ -135,7 +160,7 @@ export function CookieConsentBanner() {
     if (trigger && document.activeElement === document.body) trigger.focus();
   }, [settingsOpen]);
 
-  if (!asking && !settingsOpen) return null;
+  if ((!asking || walkOnScreen) && !settingsOpen) return null;
 
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
@@ -154,6 +179,7 @@ export function CookieConsentBanner() {
   return (
     // A region, not a dialog: a dialog would also need a focus trap.
     <Box
+      ref={bannerRef}
       data-testid="cookie-consent-banner"
       role="region"
       aria-label="Cookie settings"

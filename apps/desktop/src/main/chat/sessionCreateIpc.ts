@@ -1,19 +1,11 @@
 import type { IpcMain } from 'electron';
-import type { ChatSessionSummary, CreateCodeSessionRequest, CreateCodeSessionResult } from '@shared/chat';
-import {
-  IPC_CHANNELS,
-  type CreateCodeSessionIpcRequest,
-  type CreateCodeSessionIpcResult,
-  type CreateSessionRequest,
-  type CreatedSession,
-} from '@shared/ipc';
+import type { ChatSessionSummary } from '@shared/chat';
+import { IPC_CHANNELS, type CreateSessionRequest, type CreatedSession } from '@shared/ipc';
 import type { PlacementOutcome } from './sidebarIpc';
 
 /** What the create handlers need from main; kept apart from the IPC so they can be tested alone. */
 export interface SessionCreation {
   createSession: (mode: PlainSessionMode) => Promise<ChatSessionSummary>;
-  /** Also remembers the folder for the recent list; see HostRuntime.createCodeSession. */
-  createCodeSession: (request: CreateCodeSessionRequest) => Promise<CreateCodeSessionResult>;
   /** Files a freshly minted session; see placeNewSession. */
   place: (sessionId: string, sectionId: unknown) => Promise<PlacementOutcome>;
 }
@@ -36,15 +28,6 @@ export function registerSessionCreateIpc(ipc: Pick<IpcMain, 'handle'>, creation:
     async (_event, request: CreateSessionRequest | undefined): Promise<CreatedSession> => {
       const session = await creation.createSession(plainSessionMode(request?.mode));
       return { session, ...placement(await creation.place(session.id, request?.sectionId)) };
-    }
-  );
-
-  ipc.handle(
-    IPC_CHANNELS.chatCreateCodeSession,
-    async (_event, request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult> => {
-      const result = await creation.createCodeSession(request);
-      if (!result.ok) return result;
-      return { ...result, ...placement(await creation.place(result.session.id, request.sectionId)) };
     }
   );
 }

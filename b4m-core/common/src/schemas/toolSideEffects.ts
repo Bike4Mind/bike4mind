@@ -71,9 +71,6 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   // Serializes a .ipynb into the observation; unlike excel_generation it does not persist
   // the file, so it stops at `local`.
   generate_jupyter_notebook: 'local',
-  optihashi_schedule: 'local',
-  optihashi_formulate: 'local',
-  optihashi_edit_problem: 'local',
 
   image_generation: 'external',
   edit_image: 'external',
@@ -138,6 +135,9 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
 
   // Premium overlay
   mission_status: 'none',
+  optihashi_schedule: 'local',
+  optihashi_formulate: 'local',
+  optihashi_edit_problem: 'local',
   optihashi_decompose: 'local',
   optihashi_solve: 'local',
   send_slack_message: 'external',

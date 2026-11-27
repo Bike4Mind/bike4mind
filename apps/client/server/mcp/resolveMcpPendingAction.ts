@@ -189,6 +189,17 @@ export async function resolveMcpPendingAction({
     return { status: 200, body: { success: true, message: 'Action cancelled' } };
   }
 
+  // The action runs with the confirming user's credentials, so only the user whose turn staged it may
+  // run it. A turn in a shared notebook can be another user's (promptMeta.session.userId is its actor).
+  const requesterId = quest.promptMeta?.session?.userId;
+  if (requesterId && requesterId !== user.id?.toString()) {
+    logger.warn('[MCP Pending Action] Confirming user did not stage this action', { questId });
+    return {
+      status: 403,
+      body: { error: 'Only the person who asked for this action can confirm it. You can cancel it instead.' },
+    };
+  }
+
   // A custom connector action never reaches the built-in routing below. The host call re-checks policy
   // and passes `approved: true` because this click is the approval.
   if (pendingAction.customConnector) {

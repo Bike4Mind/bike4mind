@@ -64,6 +64,13 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('POST', '/api/files', true)).toBe('allow');
     expect(impersonationDecision('POST', '/api/auth/impersonation', false)).toBe('allow');
   });
+  it('refuses a collection-root DELETE even after escalation, while single-item deletes still pass', () => {
+    for (const path of ['/api/sessions', '/api/files', '/api/sessions/', '/api/files?x=1']) {
+      expect(impersonationDecision('DELETE', path, true)).toBe('sensitive');
+    }
+    expect(impersonationDecision('DELETE', '/api/sessions/0123456789abcdef01234567', true)).toBe('allow');
+    expect(impersonationDecision('GET', '/api/sessions', false)).toBe('allow');
+  });
   it('admits only public client-config reads with a parked admin cookie', () => {
     const next = vi.fn();
     for (const method of ['GET', 'HEAD']) {

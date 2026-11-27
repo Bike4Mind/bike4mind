@@ -51,4 +51,8 @@ final class CaptureSessionAdmissionTests: XCTestCase {
     try await CaptureAdmissionScenarios.attemptReadbackFailureCannotDispatch()
   }
 
+  func testPendingRevocationsMigrateOnceBeforeUse() throws {
+    try CaptureAdmissionScenarios.pendingRevocationsMigrateOnceBeforeUse()
+  }
+
 }

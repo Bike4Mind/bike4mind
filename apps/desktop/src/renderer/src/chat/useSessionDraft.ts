@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ChatAttachment, ChatSession, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { hostChat } from '../host/hostChat';
+import { sessionDirectory } from '../host/sessionDirectory';
 import type { ConversationController, SessionPlacement } from './useChat';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 
@@ -21,6 +24,9 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const current = useRef(session);
   current.current = session;
   const placement = useRef<SessionPlacement | undefined>(undefined);
+  // The host the draft's session will be created on. A remote draft is recorded in the session
+  // directory under its draft id, so sessionCapabilities hides the controls that host cannot serve.
+  const draftHost = useRef(LOCAL_HOST_ID);
   const sending = useRef(false);
   // Applied when the draft's session is created and Orchestrate turns on there.
   const orchestrateBudget = useRef<number | undefined>(undefined);
@@ -30,28 +36,34 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const [error, setError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
 
+  /** Attachments are staged by Desktop's own main process, so only a local draft has any. */
+  const retire = useCallback((draftId: string) => {
+    if (draftHost.current === LOCAL_HOST_ID) void retireDraftAttachments(draftId);
+    else sessionDirectory.forget([draftId]);
+  }, []);
+
   const discard = useCallback(() => {
     const previous = current.current;
     current.current = null;
     setSession(null);
     setError(null);
     setProjectError(null);
-    if (previous && !sending.current) void retireDraftAttachments(previous.id);
-  }, []);
+    if (previous && !sending.current) retire(previous.id);
+  }, [retire]);
 
   useEffect(
     () => () => {
       const previous = current.current;
       current.current = null;
-      if (previous && !sending.current) void retireDraftAttachments(previous.id);
+      if (previous && !sending.current) retire(previous.id);
     },
-    []
+    [retire]
   );
 
   const loadDefaults = useCallback(async (draftId: string): Promise<{ ok: true } | { ok: false; error: string }> => {
     const version = ++defaultsVersion.current;
     try {
-      const defaults = newSessionDefaultsSchema.parse(await window.b4m.chat.defaultsForNewSession());
+      const defaults = newSessionDefaultsSchema.parse(await hostChat.defaultsForNewSession(draftHost.current));
       const before = current.current;
       if (before?.id !== draftId || defaultsVersion.current !== version) return { ok: true };
       const next = { ...before };
@@ -72,9 +84,20 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
     }
   }, []);
 
+  /** Only a Code draft can be on a remote host: a chat session is created by Desktop's own main process. */
   const start = useCallback(
-    (mode: ChatSessionMode, request: CreateCodeSessionRequest = {}, place?: SessionPlacement) => {
-      if (current.current?.mode === mode && !request.directory && placement.current?.sectionId === place?.sectionId)
+    (
+      mode: ChatSessionMode,
+      request: CreateCodeSessionRequest = {},
+      place?: SessionPlacement,
+      hostId: string = LOCAL_HOST_ID
+    ) => {
+      if (
+        current.current?.mode === mode &&
+        !request.directory &&
+        placement.current?.sectionId === place?.sectionId &&
+        draftHost.current === hostId
+      )
         return current.current.id;
       discard();
       explicitDefaults.current = new Set();
@@ -103,6 +126,8 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
           : {}),
       };
       placement.current = place;
+      draftHost.current = mode === 'code' ? hostId : LOCAL_HOST_ID;
+      if (draftHost.current !== LOCAL_HOST_ID) sessionDirectory.record(draftHost.current, [next.id]);
       current.current = next;
       setSession(next);
       void loadDefaults(next.id);
@@ -124,7 +149,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const chooseDirectory = useCallback(
     async (directory: string) => {
       const before = current.current;
-      const inspected = await window.b4m.chat.inspectProject(directory);
+      const inspected = await hostChat.inspectProject(draftHost.current, directory);
       if (!before || current.current?.id !== before.id) return;
       if (inspected.refusal) {
         setProjectError(inspected.refusal);
@@ -175,6 +200,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       const initial = current.current;
       if (!initial || sending.current) return false;
       const draftId = initial.id;
+      const hostId = draftHost.current;
       sending.current = true;
       setBusy(true);
       setError(null);
@@ -190,7 +216,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         const section = place ? { sectionId: place.sectionId } : undefined;
         const created =
           draft.mode === 'code'
-            ? await window.b4m.chat.createCodeSession({
+            ? await hostChat.createCodeSession(hostId, {
                 ...section,
                 ...(draft.project
                   ? {
@@ -203,37 +229,43 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
             : await window.b4m.chat.createSession(section);
         if (!('session' in created)) throw new Error(created.error);
         id = created.session.id;
-        const requireSaved = (value: unknown) => {
-          if (!value) throw new Error('Could not apply the draft settings.');
-        };
-        if (deliberate.has('model') && draft.model)
-          requireSaved(await window.b4m.chat.setSessionModel(id, draft.model));
-        if (deliberate.has('approvalMode')) requireSaved(await window.b4m.chat.setApprovalMode(id, draft.approvalMode));
-        if (deliberate.has('reasoningEffort'))
-          requireSaved(await window.b4m.chat.setSessionReasoningEffort(id, draft.reasoningEffort));
-        if (deliberate.has('promptCacheTtl') && draft.promptCacheTtl)
-          requireSaved(await window.b4m.chat.setSessionPromptCacheTtl(id, draft.promptCacheTtl));
-        if (draft.generation) requireSaved(await window.b4m.chat.setSessionGeneration(id, draft.generation));
-        if (draft.historyEnabled !== undefined)
-          requireSaved(await window.b4m.chat.setSessionHistory(id, draft.historyEnabled));
-        if (draft.orchestrate) {
-          const budget = orchestrateBudget.current;
-          requireSaved(
-            await (budget === undefined
-              ? window.b4m.chat.setSessionOrchestrate(id, true)
-              : window.b4m.chat.setSessionOrchestrate(id, true, budget))
+        if (hostId !== LOCAL_HOST_ID) sessionDirectory.record(hostId, [id]);
+        // The draft's settings, folders and staged attachments are applied through Desktop's own
+        // main process, so only a local draft carries any; a remote draft's pickers are hidden.
+        if (hostId === LOCAL_HOST_ID) {
+          const requireSaved = (value: unknown) => {
+            if (!value) throw new Error('Could not apply the draft settings.');
+          };
+          if (deliberate.has('model') && draft.model)
+            requireSaved(await window.b4m.chat.setSessionModel(id, draft.model));
+          if (deliberate.has('approvalMode'))
+            requireSaved(await window.b4m.chat.setApprovalMode(id, draft.approvalMode));
+          if (deliberate.has('reasoningEffort'))
+            requireSaved(await window.b4m.chat.setSessionReasoningEffort(id, draft.reasoningEffort));
+          if (deliberate.has('promptCacheTtl') && draft.promptCacheTtl)
+            requireSaved(await window.b4m.chat.setSessionPromptCacheTtl(id, draft.promptCacheTtl));
+          if (draft.generation) requireSaved(await window.b4m.chat.setSessionGeneration(id, draft.generation));
+          if (draft.historyEnabled !== undefined)
+            requireSaved(await window.b4m.chat.setSessionHistory(id, draft.historyEnabled));
+          if (draft.orchestrate) {
+            const budget = orchestrateBudget.current;
+            requireSaved(
+              await (budget === undefined
+                ? window.b4m.chat.setSessionOrchestrate(id, true)
+                : window.b4m.chat.setSessionOrchestrate(id, true, budget))
+            );
+          }
+          for (const path of draft.project?.contextDirectories ?? draft.grantedDirectories ?? []) {
+            const result = await window.b4m.chat.addContextDirectory(id, path);
+            if (result.status === 'refused') throw new Error(result.error);
+          }
+          await window.b4m.chat.copyDraftAttachments(
+            draft.id,
+            id,
+            attachments.map(attachment => attachment.id)
           );
         }
-        for (const path of draft.project?.contextDirectories ?? draft.grantedDirectories ?? []) {
-          const result = await window.b4m.chat.addContextDirectory(id, path);
-          if (result.status === 'refused') throw new Error(result.error);
-        }
-        await window.b4m.chat.copyDraftAttachments(
-          draft.id,
-          id,
-          attachments.map(attachment => attachment.id)
-        );
-        const result = await window.b4m.chat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
+        const result = await hostChat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
         if (!result.ok) throw new Error(result.error);
         accepted = true;
         if (created.sidebarSections) place?.placed(created.sidebarSections);
@@ -248,12 +280,13 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
             onCreated(id);
           }
         }
-        await window.b4m.chat.discardDraftAttachments(draft.id);
+        if (hostId === LOCAL_HOST_ID) await window.b4m.chat.discardDraftAttachments(draft.id);
+        else sessionDirectory.forget([draft.id]);
         return true;
       } catch (cause) {
         if (id && !accepted) {
           try {
-            await window.b4m.chat.deleteSession(id);
+            await hostChat.deleteSession(id, { allowDiscard: false });
           } catch {
             if (current.current?.id === draftId)
               setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');
@@ -263,7 +296,10 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         if (current.current?.id === draftId) setError(cause instanceof Error ? cause.message : String(cause));
         return accepted;
       } finally {
-        if (current.current?.id !== draftId) void retireDraftAttachments(draftId);
+        if (current.current?.id !== draftId) {
+          if (hostId === LOCAL_HOST_ID) void retireDraftAttachments(draftId);
+          else sessionDirectory.forget([draftId]);
+        }
         sending.current = false;
         setBusy(false);
       }
@@ -306,6 +342,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         else setError(`Send a message first before using /${name}.`);
       },
       project: {
+        hostId: draftHost.current,
         busy,
         error: projectError ? { message: projectError, busy: false } : null,
         dismissError: () => setProjectError(null),

@@ -8,7 +8,7 @@ struct NotificationSettingsView: View {
     NotificationSettingsContent(
       push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings,
       briefSchedule: services.briefSchedule, busyBlocks: services.busyBlocks, calendar: services.busyBlockReader,
-      busyBlockSyncer: services.busyBlockSyncer)
+      busyBlockSyncer: services.busyBlockSyncer, interruptionFeedback: services.interruptionFeedback)
   }
 }
 
@@ -20,19 +20,22 @@ private struct NotificationSettingsContent: View {
   @State private var model: NotificationSettingsViewModel
   @State private var brief: BriefScheduleViewModel
   @State private var busyBlocks: BusyBlockBriefViewModel
+  @State private var interruptions: InterruptionFeedbackViewModel
   private let settings: any SystemSettingsOpening
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(AuthController.self) private var auth
 
   init(
     push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening,
     briefSchedule: any BriefScheduleAPI, busyBlocks: any BusyBlocksAPI, calendar: any BusyBlockReader,
-    busyBlockSyncer: BusyBlockSyncer
+    busyBlockSyncer: BusyBlockSyncer, interruptionFeedback: any InterruptionFeedbackAPI
   ) {
     self.settings = settings
     _model = State(initialValue: NotificationSettingsViewModel(push: push, prefs: prefs, settings: settings))
     _brief = State(initialValue: BriefScheduleViewModel(api: briefSchedule))
     _busyBlocks = State(
       initialValue: BusyBlockBriefViewModel(api: busyBlocks, reader: calendar, syncer: busyBlockSyncer))
+    _interruptions = State(initialValue: InterruptionFeedbackViewModel(api: interruptionFeedback))
   }
 
   var body: some View {
@@ -60,7 +63,10 @@ private struct NotificationSettingsContent: View {
     // Reloads on return from iOS Settings, where the user may have changed the system switch.
     .task(id: scenePhase) { if scenePhase == .active { await model.load() } }
     .task { await brief.load() }
-    .task { await busyBlocks.load() }
+    .onChange(of: auth.captureSession().id, initial: true) { _, _ in busyBlocks.scheduleLoad() }
+    .task(id: scenePhase) {
+      if scenePhase == .active && !interruptions.isLoaded { await interruptions.load() }
+    }
   }
 
   private var masterSection: some View {
@@ -147,13 +153,14 @@ private struct NotificationSettingsContent: View {
     }
   }
 
+  @ViewBuilder
   private var busyBlockSection: some View {
     Section {
       Toggle(
         "Brief After Busy Blocks",
         isOn: Binding(
           get: { busyBlocks.isEnabled },
-          set: { isOn in Task { await busyBlocks.setEnabled(isOn) } })
+          set: { isOn in busyBlocks.scheduleSetEnabled(isOn) })
       )
       .disabled(!busyBlocks.isLoaded || busyBlocks.isSaving)
       .accessibilityIdentifier("settings-busy-block-brief-toggle")
@@ -165,6 +172,32 @@ private struct NotificationSettingsContent: View {
     } footer: {
       Text(busyBlockFooter)
     }
+    if busyBlocks.isEnabled {
+      afterBusyBlockSection
+    }
+  }
+
+  private var afterBusyBlockSection: some View {
+    Section {
+      quietToggle(.agentCompleted, "Don't notify me about finished agent runs after a busy block")
+      quietToggle(.agentFailed, "Don't notify me about failed agent runs after a busy block")
+    } footer: {
+      Text(
+        interruptions.errorMessage
+          ?? "The brief still arrives in the Briefs tab. If no brief is composed for the block, you still get a short "
+          + "summary of the runs. A brief with a decision waiting on you still notifies.")
+    }
+  }
+
+  private func quietToggle(_ category: InterruptionCategory, _ title: String) -> some View {
+    Toggle(
+      title,
+      isOn: Binding(
+        get: { interruptions.isQuiet(category) },
+        set: { isOn in Task { await interruptions.setQuiet(category, isOn) } })
+    )
+    .disabled(!interruptions.isLoaded || interruptions.isSaving)
+    .accessibilityIdentifier("settings-interruption-\(category.rawValue)-toggle")
   }
 
   private var busyBlockFooter: String {
@@ -186,9 +219,9 @@ private struct NotificationSettingsContent: View {
       Text(day.shortName)
         .font(Tokens.Typography.caption)
         .frame(maxWidth: .infinity, minHeight: 32)
-        .background(Circle().fill(isSelected ? Color.accentColor : Color.clear))
-        .overlay(Circle().stroke(Color.accentColor, lineWidth: 1))
-        .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+        .background(Circle().fill(isSelected ? Tokens.Palette.brand : Color.clear))
+        .overlay(Circle().stroke(Tokens.Palette.brand, lineWidth: 1))
+        .foregroundStyle(isSelected ? Color.white : Tokens.Palette.brand)
     }
     .buttonStyle(.plain)
     .disabled(brief.isSaving)

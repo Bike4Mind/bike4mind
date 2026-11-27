@@ -41,7 +41,10 @@ import {
   LEFT_NOTICE,
   OFF_NOTICE,
   PAUSED_NOTICE,
+  SKIP_FAILED_NOTICE,
   TutorialRunner,
+  bridgeHeading,
+  cardSide,
   hasForeignQuest,
   stepProgress,
 } from './TutorialRunner';
@@ -107,6 +110,7 @@ function renderRunner(
     onShowSteps,
     onChanged,
     registry = GENERIC_TUTORIAL_STEPS,
+    skippable,
   }: {
     using?: TutorialScript;
     onStartModule?: (moduleId: string) => void;
@@ -115,6 +119,7 @@ function renderRunner(
     onShowSteps?: () => void;
     onChanged?: () => void;
     registry?: TutorialStepRegistry;
+    skippable?: boolean;
   } = {}
 ) {
   const client = new QueryClient();
@@ -130,6 +135,7 @@ function renderRunner(
         landOn={landOn}
         onShowSteps={onShowSteps}
         onChanged={onChanged}
+        skippable={skippable}
       />
     </HostedClient>
   );
@@ -290,17 +296,15 @@ describe('TutorialRunner', () => {
     expect(t.advance).not.toHaveBeenCalled();
   });
 
-  it('pastes the opening turn only on request, since the host sends it from its own start box', () => {
+  it('starts the opening turn with its message in the box, like every other prompt step', () => {
     const opening: TutorialScript = {
       id: 'demo',
       steps: [{ id: 'opening', type: 'prompt', body: 'Sent.', turn: 0, prompt: 'Hello' }],
     };
     const { rerenderWith } = renderRunner(transport(), [], { using: opening });
     begin('opening');
-    expect(mockInput.setChatInputValue).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('tutorial-step-waiting')).toBeNull();
-    fireEvent.click(screen.getByTestId('tutorial-step-paste'));
     expect(mockInput.setChatInputValue).toHaveBeenCalledWith('Hello');
+    expect(screen.queryByTestId('tutorial-step-waiting')).toBeNull();
 
     rerenderWith([{ id: 'u0', prompt: 'Hello', status: 'running' }]);
     expect(screen.getByTestId('tutorial-step-waiting')).toBeInTheDocument();
@@ -398,6 +402,91 @@ describe('TutorialRunner', () => {
     renderRunner(transport());
     begin('intro');
     expect(screen.getByTestId('tutorial-step-next')).toHaveFocus();
+  });
+});
+
+describe('cardSide', () => {
+  const step = { anchor: 'attach-files-btn', placement: 'above' as const };
+
+  it('keeps the side the step names while the card points at its own anchor', () => {
+    expect(cardSide(step, null)).toBe('above');
+    expect(cardSide(step, { testid: 'attach-files-btn' })).toBe('above');
+  });
+
+  it('drops that side once a cue moves the card to another anchor, so it takes the roomiest clear spot', () => {
+    expect(cardSide(step, { testid: 'recent-file-1' })).toBeUndefined();
+  });
+
+  it('takes the side a cue names for its own anchor', () => {
+    expect(cardSide(step, { testid: 'add-from-file-browser-btn', placement: 'right' })).toBe('right');
+  });
+});
+
+describe('skipping a step', () => {
+  const withBridge: TutorialScript = {
+    id: 'demo',
+    steps: [...script.steps, { id: 'end', type: 'bridge', body: 'All done.', action: 'Done' }],
+  };
+
+  it('offers no skip unless the host opts in', () => {
+    renderRunner(transport());
+    begin('intro');
+    expect(screen.queryByTestId('tutorial-coach-skip')).toBeNull();
+  });
+
+  it('moves past a step without its action, recording the next position', async () => {
+    const t = transport();
+    renderRunner(t, [], { skippable: true });
+    begin('intro');
+    fireEvent.click(screen.getByTestId('tutorial-coach-skip'));
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('ask'));
+    expect(t.advance).not.toHaveBeenCalled();
+    expect(t.position).toHaveBeenCalledWith({ moduleId: 'demo', stepId: 'ask', status: 'in_progress' });
+  });
+
+  it('seeds the recorded turn of a skipped prompt step, so the next step has its answer', async () => {
+    const t = transport();
+    renderRunner(t, [], { skippable: true });
+    begin('ask');
+    fireEvent.click(screen.getByTestId('tutorial-coach-skip'));
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('wrap'));
+    expect(t.advance).toHaveBeenCalledWith({ moduleId: 'demo', sessionId: 's1', turn: 1 });
+    expect(mockSetOptimistic).toHaveBeenCalled();
+  });
+
+  it('does not seed a turn the session already holds', async () => {
+    const t = transport();
+    renderRunner(t, [{ ...marked('q1', 1), status: 'running' }], { skippable: true });
+    begin('ask');
+    fireEvent.click(screen.getByTestId('tutorial-coach-skip'));
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('wrap'));
+    expect(t.advance).not.toHaveBeenCalled();
+  });
+
+  it('does not seed a turn the user already sent themselves', async () => {
+    const t = transport();
+    renderRunner(t, [{ id: 'mine', prompt: 'What next?', status: 'running' }], { skippable: true });
+    begin('ask');
+    fireEvent.click(screen.getByTestId('tutorial-coach-skip'));
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('wrap'));
+    expect(t.advance).not.toHaveBeenCalled();
+  });
+
+  it('stays on the step and says so when seeding fails', async () => {
+    const t = transport();
+    t.advance.mockRejectedValueOnce(new Error('network'));
+    renderRunner(t, [], { skippable: true });
+    begin('ask');
+    fireEvent.click(screen.getByTestId('tutorial-coach-skip'));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(SKIP_FAILED_NOTICE));
+    expect(useTutorialStore.getState().active?.stepId).toBe('ask');
+  });
+
+  it('offers no skip on the closing bridge card', () => {
+    renderRunner(transport(), [], { using: withBridge, skippable: true });
+    begin('end');
+    expect(screen.getByTestId('tutorial-coach-card')).toHaveTextContent('All done.');
+    expect(screen.queryByTestId('tutorial-coach-skip')).toBeNull();
   });
 });
 
@@ -727,14 +816,14 @@ describe('the bridge step', () => {
   it('heads the bridge with the finished chain rather than a step number, which the steps list leaves out', () => {
     renderRunner(transport(), undefined, { using: bridged, onShowSteps: vi.fn() });
     begin('bridge');
-    expect(screen.getByTestId('tutorial-coach-steps')).toHaveTextContent('Quest chain complete');
+    expect(screen.getByTestId('tutorial-coach-steps')).toHaveTextContent('All done');
   });
 
   it('counts the module steps in the bridge heading', () => {
     const closing: TutorialScript = { ...script, steps: [...script.steps, ...bridged.steps] };
     renderRunner(transport(), undefined, { using: closing });
     begin('bridge');
-    expect(screen.getByTestId('tutorial-coach-progress')).toHaveTextContent('Quest chain complete: all 3 steps');
+    expect(screen.getByTestId('tutorial-coach-progress')).toHaveTextContent('All done: 3 steps complete');
   });
 });
 
@@ -1409,5 +1498,19 @@ describe('a module that moved under a running walk', () => {
     expect(mockToast).not.toHaveBeenCalledWith(JUMP_FAILED_NOTICE);
     expect(useTutorialStore.getState().active).toBeNull();
     expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('bridgeHeading', () => {
+  const withSteps = (types: string[]) =>
+    ({ ...script, steps: types.map((type, i) => ({ id: `s${i}`, type, body: '' })) }) as unknown as TutorialScript;
+
+  it('counts the steps before the bridge, singular for one', () => {
+    expect(bridgeHeading(withSteps(['point', 'bridge']))).toBe('All done: 1 step complete');
+    expect(bridgeHeading(withSteps(['point', 'point', 'bridge']))).toBe('All done: 2 steps complete');
+  });
+
+  it('drops the count when the module has no steps but the bridge', () => {
+    expect(bridgeHeading(withSteps(['bridge']))).toBe('All done');
   });
 });

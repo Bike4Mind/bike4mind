@@ -107,11 +107,15 @@ services:
   # lifecycle on that bucket: an archive whose import is abandoned (a second import was
   # already running) is otherwise never deleted, and self-host had no equivalent reaper.
   # The FabFile bucket gets a 1-day rule on the exports/ prefix: notebook export downloads
-  # are served via a short-lived signed URL and never deleted by the app.
-  # All three rules are idempotent (skipped if a lifecycle config already exists) and
-  # best-effort (an mc build without ilm support just skips them). Hosted gets the same
-  # current-object expiry from S3 lifecycle rules; this is the MinIO equivalent (the hosted
-  # FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
+  # are served via a short-lived signed URL and never deleted by the app. Its data/.live/
+  # prefix gets a 1-day rule too: a callable function's live source fetches are stored there
+  # for one call's short-lived links (infra/callableFunctionData.ts expires them in hosted).
+  # All these rules are idempotent and best-effort (an mc build without ilm support just
+  # skips them). The drafts/, history-import and exports/ rules are skipped when their bucket
+  # already has any lifecycle rule; the generated-audio-offload/, text-edit-backups/ and
+  # data/.live/ rules are skipped only when a rule for their own prefix is already there.
+  # Hosted gets the same current-object expiry from S3 lifecycle rules; this is the MinIO
+  # equivalent (the hosted FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
   # If you point object storage at a different S3 backend, add equivalent rules there.
   createbuckets:
     build:
@@ -136,7 +140,8 @@ services:
         { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; };
         { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 1 --prefix "exports/" "local/$$FAB_FILE_BUCKET"; }; };
         { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "generated-audio-offload/" || mc ilm rule add --expire-days 1 --prefix "generated-audio-offload/" "local/$$FAB_FILE_BUCKET"; }; };
-        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "text-edit-backups/" || mc ilm rule add --expire-days 30 --prefix "text-edit-backups/" "local/$$FAB_FILE_BUCKET"; }; }; true
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "text-edit-backups/" || mc ilm rule add --expire-days 30 --prefix "text-edit-backups/" "local/$$FAB_FILE_BUCKET"; }; };
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "data/.live/" || mc ilm rule add --expire-days 1 --prefix "data/.live/" "local/$$FAB_FILE_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.

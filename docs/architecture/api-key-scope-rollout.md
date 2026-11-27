@@ -168,15 +168,17 @@ Rules:
   `API_KEY_SCOPE_STAGING` it never re-opens other routes that enforce the same scope, and it
   works for scopes that already enforce elsewhere. Run the preflight anyway to see who relies on
   the window.
-- **The window:** until `cutoff` is set every key is legacy. Once every route keys use has its
-  scopes, set `cutoff` and `endsAt` together in one PR, announce the end date to the owners of
-  legacy keys, and let it pass. From `endsAt` grandfathering stops with no deploy. Rotating a
-  key keeps its creation date, so a rotated key keeps its status.
+- **The window:** only keys created before `cutoff` (2026-11-26) are legacy; a key minted after
+  it holds exactly the scopes it was minted with. A route that gains scopes after the cutoff
+  therefore cannot rely on grandfathering for keys minted since: stage its scope instead (see
+  below). Once `endsAt` is set and announced to the owners of legacy keys, grandfathering stops
+  at that instant with no deploy. Rotating a key keeps its creation date, so a rotated key keeps
+  its status.
 - **Who still has to move:** `getApiKeyLegacyStatus` (same file) is what owners and admins see.
   It is `isLegacyApiKey` minus confined and exchange keys, which the gate never grandfathers.
   The owner key list (`GET /api/user-api-keys`) returns `legacy` and `legacyEndsAt` per key, and
   Profile > API Keys badges a legacy key with its end date once `endsAt` is set (no badge before
-  that, since every older key is legacy and there is no date to show). Admin > Legacy API keys
+  that, as there is no date to show). Admin > Legacy API keys
   (`GET /api/admin/api-keys/legacy`) pages through recently used legacy keys with their owners'
   emails, which is the audience for the end-date announcement.
 

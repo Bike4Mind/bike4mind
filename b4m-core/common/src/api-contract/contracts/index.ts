@@ -8,6 +8,7 @@ import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './webTools.contract';
 import { createCompletionContract } from './completions.contract';
+import { createSessionTurnContract } from './sessionTurns.contract';
 import {
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
@@ -48,6 +49,7 @@ import {
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
 } from './assistantInstructions.contract';
+import { getInterruptionFeedbackContract, putInterruptionFeedbackContract } from './interruptionFeedback.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -74,11 +76,32 @@ import {
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
 import {
+  cancelFunctionCallContract,
   getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
   listFunctionsContract,
+  reviewFunctionContract,
 } from './functions.contract';
+import {
+  createFunctionContract,
+  deleteFunctionContract,
+  findFunctionRecipientContract,
+  getAuthoredFunctionContract,
+  getFunctionCallSummaryContract,
+  getFunctionShareContract,
+  listAuthoredFunctionsContract,
+  pinFunctionDataContract,
+  promoteFunctionContract,
+  runFunctionTestsContract,
+  saveFunctionCodeContract,
+  setFunctionExamplesContract,
+  setFunctionSourcesContract,
+  shareFunctionContract,
+  unpinFunctionDataContract,
+  unshareFunctionContract,
+  updateFunctionContract,
+} from './functionsAuthoring.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -228,6 +251,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   fetchWebPageContract,
   getCurrentWeatherContract,
   createCompletionContract,
+  createSessionTurnContract,
   createCompletionRunContract,
   getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
@@ -251,6 +275,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
+  getInterruptionFeedbackContract,
+  putInterruptionFeedbackContract,
   replyToBriefDecisionContract,
   editBriefDecisionContract,
   resolveBriefDecisionContract,
@@ -403,6 +429,25 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deletePersonaContract,
   listFunctionsContract,
   getFunctionContract,
+  reviewFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
+  createFunctionContract,
+  listAuthoredFunctionsContract,
+  getAuthoredFunctionContract,
+  saveFunctionCodeContract,
+  updateFunctionContract,
+  deleteFunctionContract,
+  setFunctionExamplesContract,
+  runFunctionTestsContract,
+  pinFunctionDataContract,
+  unpinFunctionDataContract,
+  setFunctionSourcesContract,
+  promoteFunctionContract,
+  getFunctionShareContract,
+  shareFunctionContract,
+  unshareFunctionContract,
+  findFunctionRecipientContract,
+  getFunctionCallSummaryContract,
 ];

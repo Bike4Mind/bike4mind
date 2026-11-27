@@ -29,6 +29,11 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEm
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
 
+// The session turns route has its own suite (external/turnsRoute.test.ts); its import chain builds
+// mongoose models, so here it is only checked to be registered.
+const mockRegisterTurnsRoutes = vi.hoisted(() => vi.fn());
+vi.mock('./external/turnsRoute', () => ({ registerTurnsRoutes: mockRegisterTurnsRoutes }));
+
 // Scale-in protection is driven by the drain set's in-flight count (unit-tested in taskProtection.test.ts).
 const mockProtectionUpdate = vi.hoisted(() => vi.fn());
 vi.mock('./taskProtection', () => ({
@@ -214,6 +219,12 @@ const post = (
     body: raw,
   });
 };
+
+describe('ChatCompletion public routes', () => {
+  it('registers the session turns route with the drain tracker', () => {
+    expect(mockRegisterTurnsRoutes).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
+  });
+});
 
 describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {

@@ -7,7 +7,7 @@ import {
   Permission,
   IChatHistoryItem,
   IUserDocument,
-  redactPromptMetaForViewer,
+  redactChatMessageForViewer,
   PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -66,14 +66,14 @@ export const getMessagesFromSession = async (
   if (hasMore) result.pop();
 
   // A share grant authorizes reading the conversation, not re-reading whatever the owner's
-  // tools touched on the owner's behalf - see redactPromptMetaForViewer. Owner reads are
+  // tools touched on the owner's behalf - see redactChatMessageForViewer. Owner reads are
   // untouched; only the returnValue/error fields are stripped, name/parameters/success survive.
   // Both branches call .toJSON() (not just the non-owner one) so the return type doesn't
   // diverge by viewer - this only goes straight to res.json, never back into the domain model.
   const isOwner = session.userId === user.id;
   const data = result.map(quest => {
     const plain = quest.toJSON();
-    return { ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, isOwner) };
+    return redactChatMessageForViewer(plain, isOwner);
   });
 
   return {

@@ -143,7 +143,7 @@ pnpm i -r
 pnpm turbo:core:build
 
 # 5. Verify your environment works before changing anything
-pnpm turbo:typecheck:fast   # TypeScript across all packages
+pnpm turbo:typecheck   # TypeScript across all packages
 pnpm turbo:test        # all test suites (MongoDB tests use mongodb-memory-server — no local DB needed)
 pnpm lint:check        # ESLint, error severity only (mirrors the CI gate)
 ```
@@ -152,12 +152,14 @@ If all three pass on a clean checkout, you're ready. **Most contributions can be
 
 To run the application locally (needed for UI work), see the [README](./README.md) local development setup and the self-hosting documentation. `compose.yaml` provides a local MongoDB replica set (`docker compose up db`).
 
+The MongoDB version tests run against is pinned in the root `package.json` (`config.mongodbMemoryServer.version`); the CI binary cache follows it and `compose.yaml` tags the same major.minor. Change them together, on purpose (`packages/scripts/src/mongodbVersionPin.test.ts` enforces it). `MONGOMS_VERSION=<x.y.z>` overrides the pin for a one-off local run. If your local `./data/db` was created by the untagged `mongo` image at 8.1 or newer, `mongo:8.0` will not start on it: remove `./data/db` (or dump and restore) before `docker compose up db`.
+
 ### Useful commands
 
 | Task | Command | Notes |
 |---|---|---|
 | Verify a branch | `pnpm verify` | Typecheck, tests and lint for what your branch changed only |
-| Typecheck (fast) | `pnpm turbo:typecheck:fast` | tsgo with tsc fallback, as CI gates; `pnpm turbo:typecheck` is pure tsc |
+| Typecheck | `pnpm turbo:typecheck` | TypeScript 7 as `tsgo`, as CI gates; `pnpm turbo:typecheck:tsc` is pure tsc 5.9 (nightly) |
 | Run all tests | `pnpm turbo:test` | Parallel across packages |
 | Test one package | `pnpm --filter <package> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 | Lint | `pnpm lint:check` | Mirrors CI |
@@ -273,7 +275,7 @@ All of these are required and blocking:
 | Check | What it verifies | Run it locally |
 |---|---|---|
 | **Semantic PR Title** | PR title is a valid conventional commit | — (fix the title) |
-| **Typecheck** | TypeScript across all packages | `pnpm turbo:typecheck:fast` |
+| **Typecheck** | TypeScript across all packages | `pnpm turbo:typecheck` |
 | **Lint** | ESLint error-severity violations | `pnpm lint:check` |
 | **Run Tests** | Full test suite (sharded in CI) | `pnpm turbo:test` |
 | **Secret scan** | No credentials in the diff | gitleaks pre-commit hook |

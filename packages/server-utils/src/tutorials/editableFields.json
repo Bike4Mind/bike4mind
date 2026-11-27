@@ -1,1 +1,134 @@
-{}
+{
+  "first-steps": {
+    "first-steps-send": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-follow-up": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-attach": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "first-steps-ask-file": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-notebooks": [
+      "title",
+      "body"
+    ],
+    "first-steps-done": [
+      "title",
+      "body"
+    ]
+  },
+  "switching-models": {
+    "switching-models-ask": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "switching-models-switch": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "switching-models-follow-up": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "switching-models-done": [
+      "title",
+      "body"
+    ]
+  },
+  "grounded-answers": {
+    "grounded-answers-attach": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "grounded-answers-ask": [
+      "title",
+      "body"
+    ],
+    "grounded-answers-check": [
+      "title",
+      "body"
+    ],
+    "grounded-answers-done": [
+      "title",
+      "body"
+    ]
+  },
+  "artifacts": {
+    "artifacts-ask": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "artifacts-open": [
+      "title",
+      "body"
+    ],
+    "artifacts-revise": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "artifacts-done": [
+      "title",
+      "body"
+    ]
+  },
+  "projects": {
+    "projects-open": [
+      "title",
+      "body"
+    ],
+    "projects-create": [
+      "title",
+      "body"
+    ],
+    "projects-name": [
+      "title",
+      "body"
+    ],
+    "projects-files-tab": [
+      "title",
+      "body"
+    ],
+    "projects-pick-file": [
+      "title",
+      "body"
+    ],
+    "projects-notebooks-tab": [
+      "title",
+      "body"
+    ],
+    "projects-pick-notebook": [
+      "title",
+      "body"
+    ],
+    "projects-open-notebook": [
+      "title",
+      "body"
+    ],
+    "projects-ask": [
+      "title",
+      "body"
+    ],
+    "projects-done": [
+      "title",
+      "body"
+    ]
+  }
+}

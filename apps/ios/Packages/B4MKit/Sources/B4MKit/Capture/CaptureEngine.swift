@@ -577,6 +577,7 @@ public actor CaptureEngine {
           _ = try changeJob(job, work: work) { $0.lastError = "Still being scanned" }
           return
         }
+        guard !discarded.contains(job.id) else { return }
         switch job.destination {
         case .lake(let lakeID, _):
           if let note = job.note {
@@ -709,7 +710,7 @@ public actor CaptureEngine {
     if error is StoreUnavailable { return true }
     guard let api = error as? APIError else { return false }
     switch api {
-    case .offline, .rateLimited, .server, .signedOut: return true
+    case .offline, .rateLimited, .server, .signedOut, .conflict: return true
     case .forbidden, .notFound, .malformedResponse, .upgradeRequired: return false
     }
   }

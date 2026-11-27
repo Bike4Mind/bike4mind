@@ -53,7 +53,16 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
     badParams: { sessionId: 's1', archived: true, archiveChildIds: 'c1' },
     result: { summary },
   },
-  'session/delete': { params: { sessionId: 's1', removeWorktree: false }, badParams: {}, result: {} },
+  'session/delete': {
+    params: { sessionId: 's1', removeWorktree: true, allowDiscard: true },
+    badParams: { sessionId: 's1', allowDiscard: 'yes' },
+    result: {},
+  },
+  'session/deleteTree': {
+    params: { sessionId: 's1', nestedIds: ['c1'], removeWorktree: true, nestedWorktreeIds: ['c1'] },
+    badParams: { sessionId: 's1', nestedIds: 'c1' },
+    result: { deleted: ['c1'], error: 'checkout busy' },
+  },
   'session/subscribe': {
     params: { sessionId: 's1', after: cursor },
     badParams: { sessionId: 's1', after: { epoch: '' } },
@@ -99,12 +108,25 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
   },
   'model/list': { params: { force: 'local' }, badParams: { force: 'remote' }, result: { models: { models: [] } } },
   'draft/defaults': { params: {}, badParams: 'nope', result: { defaults: { model: 'm', approvalMode: 'ask' } } },
+  'taskDecision/list': {
+    params: {},
+    badParams: 'nope',
+    result: { decisions: [{ sessionId: 's1', rootId: 'r1', title: 't', decision: { kind: 'stopped' } }] },
+  },
 };
 
 const notificationSamples: Record<HostNotificationName, { params: unknown; badParams: unknown }> = {
   'session/event': {
-    params: { sessionId: 's1', seq: 1, event: { type: 'start', sessionId: 's1' } },
+    params: { sessionId: 's1', seq: 1, epoch: 'e1', event: { type: 'start', sessionId: 's1' } },
     badParams: { sessionId: 's1', seq: -1, event: {} },
+  },
+  'session/spawnFailed': {
+    params: { sessionId: 's1', title: 'Fix the build', message: 'No model' },
+    badParams: { sessionId: 's1', title: 'Fix the build' },
+  },
+  'session/contextNotice': {
+    params: { event: { type: 'context-notice', sessionId: 's1', message: 'Budget at 80%', kind: 'run-budget' } },
+    badParams: { event: { type: 'context-notice-cleared', sessionId: 's1' } },
   },
   'session/summaryChanged': { params: { summary }, badParams: { summary: null } },
   'session/statusChanged': { params: { event: sessionStatus }, badParams: { event: {} } },
@@ -117,6 +139,7 @@ const notificationSamples: Record<HostNotificationName, { params: unknown; badPa
     badParams: { decisions: 'none' },
   },
   'host/stateChanged': { params: { account: null }, badParams: { account: { userId: 'u1' } } },
+  'session/resyncRequired': { params: { sessionId: 's1' }, badParams: {} },
 };
 
 describe('hostMethods', () => {
@@ -134,6 +157,7 @@ describe('hostMethods', () => {
   it('lets no-argument methods omit params, and session/create start a plain chat', () => {
     expect(hostMethods['host/info'].params.safeParse(undefined).success).toBe(true);
     expect(hostMethods['session/create'].params.safeParse(undefined).success).toBe(true);
+    expect(hostMethods['fs/browse'].params.safeParse(undefined).success).toBe(true);
   });
 
   it('carries the archive question when a parent needs confirming, and rejects a malformed one', () => {
@@ -152,6 +176,16 @@ describe('hostMethods', () => {
     expect(hostMethods['fs/browse'].result.safeParse(legacy).success).toBe(true);
   });
 
+  it('accepts the session/delete params of a 1.1 client, which has no allowDiscard', () => {
+    expect(hostMethods['session/delete'].params.safeParse({ sessionId: 's1', removeWorktree: true }).success).toBe(
+      true
+    );
+  });
+
+  it('rejects a session/deleteTree result without the list of what was deleted', () => {
+    expect(hostMethods['session/deleteTree'].result.safeParse({ error: null }).success).toBe(false);
+  });
+
   it('rejects a background/stop result whose process is not one', () => {
     expect(hostMethods['background/stop'].result.safeParse({}).success).toBe(true);
     expect(hostMethods['background/stop'].result.safeParse({ process: { id: 'p1' } }).success).toBe(false);
@@ -161,6 +195,13 @@ describe('hostMethods', () => {
     expect(
       hostMethods['project/inspect'].result.safeParse({ inspection: { directory: '/w', isRepository: true } }).success
     ).toBe(false);
+  });
+
+  it('accepts the session/event of a 1.2 host, which sends no epoch, and rejects an empty epoch', () => {
+    const { params } = hostNotifications['session/event'];
+    const event = { type: 'start', sessionId: 's1' };
+    expect(params.safeParse({ sessionId: 's1', seq: 1, event }).success).toBe(true);
+    expect(params.safeParse({ sessionId: 's1', seq: 1, epoch: '', event }).success).toBe(false);
   });
 
   it('discriminates request/respond on kind', () => {

@@ -38,6 +38,8 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useGetAppFileUrl } from '@client/app/utils/s3';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import { useTutorialsEnabled } from '@client/app/hooks/data/tutorials';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 import {
   orderAccountsByRecentTeams,
   readTeamPreference,
@@ -62,6 +64,7 @@ import CookieOutlinedIcon from '@mui/icons-material/CookieOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
+import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
 import ThumbsUpDownOutlinedIcon from '@mui/icons-material/ThumbsUpDownOutlined';
@@ -298,6 +301,8 @@ const ProfileMenu = () => {
   const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
 
   const { updatePreferences } = useUserSettings();
+  const tutorialsEnabled = useTutorialsEnabled();
+  const openTutorials = useTutorialPicker(s => s.setOpen);
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
@@ -589,6 +594,17 @@ const ProfileMenu = () => {
               updatePreferences({ showHelp: true });
             }}
           />
+          {tutorialsEnabled && (
+            <MenuRow
+              testId="profile-menu-tutorials"
+              icon={<SchoolOutlinedIcon sx={{ fontSize: '18px' }} />}
+              label={t('tutorials.menuLabel', 'Tutorials')}
+              onClick={() => {
+                closeNavigation();
+                openTutorials(true);
+              }}
+            />
+          )}
           {modeToggleEnabled && (
             <Box
               role="group"

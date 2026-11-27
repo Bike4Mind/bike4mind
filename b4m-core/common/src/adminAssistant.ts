@@ -28,10 +28,15 @@ export function isAdminAssistantToolName(name: string): name is AdminAssistantTo
   return ADMIN_ASSISTANT_TOOL_NAME_SET.has(name);
 }
 
-/** Open only for the exact surface id and a strictly-true `isAdmin`. */
+/**
+ * Open only for the exact surface id, a strictly-true `isAdmin`, and an acting user who owns
+ * the session: admin lookups are stored in the session, so they must not land in anyone else's.
+ */
 export function isAdminAssistantGateOpen(
-  session: { surface?: string | null },
-  user: { isAdmin?: boolean | null }
+  session: { surface?: string | null; userId?: unknown },
+  user: { isAdmin?: boolean | null; id?: unknown }
 ): boolean {
-  return session.surface === ADMIN_ASSISTANT_SURFACE && user.isAdmin === true;
+  if (session.surface !== ADMIN_ASSISTANT_SURFACE || user.isAdmin !== true) return false;
+  if (session.userId == null || user.id == null) return false;
+  return String(session.userId) === String(user.id);
 }

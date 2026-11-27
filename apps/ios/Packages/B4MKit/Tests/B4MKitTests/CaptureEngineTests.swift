@@ -925,6 +925,7 @@ private final class UnwritableJobStore: UploadJobStore, @unchecked Sendable {
     try base.save(job)
   }
   func remove(id: UUID) throws { try base.remove(id: id) }
+  func removeAll() throws { try base.removeAll() }
   func payloadURL(jobID: UUID, fileName: String) -> URL { base.payloadURL(jobID: jobID, fileName: fileName) }
   func stagePayload(copying source: URL, jobID: UUID, fileName: String) throws -> URL {
     try base.stagePayload(copying: source, jobID: jobID, fileName: fileName)

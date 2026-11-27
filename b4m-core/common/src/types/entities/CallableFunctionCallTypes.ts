@@ -1,3 +1,4 @@
+import type { CallableFunctionTrustLabel } from './CallableFunctionTypes';
 import { IMongoDocument } from './common';
 
 /** Where a function call came from. */
@@ -23,12 +24,16 @@ export const CALLABLE_FUNCTION_CALL_OUTCOMES = [
 ] as const;
 export type CallableFunctionCallOutcome = (typeof CALLABLE_FUNCTION_CALL_OUTCOMES)[number];
 
+/** How an asynchronous call can end: a run's outcomes, or `cancelled` by its caller, which no run answers. */
+export const CALLABLE_FUNCTION_RESULT_OUTCOMES = [...CALLABLE_FUNCTION_CALL_OUTCOMES, 'cancelled'] as const;
+export type CallableFunctionResultOutcome = (typeof CALLABLE_FUNCTION_RESULT_OUTCOMES)[number];
+
 /** An asynchronous call's row reads `queued`, then `running`, until it is overwritten with how the call ended. */
 export const CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES = ['queued', 'running'] as const;
 export type CallableFunctionCallPendingOutcome = (typeof CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES)[number];
 
 export const CALLABLE_FUNCTION_CALL_ROW_OUTCOMES = [
-  ...CALLABLE_FUNCTION_CALL_OUTCOMES,
+  ...CALLABLE_FUNCTION_RESULT_OUTCOMES,
   ...CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES,
 ] as const;
 export type CallableFunctionCallRowOutcome = (typeof CALLABLE_FUNCTION_CALL_ROW_OUTCOMES)[number];
@@ -73,11 +78,13 @@ export interface ICallableFunctionCall {
 
 export interface ICallableFunctionCallDocument extends ICallableFunctionCall, IMongoDocument {}
 
+/** One file a call read at `/data/<name>`; `fetched_at` only for a source fetched during the call. */
 export interface CallableFunctionStampData {
   name: string;
-  mode: 'pinned';
+  mode: 'pinned' | 'live';
   sha256: string;
   bytes: number;
+  fetched_at?: string;
 }
 
 /** What a call ran on. Room for output hashes beside `data` later; nothing here assumes every output is inline. */
@@ -95,7 +102,7 @@ export interface CallableFunctionStamp {
   data: CallableFunctionStampData[];
   uses: never[];
   /** Null unless the function is live. */
-  trust_label: 'verified' | 'unverified' | null;
+  trust_label: CallableFunctionTrustLabel | null;
   surface: CallableFunctionCallSurface;
   duration_ms: number;
   called_at: string;
@@ -111,6 +118,16 @@ export interface CallableFunctionCallSummary {
     startedAt: Date;
     outcome: CallableFunctionCallRowOutcome;
     surface: CallableFunctionCallSurface;
+    /** Made by someone the function is shared with, not the owner; who it was is not shown. */
+    byRecipient: boolean;
+    /** The promotion that ran; absent when the call was refused before a pin was read. */
+    pinSeq?: number;
+    durationMs: number;
+    /**
+     * Only on the owner's own calls made with one of their API keys: the key's name, or null once it is deleted.
+     * Never on a recipient's call.
+     */
+    apiKey?: { name: string | null };
   }[];
 }
 
@@ -134,7 +151,7 @@ export interface ICallableFunctionResult {
   organizationId?: string;
   state: CallableFunctionResultState;
   input?: Record<string, unknown>;
-  outcome?: CallableFunctionCallOutcome;
+  outcome?: CallableFunctionResultOutcome;
   reason?: string;
   errorClass?: string;
   problems?: { path: string; message: string }[];

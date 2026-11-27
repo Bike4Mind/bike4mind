@@ -15,6 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
@@ -62,7 +63,7 @@ import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
-import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
@@ -197,7 +198,15 @@ async function handleChat(
   //    name. The other branches already deduped: `smart` via `mergeTools`, `fast` via `[]`.
   //  - The unrecognized ids are deduped too: what a caller debugging a typo needs is the SET of
   //    ids that are not tools here, not one entry per occurrence.
-  const requestedTools = Array.from(new Set(filterKnownTools(simplifiedRequest.tools)));
+  // Overlay-contributed names are recognized by the generated map, not the enum; they are typed as
+  // B4MLLMTools here only because the downstream signatures predate open tool names.
+  const premiumToolNames = new Set(Object.keys(premiumLlmTools));
+  const requestedTools = Array.from(
+    new Set([
+      ...filterKnownTools(simplifiedRequest.tools),
+      ...((simplifiedRequest.tools ?? []).filter(id => premiumToolNames.has(id)) as B4MLLMTools[]),
+    ])
+  );
   const recognized = new Set<string>(requestedTools);
   const unrecognizedIds = new Set((simplifiedRequest.tools ?? []).filter(id => !recognized.has(id)));
   const unrecognizedTools = Array.from(unrecognizedIds).slice(0, UNRECOGNIZED_TOOL_REPORT_LIMIT);
@@ -236,7 +245,7 @@ async function handleChat(
     organizationId,
     recommendations,
     requestedTools,
-    dataLakeToolsDeniedFor(req)
+    apiKeyToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
@@ -295,6 +304,8 @@ async function handleChat(
       apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      fileInputsAllowed: fileInputsAllowedFor(req),
+      contributedToolNames: premiumToolNames,
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
@@ -336,6 +347,7 @@ async function handleChat(
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
               ...turnAuth,
               apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+              fileInputsAllowed: fileInputsAllowedFor(req),
               embeddingModel: currentEmbeddingModel,
               queryComplexity: 'simple',
               // Optional schema fields - declared for QuestStartBodySchema type conformance
@@ -355,6 +367,7 @@ async function handleChat(
             // (its own, or its workspace's resolved at read time) include premium names needs
             // the merge or those tools silently no-op on this synchronous path.
             externalTools: premiumLlmTools,
+            contributedToolNames: premiumToolNames,
             abortSignal,
           })
         ),

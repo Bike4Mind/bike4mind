@@ -76,8 +76,7 @@ private struct BriefScreen: View {
   private var content: some View {
     switch (model.state, model.brief) {
     case (.loading, nil):
-      ProgressView("Loading brief")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      BriefSkeleton()
         .accessibilityIdentifier("brief-loading")
     case (.failed(let error), nil):
       ContentUnavailableView {
@@ -135,7 +134,7 @@ private struct BriefScreen: View {
       VStack(spacing: Tokens.Spacing.m) {
         if case .failed(let error) = model.state {
           Label("Couldn't check on the brief", systemImage: "wifi.exclamationmark")
-            .font(.headline)
+            .font(Tokens.Typography.headline)
           Text(error.message)
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.Palette.secondaryText)
@@ -143,7 +142,7 @@ private struct BriefScreen: View {
           checkAgainButton
         } else if model.composeTimedOut {
           Label("Still working on it", systemImage: "clock")
-            .font(.headline)
+            .font(Tokens.Typography.headline)
           Text("This is taking longer than usual. Check again in a moment.")
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.Palette.secondaryText)
@@ -186,7 +185,7 @@ private struct BriefScreen: View {
           }
           if let headline = brief.headline, !headline.isEmpty {
             Text(headline)
-              .font(.title2.weight(.semibold))
+              .font(Tokens.Typography.title)
               .foregroundStyle(Tokens.Palette.primaryText)
               .accessibilityAddTraits(.isHeader)
               .accessibilityIdentifier("brief-headline")
@@ -481,11 +480,36 @@ private struct BriefScreen: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
       Text(title)
-        .font(.headline)
+        .font(Tokens.Typography.headline)
         .foregroundStyle(Tokens.Palette.primaryText)
         .accessibilityAddTraits(.isHeader)
       content()
     }
     .accessibilityIdentifier(id)
+  }
+}
+
+/// Mirrors the loaded brief: a headline and period line, then titled sections of rows.
+private struct BriefSkeleton: View {
+  private static let rowFractions: [[CGFloat]] = [[0.9, 0.75], [0.85, 0.6, 0.7], [0.8, 0.65]]
+
+  var body: some View {
+    SkeletonContainer(label: "Loading brief") {
+      VStack(alignment: .leading, spacing: Tokens.Spacing.l) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+          SkeletonBlock(widthFraction: 0.75, height: 24)
+          SkeletonBlock(widthFraction: 0.35, height: 12)
+        }
+        ForEach(Self.rowFractions.indices, id: \.self) { section in
+          VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+            SkeletonBlock(widthFraction: 0.4, height: 17)
+            ForEach(Self.rowFractions[section].indices, id: \.self) { row in
+              SkeletonBlock(widthFraction: Self.rowFractions[section][row])
+            }
+          }
+        }
+      }
+      .padding(Tokens.Spacing.m)
+    }
   }
 }

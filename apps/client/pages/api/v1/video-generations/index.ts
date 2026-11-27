@@ -22,6 +22,7 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { limitInputFilesForKey } from '@bike4mind/server-utils/files/generateKeyInputs';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -95,6 +96,13 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   const organizationId = paidRun
     ? paidRun.billingOrganizationId
     : await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  const deps = getCreateVideoJobDeps();
+  const loadInputFile = limitInputFilesForKey(req, (userId, id) => deps.loadInputImage(userId, { kind: 'file', id }));
+  const videoDeps: typeof deps = {
+    ...deps,
+    loadInputImage: (userId, ref) =>
+      ref.kind === 'file' ? loadInputFile(userId, ref.id) : deps.loadInputImage(userId, ref),
+  };
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
@@ -108,7 +116,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
-    getCreateVideoJobDeps()
+    videoDeps
   );
   if (!result.ok) throw toHttpError(result);
   return res.status(202).json(await toPublicGenerationJob(result.job, mapperDeps, VIDEO_GENERATION_PROJECTION));

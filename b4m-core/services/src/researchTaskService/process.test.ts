@@ -114,6 +114,7 @@ describe('researchTaskService - process', () => {
       findByUrlAndUserIdAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndUserId: vi.fn().mockResolvedValue(null),
       existsByUrlAndResearchTaskId: vi.fn().mockResolvedValue(false),
+      update: vi.fn(),
     };
     mockFileTagRepo = {
       findByIdAndUserId: vi.fn(),
@@ -1063,6 +1064,28 @@ describe('researchTaskService - process', () => {
         taskId,
         'Storage limit reached: kept the previous copy of https://example.com'
       );
+    });
+
+    it('creates a fresh file and relinks the research data when the linked file has another owner', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      vi.mocked(findOrUpdateExistingResearchData).mockResolvedValue({
+        file: null,
+        researchData: { id: 'legacy-research-data-id' },
+        storageLimitReached: false,
+      });
+      (fabFilesService.createFabFile as Mock).mockResolvedValue({ id: 'fresh-file-id', fileName: 'fresh.md' });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(fabFilesService.createFabFile).toHaveBeenCalledWith(mockUser.id, expect.anything(), expect.anything());
+      expect(mockResearchDataRepo.update).toHaveBeenCalledWith({
+        id: 'legacy-research-data-id',
+        fabFileId: 'fresh-file-id',
+      });
     });
 
     it('clears the previous run warnings when a run starts', async () => {

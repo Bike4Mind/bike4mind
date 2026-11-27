@@ -1,3 +1,4 @@
+import { isLinkedChatBusy } from '@shared/webLinkedChat';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -24,6 +25,13 @@ import {
   modelSupportsTools,
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { hostChat } from '../host/hostChat';
+import { useHostSessionCapabilities, useSessionCapabilities } from '../host/sessionCapabilities';
+import { summaryHostId } from '../host/sessionDirectory';
+import { useSessionHost } from '../host/sessionHost';
+import { sessionHostMemory } from '../host/sessionHostMemory';
+import { useHostEntries } from '../host/hostRegistry';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
@@ -108,7 +116,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectGroupDirectory } from './grouping';
+import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectKeyOf } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -134,7 +142,7 @@ import { workspacePhrase } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
-import { readLastSession, useLastSession } from './lastSession';
+import { readLastSession, restoreGate, useLastSession } from './lastSession';
 import { launchPlace, resolveLaunch, useFirstLaunchPlace } from './rail/launchPlace';
 import { newSessionInProject } from './newSessionInProject';
 import { isSessionDraft, useSessionDraft } from './useSessionDraft';
@@ -162,7 +170,7 @@ import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
-import { inTavernDialogue } from './orchestrator/tavern/dialogue';
+import { inSceneDialogue } from './orchestrator/scene/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
@@ -176,7 +184,7 @@ import {
 } from './orchestrator/orchestratorPrefs';
 import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
-import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, useSceneStageCopy } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
@@ -316,6 +324,7 @@ export function ChatShell({
   const {
     sessions,
     loading,
+    hostListings,
     reload,
     createStudio,
     creatingCode,
@@ -365,7 +374,28 @@ export function ChatShell({
     setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
-  const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
+  const rememberedHost = useSessionHost(remembered?.id);
+  const hostsListed = useHostEntries().length > 0;
+  const gate = restoreGate({
+    rememberedHost,
+    listing: hostListings.get(rememberedHost),
+    hostsListed,
+    localLoading: loading,
+    listed: !!remembered && sessions.some(session => session.id === remembered.id),
+  });
+  const restoring = useLastSession({
+    remembered,
+    loading: gate.wait,
+    forgetIfGone: gate.forgetIfGone,
+    sessions,
+    activeId,
+    onRestore,
+  });
+  // Where each opened remote session lives, so the next launch asks its host for it.
+  const activeHost = useSessionHost(activeId);
+  useEffect(() => {
+    if (activeId && !isSessionDraft(activeId)) sessionHostMemory.remember(activeId, activeHost);
+  }, [activeId, activeHost]);
   const detectingFirstPlace = useFirstLaunchPlace(launch.firstLaunch, setMode);
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
@@ -384,6 +414,12 @@ export function ChatShell({
   );
   const sessionDraft = useSessionDraft(setActiveId, reload);
   const persistedId = isSessionDraft(activeId) ? null : activeId;
+  const capabilities = useSessionCapabilities(activeId);
+  // A remote session's grounding is changed over IPC today, so only its draft can edit it.
+  const groundingLocked = !capabilities.desktopChat && !isSessionDraft(activeId);
+  // The id the IPC-backed hooks act on: none for a session on another host, which Desktop's main
+  // process does not hold.
+  const ipcSessionId = capabilities.desktopChat ? persistedId : null;
   const persistedConversation = useConversation(persistedId, apply, clearAddFolderAlert);
   const conversation = sessionDraft.wrap(persistedConversation);
   const draftActive = isSessionDraft(activeId);
@@ -398,9 +434,9 @@ export function ChatShell({
   // The composer's per-chat settings show conversation.session: the previous chat's while opening, none after a failed open.
   const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
-  const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const spawnSuggestions = useSpawnSuggestions(capabilities.desktopChat ? conversation.session : null);
   const [spawnLocation] = useSpawnLocation();
-  const heldRelays = useHeldRelays(persistedId);
+  const heldRelays = useHeldRelays(ipcSessionId);
   const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
   const startSuggestion = spawnSuggestions.start;
@@ -411,15 +447,17 @@ export function ChatShell({
     },
     [startSuggestion, markSessionStart]
   );
-  const background = useBackgroundProcesses(persistedId);
-  const loop = useLoop(persistedId);
-  const videoJobs = useVideoJobs(persistedId);
+  const background = useBackgroundProcesses(ipcSessionId);
+  const loop = useLoop(capabilities.loops ? persistedId : null);
+  const videoJobs = useVideoJobs(ipcSessionId);
   const draftSession = draftActive ? sessionDraft.session : null;
-  const skillsScope: SkillsScope | null = persistedId
-    ? { sessionId: persistedId }
-    : draftActive
-      ? { draftDirectory: draftSession?.mode === 'code' ? (draftSession.project?.directory ?? null) : null }
-      : null;
+  const skillsScope: SkillsScope | null = !capabilities.desktopChat
+    ? null
+    : persistedId
+      ? { sessionId: persistedId }
+      : draftActive
+        ? { draftDirectory: draftSession?.mode === 'code' ? (draftSession.project?.directory ?? null) : null }
+        : null;
   const skills = useSkills(skillsScope);
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
@@ -457,8 +495,8 @@ export function ChatShell({
   // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it
   // is closed. Each conversation has its own model: the pane follows this one, and the background
   // builds keep every other conversation's model tools working.
-  const modelEngine = useModelEngine(darkMode, persistedId);
-  useModelBackgroundBuilds(persistedId, darkMode);
+  const modelEngine = useModelEngine(darkMode, ipcSessionId);
+  useModelBackgroundBuilds(ipcSessionId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioArea, setStudioArea] = useState<StudioArea>(placeMemory?.studio ?? 'create');
@@ -488,7 +526,7 @@ export function ChatShell({
     create: createStudio,
   });
   const studioSelect = studioSession.select;
-  const studioTarget = inStudio ? studioSession.sessionId : persistedId;
+  const studioTarget = inStudio ? studioSession.sessionId : ipcSessionId;
   const studioPlaceReason = studioSession.error ?? (studioSession.sessionId ? undefined : STUDIO_STARTING);
   const liveStudio = useStudioController(studioTarget, (studioOpen || inStudio) && !suppliedStudio, studioAccountKey);
   const studio = suppliedStudio ?? liveStudio;
@@ -496,8 +534,8 @@ export function ChatShell({
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
-  const draft = useAttachmentDraft(activeId);
-  const nextPrompt = usePromptSuggestion(persistedId);
+  const draft = useAttachmentDraft(capabilities.desktopChat ? activeId : null);
+  const nextPrompt = usePromptSuggestion(ipcSessionId);
   const blankChatId =
     screen === 'conversation' &&
     !opening &&
@@ -524,7 +562,7 @@ export function ChatShell({
   // Keyed by the conversation it was raised in, so it does not follow the user into another one.
   const [sideChatError, setSideChatError] = useState<{ sessionId: string; error: string } | null>(null);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
-  const pullRequest = usePullRequest(screen === 'conversation' ? persistedId : null);
+  const pullRequest = usePullRequest(screen === 'conversation' ? ipcSessionId : null);
   // What the browser pane trades width with; see BrowserPane.
   const conversationColumn = useRef<HTMLDivElement | null>(null);
   const panelPrefs = useSessionPanelPrefs();
@@ -699,7 +737,7 @@ export function ChatShell({
     },
     [draft]
   );
-  const drop = useFileDrop(onFilesDropped, !!activeId);
+  const drop = useFileDrop(onFilesDropped, !!activeId && capabilities.desktopChat);
 
   /**
    * Whether the conversation's model is known NOT to read images.
@@ -837,26 +875,37 @@ export function ChatShell({
    * one thing it cannot do is belong to no conversation, so the toggle stays on screen and
    * disabled on the empty window rather than disappearing from it.
    */
-  const browserAvailable = !!persistedId;
+  const browserAvailable = !!persistedId && capabilities.browser;
 
   // The header's pane toggles. The simulator and 3D model are left out where they cannot exist;
   // terminal and browser only lack a conversation, so they stay listed and say so.
+  // A session on another host has neither pane yet, so they are left out rather than listed.
   const paneControls: PaneControl[] = [
-    {
-      id: 'terminal',
-      open: terminalOpen,
-      unavailableReason: persistedId ? undefined : 'Open a conversation to use the terminal.',
-      onToggle: toggleTerminal,
-    },
-    {
-      id: 'browser',
-      open: browserOpen && browserAvailable,
-      unavailableReason: browserAvailable ? undefined : 'Open a conversation to use the browser.',
-      onToggle: toggleBrowser,
-    },
+    ...(capabilities.terminal
+      ? [
+          {
+            id: 'terminal' as const,
+            open: terminalOpen,
+            unavailableReason: persistedId ? undefined : 'Open a conversation to use the terminal.',
+            onToggle: toggleTerminal,
+          },
+        ]
+      : []),
+    ...(capabilities.browser
+      ? [
+          {
+            id: 'browser' as const,
+            open: browserOpen && browserAvailable,
+            unavailableReason: browserAvailable ? undefined : 'Open a conversation to use the browser.',
+            onToggle: toggleBrowser,
+          },
+        ]
+      : []),
     ...(simulatorView.available ? [{ id: 'simulator' as const, open: simulatorOpen, onToggle: toggleSimulator }] : []),
     ...(modelAvailable ? [{ id: 'model' as const, open: modelOpen, onToggle: toggleModel }] : []),
-    { id: 'studio', open: studioOpen, onToggle: () => setStudioOpen(open => !open) },
+    ...(capabilities.desktopChat
+      ? [{ id: 'studio' as const, open: studioOpen, onToggle: () => setStudioOpen(open => !open) }]
+      : []),
   ];
 
   // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
@@ -883,7 +932,7 @@ export function ChatShell({
   const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
   const workspaceChanges = useWorkspaceChanges(
-    screen === 'conversation' ? persistedId : null,
+    screen === 'conversation' ? ipcSessionId : null,
     conversation.session?.project,
     conversation.settledTurns
   );
@@ -903,9 +952,11 @@ export function ChatShell({
   // The view is remembered per sidebar group, so a Claude Code worktree shares its repository's choice. Only
   // the active session's project counts: a Code draft can briefly stand in for another session.
   const orchestrationProject = orchestrationSession?.id === activeId ? orchestrationSession.project : undefined;
+  // Keyed like the sidebar group: the same directory on two hosts is two projects. A local key
+  // is the bare directory, as before, so saved prefs carry over.
   const orchestratorPrefs = useOrchestratorPrefs(
     activeId,
-    orchestrationProject && projectGroupDirectory(orchestrationProject)
+    orchestrationProject && projectKeyOf(activeHost, orchestrationProject)
   );
   const { setDockOpen, setLayout: setOrchestratorLayout, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
@@ -946,7 +997,7 @@ export function ChatShell({
     !turnOpen &&
     conversation.messages.length === 0;
 
-  // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
+  // Derived during render, not in an effect: a scene only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
   const orchestrateEntry = orchestrating ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);
@@ -967,15 +1018,16 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
   const orchestratorView = orchestratorLayout.panes[0].view;
+  const ambientTalkLabel = useSceneStageCopy(orchestratorView).talk;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
-  // The Tavern asks its agents' questions in its own dialogue box (OrchestratorStage inSceneDecisions), so
-  // the tray above the composer keeps only this conversation's own decisions while that scene is up.
+  // A scene that answers in place asks its agents' questions in its own dialogue box (OrchestratorStage
+  // inSceneDecisions), so the tray above the composer keeps only this conversation's own decisions while it is up.
   const agentDecisionsInScene =
     orchestrating &&
     !presentingStage &&
     !orchestratorSplit &&
-    orchestratorView === 'tavern' &&
+    ORCHESTRATOR_VIEW_INFO[orchestratorView].scene?.inSceneDecisions === true &&
     !orchestratorPrefs.focus;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
@@ -1031,7 +1083,7 @@ export function ChatShell({
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
     onSettledKey: event => {
-      if (!isPrintableKey(event) || isEditable(event.target) || inTavernDialogue(event.target)) return;
+      if (!isPrintableKey(event) || isEditable(event.target) || inSceneDialogue(event.target)) return;
       event.preventDefault();
       focusParentChat();
     },
@@ -1198,7 +1250,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => hostChat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
@@ -1621,18 +1673,18 @@ export function ChatShell({
    * asked whether the folder can hold one when that default is on.
    */
   const onCreateInProject = useCallback(
-    async (directory: string) => {
-      const sibling = projectForGroup(sessions, directory);
+    async (hostId: string, directory: string) => {
+      const sibling = projectForGroup(sessions, hostId, directory);
       if (!sibling) return;
       clearCodeError();
       markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
       const inWorktree =
-        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+        worktreeByDefault() && canHoldWorktree(await hostChat.inspectProject(hostId, sibling.directory));
       setScreen('conversation');
       setMode('code');
-      setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree)));
+      setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree), undefined, hostId));
       setComposerFocus(request => request + 1);
     },
     [sessions, sessionDraft.start, clearCodeError, markSessionStart]
@@ -1643,6 +1695,7 @@ export function ChatShell({
     () => (deleteSessionId ? sessions.find(session => session.id === deleteSessionId) : undefined),
     [sessions, deleteSessionId]
   );
+  const deleteCapabilities = useHostSessionCapabilities(deleteTarget ? summaryHostId(deleteTarget) : LOCAL_HOST_ID);
   const deleteNested = useMemo(
     () => (deleteSessionId ? nestedSessionsOf(sessions, deleteSessionId) : []),
     [sessions, deleteSessionId]
@@ -1680,16 +1733,19 @@ export function ChatShell({
           <SessionOpenerContext.Provider value={selectSession}>
             {/* Keyed so an open menu can never carry an image into another conversation,
             should a switch ever skip the `opening` gate that unmounts this today. */}
-            <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
+            <ImageMenuProvider
+              key={activeId ?? 'none'}
+              onAttach={activeId && capabilities.desktopChat ? draft.attachImage : undefined}
+            >
               {/* A path not found yet is asked again once a turn settles: replies name files before writing them.
               Keyed like the image menu: its answers and an open menu belong to one conversation's folders. */}
               <FilePathLinkProvider
                 key={activeId ?? 'none'}
-                sessionId={activeId}
+                sessionId={capabilities.desktopChat ? activeId : null}
                 recheck={conversation.settledTurns}
                 showFile={showFile}
                 selectionEpoch={fileSelectionEpoch}
-                onAttach={activeId ? draft.attachFilePath : undefined}
+                onAttach={activeId && capabilities.desktopChat ? draft.attachFilePath : undefined}
               >
                 <MessageThread
                   // Remounted per conversation, so its window and scroll start over and nothing it
@@ -1750,6 +1806,7 @@ export function ChatShell({
                             : {})}
                           binding={conversation.project}
                           settledTurns={conversation.settledTurns}
+                          inUse={groundingLocked}
                           preparing={conversation.preparing !== null}
                         />
                       </Box>
@@ -1762,12 +1819,14 @@ export function ChatShell({
                   // offered on top of it.
                   streaming={turnOpen}
                   onRespond={conversation.respondToApproval}
-                  onMove={background.moveToBackground}
-                  onContinue={() => void conversation.continueReply()}
-                  onEditMessage={conversation.editMessage}
-                  onRegenerate={() => void conversation.regenerate()}
-                  onReplyToSelection={onReplyToSelection}
-                  onSideChatFromSelection={text => void onSideChatFromSelection(text)}
+                  {...(capabilities.desktopChat && {
+                    onMove: background.moveToBackground,
+                    onContinue: () => void conversation.continueReply(),
+                    onEditMessage: conversation.editMessage,
+                    onRegenerate: () => void conversation.regenerate(),
+                    onReplyToSelection,
+                    onSideChatFromSelection: (text: string) => void onSideChatFromSelection(text),
+                  })}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
                   statsRail={statsRailFits && statsRailOn}
                   liveTurn={conversation.turn}
@@ -1852,6 +1911,7 @@ export function ChatShell({
           sessionId={deleteSessionId}
           title={deleteTarget?.title ?? ''}
           nested={deleteNested}
+          inspectWorktrees={deleteCapabilities.desktopChat}
           onDelete={onDelete}
           onClose={() => setDeleteSessionId(null)}
         />
@@ -1926,7 +1986,7 @@ export function ChatShell({
             onCreate={() => void onCreate()}
             onOpenArtifacts={() => setScreen('artifacts')}
             onOpenMissionControl={() => setScreen('mission-control')}
-            onCreateInProject={directory => void onCreateInProject(directory)}
+            onCreateInProject={(hostId, directory) => void onCreateInProject(hostId, directory)}
             onCreateInSection={sectionId => void onCreateInSection(sectionId)}
             onDelete={setDeleteSessionId}
             onTogglePin={session => void togglePin(session)}
@@ -2140,7 +2200,9 @@ export function ChatShell({
                   {/* Inside the reading column, not out at the window edge: a popup opening from
                   here cannot reach the pane, and one over the pane would be drawn behind the
                   web page - see agentBrowser.ts. */}
-                  <SessionArtifactsButton artifacts={artifactsInSession} onOpen={openSessionArtifact} />
+                  {capabilities.browser && (
+                    <SessionArtifactsButton artifacts={artifactsInSession} onOpen={openSessionArtifact} />
+                  )}
                   <OpenPaneButtons panes={paneControls} focusAfterClose={panesMenuButtonRef} />
                   <PanesMenu
                     buttonRef={panesMenuButtonRef}
@@ -2298,7 +2360,7 @@ export function ChatShell({
                       : {}),
                     binding: conversation.project,
                     settledTurns: conversation.settledTurns,
-                    inUse: conversation.messages.length > 0,
+                    inUse: conversation.messages.length > 0 || groundingLocked,
                     preparing: conversation.preparing !== null,
                   }}
                   changes={{
@@ -2327,7 +2389,7 @@ export function ChatShell({
                     processes: background.processes,
                     spawned,
                     onStopProcess: background.stop,
-                    onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                    onStopSession: sessionId => void hostChat.stopReply(sessionId),
                     onOpenSession: selectSession,
                     onShowOutput: () => setTasksPanelOpen(true),
                   }}
@@ -2353,7 +2415,7 @@ export function ChatShell({
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
-                    {orchestratorView === 'office' ? 'Type to talk to Manager' : 'Type to talk to the Innkeeper'}
+                    {ambientTalkLabel}
                   </Button>
                   {ambientHint && (
                     <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">
@@ -2514,7 +2576,7 @@ export function ChatShell({
                       : {})}
                     binding={conversation.project}
                     settledTurns={conversation.settledTurns}
-                    inUse={conversation.messages.length > 0}
+                    inUse={conversation.messages.length > 0 || groundingLocked}
                     preparing={conversation.preparing !== null}
                   />
                 )}
@@ -2556,7 +2618,9 @@ export function ChatShell({
                     ? 'Sign in'
                     : unbound
                       ? 'No folder'
-                      : null
+                      : conversation.session && isLinkedChatBusy(conversation.session, turnOpen)
+                        ? 'Replying'
+                        : null
                 }
                 usage={composerUsage}
                 contextStatus={
@@ -2575,8 +2639,10 @@ export function ChatShell({
                 }
                 onSend={text => void onSend(text)}
                 onStop={conversation.stop}
-                onRunCommand={(name, args) => void conversation.runCommand(name, args)}
-                onBrowseSkillMarket={() => openSkillMarket()}
+                {...(capabilities.desktopChat && {
+                  onRunCommand: (name: string, args: string) => void conversation.runCommand(name, args),
+                  onBrowseSkillMarket: () => openSkillMarket(),
+                })}
                 // A Code session shares folders from its workspace controls instead. Both must say
                 // Chat: for a frame after a mode switch, the open session is still the old mode's.
                 addFolder={
@@ -2600,90 +2666,96 @@ export function ChatShell({
                 skills={skills}
                 mentionSessions={sessions}
                 leading={
-                  <>
-                    <ApprovalModePill
-                      key={`approval:${activeId ?? ''}`}
-                      mode={conversation.session?.approvalMode ?? 'ask'}
-                      disabled={chatSettingsLocked}
-                      onSelect={mode => void conversation.setApprovalMode(mode)}
-                    />
-                    {orchestrateCapable && (
-                      <OrchestratePill
-                        on={delegating}
-                        disabled={!activeId}
-                        policy={conversation.session?.orchestrationPolicy}
-                        planner={conversation.session?.model}
-                        models={catalog.models}
-                        onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
+                  capabilities.desktopChat && (
+                    <>
+                      <ApprovalModePill
+                        key={`approval:${activeId ?? ''}`}
+                        mode={conversation.session?.approvalMode ?? 'ask'}
+                        disabled={chatSettingsLocked}
+                        onSelect={mode => void conversation.setApprovalMode(mode)}
                       />
-                    )}
-                  </>
-                }
-                footer={indicators => (
-                  <TuneTray
-                    disabled={!activeId}
-                    trailing={
-                      <>
-                        <ModelPicker
-                          key={`model:${activeId ?? ''}`}
-                          catalog={catalog}
-                          modelId={conversation.session?.model ?? null}
-                          disabled={chatSettingsLocked}
-                          onSelect={model => void conversation.setModel(model)}
-                          noLocal={noLocal}
-                          local={localMode}
-                          onOpenModels={() => setScreen('models')}
-                          switchCredits={model =>
-                            modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
-                          }
-                          servers={savedServers}
-                          hasHistory={conversation.messages.length > 0}
-                          sessionId={activeId}
-                        />
-                        {indicators}
-                      </>
-                    }
-                  >
-                    {compact => (
-                      <>
-                        <ReasoningEffortPicker
-                          key={`effort:${activeId ?? ''}`}
+                      {orchestrateCapable && (
+                        <OrchestratePill
+                          on={delegating}
+                          disabled={!activeId}
+                          policy={conversation.session?.orchestrationPolicy}
+                          planner={conversation.session?.model}
                           models={catalog.models}
-                          modelId={conversation.session?.model ?? null}
-                          effort={conversation.session?.reasoningEffort ?? 'default'}
-                          defaultEffort={defaultEffort}
-                          disabled={chatSettingsLocked}
-                          compact={compact}
-                          onSelect={effort => void conversation.setReasoningEffort(effort)}
+                          onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
                         />
-                        {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
-                        <GenerationSettingsPicker
-                          key={activeId ?? ''}
-                          model={modelOption}
-                          generation={conversation.session?.generation}
-                          modelDefaults={modelDefaults ?? undefined}
-                          effort={conversation.session?.reasoningEffort ?? 'default'}
-                          disabled={chatSettingsLocked}
-                          compact={compact}
-                          onChange={conversation.setGeneration}
-                        />
-                        <PromptCacheTtlPicker
-                          key={`cache:${activeId ?? ''}`}
-                          model={modelOption}
-                          ttl={sessionCacheTtl}
-                          contextTokens={composerUsage.contextTokens ?? 0}
-                          disabled={chatSettingsLocked}
-                          compact={compact}
-                          onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
-                        />
-                      </>
-                    )}
-                  </TuneTray>
-                )}
+                      )}
+                    </>
+                  )
+                }
+                footer={indicators =>
+                  capabilities.models ? (
+                    <TuneTray
+                      disabled={!activeId}
+                      trailing={
+                        <>
+                          <ModelPicker
+                            key={`model:${activeId ?? ''}`}
+                            catalog={catalog}
+                            modelId={conversation.session?.model ?? null}
+                            disabled={chatSettingsLocked}
+                            onSelect={model => void conversation.setModel(model)}
+                            noLocal={noLocal}
+                            local={localMode}
+                            onOpenModels={() => setScreen('models')}
+                            switchCredits={model =>
+                              modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                            }
+                            servers={savedServers}
+                            hasHistory={conversation.messages.length > 0}
+                            sessionId={activeId}
+                          />
+                          {indicators}
+                        </>
+                      }
+                    >
+                      {compact => (
+                        <>
+                          <ReasoningEffortPicker
+                            key={`effort:${activeId ?? ''}`}
+                            models={catalog.models}
+                            modelId={conversation.session?.model ?? null}
+                            effort={conversation.session?.reasoningEffort ?? 'default'}
+                            defaultEffort={defaultEffort}
+                            disabled={chatSettingsLocked}
+                            compact={compact}
+                            onSelect={effort => void conversation.setReasoningEffort(effort)}
+                          />
+                          {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                          <GenerationSettingsPicker
+                            key={activeId ?? ''}
+                            model={modelOption}
+                            generation={conversation.session?.generation}
+                            modelDefaults={modelDefaults ?? undefined}
+                            effort={conversation.session?.reasoningEffort ?? 'default'}
+                            disabled={chatSettingsLocked}
+                            compact={compact}
+                            onChange={conversation.setGeneration}
+                          />
+                          <PromptCacheTtlPicker
+                            key={`cache:${activeId ?? ''}`}
+                            model={modelOption}
+                            ttl={sessionCacheTtl}
+                            contextTokens={composerUsage.contextTokens ?? 0}
+                            disabled={chatSettingsLocked}
+                            compact={compact}
+                            onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
+                          />
+                        </>
+                      )}
+                    </TuneTray>
+                  ) : (
+                    indicators
+                  )
+                }
               />
             </Box>
 
-            {terminalOpen && activeId && (
+            {terminalOpen && capabilities.terminal && activeId && (
               <TerminalPanel
                 key={activeId}
                 sessionId={activeId}

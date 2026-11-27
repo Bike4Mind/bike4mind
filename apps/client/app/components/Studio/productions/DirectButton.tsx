@@ -29,6 +29,15 @@ const productLines = (picked: IFabFileDocument | null, brandProducts: readonly s
   return onFile ? [`Product photo: already in the brand kit (${onFile}); every shot uses it.`] : [];
 };
 
+// Without the names the director cannot pass a shot's characters to production_storyboard.
+const characterLines = (characters: readonly { name: string }[]): string[] =>
+  characters.length > 0
+    ? [
+        `Saved characters: ${characters.map(character => character.name).join(', ')}. Name the ones who appear in ` +
+          "a shot in that shot's characters.",
+      ]
+    : [];
+
 type LaunchCopy = { piece: string; placeholder: string; productPhoto: boolean };
 
 const AD_COPY: LaunchCopy = {
@@ -106,6 +115,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
         ...(copy.productPhoto ? productLines(product, composition.brandKit?.productFileIds ?? []) : []),
+        ...characterLines(composition.brandKit?.characters ?? []),
         ...redirectLines(composition.shots ?? [], trimmedBrief, composition.brief?.summary, copy.piece),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {

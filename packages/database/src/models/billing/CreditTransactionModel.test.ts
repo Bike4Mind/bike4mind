@@ -831,3 +831,21 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
     });
   });
 });
+
+describe('CreditTransactionRepository.queryLedgerPage tiebreak', () => {
+  it('pages over rows sharing a createdAt with each one appearing exactly once', async () => {
+    const rows = Array.from({ length: 7 }, () => ({ _id: new mongoose.Types.ObjectId(), createdAt: day(3) }));
+    await seed(rows);
+    const expected = rows.map(r => String(r._id)).sort((a, b) => b.localeCompare(a));
+
+    const ids: string[] = [];
+    for (let skip = 0; skip < rows.length + 3; skip += 3) {
+      const page = await creditTransactionRepository.queryLedgerPage(ORG, CreditHolderType.Organization, {
+        limit: 3,
+        skip,
+      });
+      ids.push(...page.data.map(d => String(d._id)));
+    }
+    expect(ids).toEqual(expected);
+  });
+});

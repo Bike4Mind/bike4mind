@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { orchestrateMiniPayloadSchema, type OrchestrateMiniPayload } from '@shared/orchestrateMini';
 import { OrchestratorStage } from './OrchestratorStage';
 import { toMiniPayload } from './orchestrateMini';
@@ -27,6 +28,14 @@ type Bridge = {
 let bridge: Bridge;
 const themed = createThemedMount();
 
+const chatStub = () => ({
+  getSession: vi.fn().mockResolvedValue(null),
+  getHeldRelays: vi.fn().mockResolvedValue([]),
+  onStreamEvent: vi.fn(() => () => undefined),
+  onQueueChanged: vi.fn(() => () => undefined),
+  getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
+});
+
 function installBridge(open: boolean) {
   bridge = {
     publish: vi.fn(async () => undefined),
@@ -35,12 +44,8 @@ function installBridge(open: boolean) {
     onOpenChanged: vi.fn(() => () => undefined),
   };
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: {
-      getSession: vi.fn().mockResolvedValue(null),
-      onStreamEvent: vi.fn(() => () => undefined),
-      onQueueChanged: vi.fn(() => () => undefined),
-      getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
-    },
+    host: chatBackedHostBridge(),
+    chat: chatStub(),
     orchestrateMini: bridge,
   };
 }
@@ -127,12 +132,8 @@ describe('the stage feeding the Orchestrate mini window', () => {
 
   it('leaves the menu item out where there is no bridge to toggle with', async () => {
     (window as unknown as { b4m: unknown }).b4m = {
-      chat: {
-        getSession: vi.fn().mockResolvedValue(null),
-        onStreamEvent: vi.fn(() => () => undefined),
-        onQueueChanged: vi.fn(() => () => undefined),
-        getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
-      },
+      host: chatBackedHostBridge(),
+      chat: chatStub(),
     };
     await renderStage(false);
     await act(async () => el('orchestrator-view-menu-btn').click());

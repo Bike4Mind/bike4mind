@@ -594,8 +594,14 @@ enum CaptureAdmissionScenarios {
       try Data(contentsOf: store.payloadURL(jobID: jobB.id, fileName: "b.png")) == Data([2]),
       "Other owner payload changed")
     try require(destinations.lastDestination() == nil, "Ending destination survived recovery")
+    let queuedRevocations = try storage.pendingRevocations()
     await recovering.retryPendingRevocations()
-    try require(try storage.pendingRevocations().isEmpty, "Captured old-server revocation was not retried")
+    if recovering.environment.baseURL != original.baseURL {
+      try require(try storage.pendingRevocations() == queuedRevocations, "Another server's retry changed the pending intent")
+      await recovering.switchEnvironment(to: .production)
+      await recovering.retryPendingRevocations()
+    }
+    try require(try storage.pendingRevocations().isEmpty, "Captured revocation was not retried on its server")
   }
 
   static func deferredRestoreCannotReportSignOutSuccess() async throws {
@@ -778,6 +784,38 @@ enum CaptureAdmissionScenarios {
     try require(
       sends == 0 && saved?.sendAttemptID != nil && saved?.stage == .registering,
       "Failed durable-attempt readback permitted a POST or erased the saved marker")
+  }
+
+  static func pendingRevocationsMigrateOnceBeforeUse() throws {
+    let clock = Date(timeIntervalSince1970: 1_800_000_000)
+    let legacy = Data(#"[{"baseURL":"https://legacy.example.test","refreshToken":"legacy"}]"#.utf8)
+    var stored = legacy
+    let first = try PendingRevocationCodec.load(stored, now: clock) { stored = $0 }
+    try require(
+      first.count == 1 && first[0].refreshToken == "legacy" && first[0].createdAt == clock,
+      "Legacy pending revocation was lost or not timestamped")
+    var unexpectedWrites = 0
+    let second = try PendingRevocationCodec.load(stored, now: clock.addingTimeInterval(100)) { _ in
+      unexpectedWrites += 1
+    }
+    try require(second == first && unexpectedWrites == 0, "Repeated read reset a pending revocation's age")
+    var rejected = false
+    do {
+      _ = try PendingRevocationCodec.load(legacy, now: clock) { _ in
+        throw CheckFailure.failed("Injected migration write failure")
+      }
+    } catch { rejected = true }
+    try require(rejected, "Failed durable migration returned a usable queue")
+    let dated = PendingRevocation(
+      baseURL: URL(string: "https://dated.example.test")!, refreshToken: "dated",
+      createdAt: clock.addingTimeInterval(-100))
+    let datedJSON = String(decoding: try JSONEncoder().encode(dated), as: UTF8.self)
+    let mixed = Data((String(decoding: legacy.dropLast(), as: UTF8.self) + "," + datedJSON + "]").utf8)
+    let migrated = try PendingRevocationCodec.load(mixed, now: clock) { stored = $0 }
+    try require(migrated == first + [dated], "Migration changed an already dated record")
+    try require(
+      PendingRevocation.bounded(migrated, now: clock.addingTimeInterval(PendingRevocation.maxAge)).isEmpty,
+      "Migrated records bypassed the existing age cap")
   }
 
 }

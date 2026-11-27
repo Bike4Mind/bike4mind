@@ -10,6 +10,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
 import { revokeProjectFileGrants } from './revokeProjectFileGrants';
+import type { GrantorUsers } from '../sharingService/projectGrantor';
 
 const removeSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -22,9 +23,10 @@ interface RemoveSystemPromptsAdapters {
   db: {
     fabFiles: IFabFileRepository;
     projects: IProjectRepository;
-    users: Pick<IUserRepository, 'findByIds'>;
+    users: Pick<IUserRepository, 'findByIds'> & Partial<GrantorUsers>;
     invites: Pick<IInviteRepository, 'findAllByDocumentId'>;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 // Removes the given fileIds from a project's systemPrompts in one pass. Idempotent:
@@ -61,8 +63,6 @@ export const removeSystemPrompts = async (
   project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(canonicalId(prompt.fileId)));
   project.updatedAt = new Date();
 
-  await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });
-
   // A file still in fileIds stays shared with the members (removeFiles makes the mirror check).
   // Looked up unscoped, as acceptProject does: a revoke only narrows access, and the caller already
   // holds update on the project. An id with no live row may be soft-deleted, so it is revoked with
@@ -73,8 +73,9 @@ export const removeSystemPrompts = async (
     const files = await db.fabFiles.findAllByIds(revoking);
     const live = new Set(files.map(file => canonicalId(String(file.id))));
     const softDeletedIds = revoking.filter(fileId => !live.has(canonicalId(fileId)));
-    await revokeProjectFileGrants(project.id, { files, softDeletedIds }, adapters);
+    await revokeProjectFileGrants(project.id, { files, softDeletedIds, project }, adapters);
   }
 
+  await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });
   return project;
 };

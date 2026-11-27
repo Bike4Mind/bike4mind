@@ -59,6 +59,7 @@ vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestio
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../replay';
 
 beforeEach(() => {
@@ -190,7 +191,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     { replay: undefined, sourceQueue: null },
   ])('rejects a blocked destination %j before SQS operations', async entry => {
     h.getDlqByLabel.mockReturnValue({ label: 'quest', displayName: 'Quest queue', ...entry });
-    for (const replayBody of [{ batchSize: 1 }, { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] }]) {
+    for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
       const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
       (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
       await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Replay is not available');
@@ -210,10 +211,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
         replay,
       });
       h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
-      for (const replayBody of [
-        { batchSize: 1 },
-        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
-      ]) {
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
         const { req, res } = createMocks({
           method: 'POST',
           body: { queueLabel: 'quest', reason: 'Reviewed side effects', ...replayBody },
@@ -238,10 +236,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
         replay,
       });
       h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
-      for (const replayBody of [
-        { batchSize: 1 },
-        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
-      ]) {
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
         for (const reason of [undefined, '', '    ', 'four', 'x'.repeat(501)]) {
           const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody, reason } });
           (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
@@ -251,10 +246,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
       expect(h.sendToQueue).not.toHaveBeenCalled();
       expect(h.receiveFromQueue).not.toHaveBeenCalled();
       expect(h.audit).not.toHaveBeenCalled();
-      for (const replayBody of [
-        { batchSize: 1 },
-        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
-      ]) {
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
         const { req, res } = createMocks({
           method: 'POST',
           body: { queueLabel: 'quest', ...replayBody, reason: '  Reviewed side effects  ' },
@@ -266,13 +258,52 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     }
   );
 
-  it('records ops.dlq.replayed with the queue and count but no message bodies', async () => {
+  it('rejects a client-supplied message body without touching any queue', async () => {
     const { req, res } = createMocks({
       method: 'POST',
       body: {
         queueLabel: 'quest',
-        messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{"secret":"payload"}' }],
+        reason: 'Replay a forged message',
+        messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{"forged":true}' }],
       },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    const error = await (handler as unknown as Route)(req, res).then(
+      () => null,
+      (rejected: unknown) => rejected
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as Error).message).toBe(
+      'Unsupported field(s): messages. Accepted fields: queueLabel, aiSuggestionId, batchSize, messageIds, reason'
+    );
+    for (const operation of [h.receiveFromQueue, h.sendToQueue, h.deleteFromQueue, h.logReplay, h.audit]) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+  });
+
+  it('replays the body stored in the DLQ, not one from the request', async () => {
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"stored":true}' }]);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { queueLabel: 'quest', messageIds: ['m1'], body: '{"forged":true}' },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await expect((handler as unknown as Route)(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+
+    const ok = createMocks({ method: 'POST', body: { queueLabel: 'quest', messageIds: ['m1'] } });
+    (ok.req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await (handler as unknown as Route)(ok.req, ok.res);
+    expect(h.sendToQueue).toHaveBeenCalledExactlyOnceWith('source-url', { stored: true });
+  });
+
+  it('records ops.dlq.replayed with the queue and count but no message bodies', async () => {
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"secret":"payload"}' }]);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { queueLabel: 'quest', messageIds: ['m1'] },
     });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
 

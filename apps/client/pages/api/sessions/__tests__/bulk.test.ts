@@ -23,6 +23,8 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
 );
 
 const mockPurgeMedia = vi.hoisted(() => vi.fn());
+const mockRescope = vi.hoisted(() => vi.fn());
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
 vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
@@ -156,7 +158,7 @@ beforeEach(() => {
     isValid: true,
     keyId: 'k1',
     userId: 'user-1',
-    scopes: [],
+    scopes: ['notebooks:write'],
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
   });
   mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
@@ -185,6 +187,55 @@ function withScopes(scopes: string[]) {
 }
 
 describe('DELETE /api/sessions/bulk', () => {
+  it('fences only committed recipients after a retry and a rolled-back session', async () => {
+    mockWithTransaction.mockImplementationOnce(async (operation: () => Promise<unknown>) => {
+      await operation();
+      expect(mockRescope).not.toHaveBeenCalled();
+      return operation();
+    });
+    mockDeleteSession
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['aborted-attempt']);
+          return { id: 'other-session' };
+        }
+      )
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['committed-recipient']);
+          return { id: 'other-session' };
+        }
+      )
+      .mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          adapters.onAccessRemoved(['rolled-back-session']);
+          throw new Error('rollback');
+        }
+      );
+    const { req, res } = fire(['s1', 's2']);
+    await handler(req, res);
+    expect(mockRescope).toHaveBeenCalledTimes(1);
+    expect(mockRescope.mock.calls[0][0]).toEqual(['committed-recipient']);
+    expect(res._getJSONData().deletedCount).toBe(1);
+  });
   it('runs each delete inside its own transaction', async () => {
     // Asserting the call count alone would pass on a route that opened a transaction and then ran
     // the cascade outside it, which is the shape that leaves files half-rewritten, so the service
@@ -473,12 +524,22 @@ describe('POST /api/sessions/bulk - tags', () => {
     expect(mockTag.findTaggable).not.toHaveBeenCalled();
   });
 
-  it('keeps the bulk delete open to a key without notebooks:write', async () => {
-    withScopes([]);
+  it('refuses the bulk delete to a key without notebooks:write', async () => {
+    withScopes(['notebooks:read']);
+    const { req, res } = fire([id(1)]);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it('allows the bulk delete to a key holding notebooks:write', async () => {
+    withScopes(['notebooks:write']);
     const { req, res } = fire([id(1)]);
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mockDeleteSession).toHaveBeenCalledTimes(1);
   });
 
   it('checks credits once for every accessible session before queueing any', async () => {

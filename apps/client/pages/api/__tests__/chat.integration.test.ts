@@ -302,7 +302,13 @@ vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', async orig => 
 }));
 
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
+import {
+  FILE_READ_TOOL_NAMES,
+  ApiKeyScope,
+  BadRequestError,
+  CreditHolderType,
+  TooManyRequestsError,
+} from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -452,7 +458,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   });
 
   it('denies the data-lake tools to a chat key without any data-lake scope', async () => {
-    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -463,12 +469,21 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     ]);
   });
 
-  it('denies nothing to a chat key that holds datalake:write', async () => {
-    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+  it('denies nothing to a chat key that holds datalake:write and files:read', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
+  });
+
+  it('denies the file-reading tools to a chat key without files:read', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual([
+      ...FILE_READ_TOOL_NAMES,
+    ]);
   });
 
   it('hands invoke() an apiKey origin and the key id, so a tool-driven lake write is audited as the key', async () => {
@@ -476,6 +491,31 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     const { req, res } = fire();
     await handler(req, res);
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
+  });
+
+  it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s on both chat paths', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({
+      apiKey,
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        fileInputsAllowed: true,
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockProcess.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({ fileInputsAllowed: allowed }),
+      })
+    );
   });
 
   it.each([

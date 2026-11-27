@@ -20,7 +20,7 @@ const ConfirmRequestSchema = z.object({
  * Handles web confirmation button clicks for MCP tool execution.
  * When user clicks Confirm or Cancel on a pending MCP action (e.g., GitHub issue creation).
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const logger = new Logger({ metadata: { component: 'web-mcp-confirm' } });
 
   const parsed = ConfirmRequestSchema.safeParse(req.body);

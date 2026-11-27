@@ -52,6 +52,7 @@ import {
   getLatestToolCallIdCanonical,
 } from './backend';
 import { Logger } from '@bike4mind/observability';
+import { recordProviderCredentialUse } from './providerCredentialMetrics';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
@@ -1003,6 +1004,7 @@ export class AnthropicBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
+    recordProviderCredentialUse('anthropic', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     if (options._internal?.evaluation) {
       if (options.executeTools !== false)

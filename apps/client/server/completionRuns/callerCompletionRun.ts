@@ -21,7 +21,7 @@ export async function resolveCompletionRunCaller(
   {
     userId,
     apiKeyInfo,
-  }: { userId: string; apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> },
+  }: { userId: string; apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'scopes'> },
   requestedOrgId: string | null | undefined
 ): Promise<CompletionRunCaller> {
   const billingOrganizationId = await resolveCompletionBillingOrgId({ apiKeyInfo, requestedOrgId, userId });

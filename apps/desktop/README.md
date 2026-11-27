@@ -60,8 +60,8 @@ Desktop version and whether it was an installed build or a development run.
 | `pnpm dev`            | Dev server + Electron, with HMR                    |
 | `pnpm build`          | Bundles main, preload and renderer into `out/`     |
 | `pnpm start`          | Launches Electron against an existing `out/` build |
-| `pnpm typecheck`      | `tsc` over both tsconfig projects                  |
-| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc`                      |
+| `pnpm typecheck`      | `tsgo` over both tsconfig projects                 |
+| `pnpm typecheck:tsc`  | `tsc` over both tsconfig projects                  |
 | `pnpm test`           | vitest                                             |
 | `pnpm package`        | Installers for the host platform, into `release/`  |
 
@@ -941,7 +941,7 @@ derived state - signed out, awaiting approval (with the user code to display), s
 one of the two blocked states below - and there is deliberately no IPC channel that returns a
 token.
 
-- **Client id.** This app registers as `b4m-desktop`. One `DeviceFlowClient` is constructed
+- **Client id.** This app registers as `b4m-desktop` (the headless host signs in as `b4m-host`). One `DeviceFlowClient` is constructed
   with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
   the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
   `client_id` (RFC 8628 s3.4).

@@ -252,6 +252,20 @@ describe('getInstallationOctokit', () => {
     expect(octokit).toBe(h.mockOctokit);
   });
 
+  // Without a `log`, Octokit's request log sends access-loss 404s to console.error, which pages.
+  it('passes the warn-routing request log to both the App and the token client', async () => {
+    vi.mocked(createAppAuth).mockReturnValue(vi.fn().mockResolvedValue({ token: 'inst-token' }) as never);
+    h.mockOctokit.request.mockResolvedValueOnce({ data: { id: 42, account: null } });
+
+    await getInstallation(CONFIG, 42);
+    await getInstallationOctokit(CONFIG, 42, 7);
+
+    const withLog = expect.objectContaining({ log: expect.objectContaining({ error: expect.any(Function) }) });
+    expect(Octokit).toHaveBeenCalledTimes(2);
+    expect(Octokit).toHaveBeenNthCalledWith(1, withLog);
+    expect(Octokit).toHaveBeenNthCalledWith(2, withLog);
+  });
+
   it('surfaces the 422 GitHub returns when the repository left the installation', async () => {
     const unprocessable = Object.assign(new Error('Unprocessable Entity'), { status: 422 });
     vi.mocked(createAppAuth).mockReturnValue(vi.fn().mockRejectedValue(unprocessable) as never);

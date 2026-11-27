@@ -5,6 +5,7 @@ import type { ICompletionOptions, ICompletionResponseChunk, IMessage, ModelInfo 
 import type { CompletionInfo } from '../types';
 import { ChatModels } from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
+import { isHiddenReasoningOnlyEmptyError } from '../llmEmptyTurnErrors';
 import DeepSeekBedrockBackend from './deepseek';
 import LlamaBedrockBackend from './llama';
 import TitanBedrockBackend from './titan';
@@ -223,7 +224,7 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
       { type: 'message_stop' },
     ];
 
-    const complete = async (events: unknown[]) => {
+    const complete = async (events: unknown[], extraOptions: Partial<ICompletionOptions> = {}) => {
       const body = streamBody(events);
       const backend = new (class extends AnthropicBedrockBackend {
         protected override async invokeModelStream() {
@@ -235,13 +236,13 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
         .complete(
           ChatModels.CLAUDE_4_5_SONNET_BEDROCK,
           [{ role: 'user', content: 'hi' }],
-          { stream: true },
+          { stream: true, ...extraOptions },
           async text => {
             for (const t of text) if (t) texts.push(t);
           }
         )
         .catch((e: Error) => e);
-      return { streamed: texts.join(''), message: (err as Error | undefined)?.message ?? '' };
+      return { streamed: texts.join(''), message: (err as Error | undefined)?.message ?? '', err };
     };
 
     it.each([
@@ -263,6 +264,30 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
       expect(message).toMatch(/thinking block/);
       expect(message).not.toMatch(/stream timeout/i);
       expect(message).not.toContain('If every call on this model is empty');
+    });
+
+    it('types a finished turn of hidden thinking only so it is retried, without timeout wording', async () => {
+      const { err, message } = await complete([messageStart, thinkingStart, signature, blockStop, ...finish]);
+
+      expect(isHiddenReasoningOnlyEmptyError(err)).toBe(true);
+      expect(message).not.toMatch(/timeout|abort|overload/i);
+    });
+
+    it('does not type a stalled turn of hidden thinking only', async () => {
+      const { err, message } = await complete([messageStart, thinkingStart, signature, blockStop]);
+
+      expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
+      expect(message).toMatch(/stream timeout/);
+    });
+
+    it('does not type the empty turn left by the max-tool-calls cap', async () => {
+      const { err, message } = await complete([messageStart, thinkingStart, signature, blockStop, ...finish], {
+        _internal: { toolCallCount: 5, maxToolCalls: 5 },
+      } as Partial<ICompletionOptions>);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
+      expect(message).toMatch(/EMPTY response/i);
     });
 
     it('keeps a stalled turn of hidden thinking only in the retry classification', async () => {

@@ -31,6 +31,7 @@ const SETTLE_MS = 2000;
 const QUIET_MS = 150;
 // Any of these means the user took over the page, so the card stops pulling the anchor back.
 const USER_INPUT = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
+const SETTLED = ['transitionend', 'animationend'] as const;
 // Above the host's side drawer and any modal, since an anchor such as a nav item or a solver panel's race
 // button sits in one and the card has to stay pressable over its backdrop.
 const LAYER = 'calc(var(--joy-zIndex-modal, 1300) + 1)';
@@ -155,6 +156,8 @@ function useAnchorRect(anchor: string | undefined, scope: string | undefined, st
     if (container) resize.observe(container);
     window.addEventListener('resize', onLayout);
     window.addEventListener('scroll', onLayout, true);
+    // A drawer or menu that slides in by CSS fires none of the above when it lands, as the phone attach menu does.
+    for (const type of SETTLED) window.addEventListener(type, onLayout, true);
     // A layout shift elsewhere moves the anchor without resizing it, and a modal opening covers it.
     let pending = 0;
     const schedule = () => {
@@ -190,6 +193,7 @@ function useAnchorRect(anchor: string | undefined, scope: string | undefined, st
       resize.disconnect();
       window.removeEventListener('resize', onLayout);
       window.removeEventListener('scroll', onLayout, true);
+      for (const type of SETTLED) window.removeEventListener(type, onLayout, true);
     };
   }, [element, scope, stepKey]);
 
@@ -494,7 +498,11 @@ export interface CoachMarkProps {
   /** The step reports its action done; a card hidden to its pill comes back to say what is next. */
   done?: boolean;
   onLeave: () => void;
+  /** False on a card that ends the module (its own Done finishes it), which then offers no "Leave tutorial". */
+  offerLeave?: boolean;
   onShowSteps?: () => void;
+  /** Offered as "Skip step" beside Leave; absent, the card offers no skip. */
+  onSkip?: () => void;
   /** Where this step sits in its module, shown as "Step 2 of 15". */
   progress?: { index: number; count: number };
   /** Shown in place of the step count on a card that has none. */
@@ -522,7 +530,9 @@ export function CoachMark({
   panel = false,
   done = false,
   onLeave,
+  offerLeave = true,
   onShowSteps,
+  onSkip,
   progress,
   heading,
   children,
@@ -655,7 +665,15 @@ export function CoachMark({
   const topInset = Math.max(0, ...topBars.filter(bar => bar.top <= 0).map(bar => bar.bottom));
   const edge =
     phone && target ? dockPhoneCard({ target, obstacles, card, viewport, current: currentEdge, topInset }) : undefined;
-  if (edge && edge !== currentEdge) setPhoneDock({ key: pulseKey, edge });
+  // Claimed once the target holds still, so an anchor still sliding in (a sheet opening) does not hold the card
+  // on the edge it passed through.
+  const targetTop = target?.top;
+  const targetBottom = target?.bottom;
+  useEffect(() => {
+    if (!edge || edge === currentEdge) return;
+    const claim = window.setTimeout(() => setPhoneDock({ key: pulseKey, edge }), QUIET_MS);
+    return () => clearTimeout(claim);
+  }, [edge, currentEdge, pulseKey, targetTop, targetBottom]);
   if (edge) {
     position = edge === 'top' ? { left: EDGE, top: topInset + EDGE } : { left: EDGE, bottom: EDGE };
   } else if (target) {
@@ -811,18 +829,32 @@ export function CoachMark({
           )}
         </Stack>
         {children && <Box sx={{ mt: 1.5, '&:empty': { display: 'none' } }}>{children}</Box>}
-        {!panel && (
-          <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={onLeave}
-              data-testid="tutorial-coach-leave"
-              sx={{ minHeight: 0, px: 0.5, py: 0.25, mr: -0.5, fontSize: 'xs', fontWeight: 'md' }}
-            >
-              Leave tutorial
-            </Button>
+        {!panel && (onSkip || offerLeave) && (
+          <Stack direction="row" justifyContent="flex-end" gap={onSkip ? 1.5 : undefined} sx={{ mt: 1 }}>
+            {onSkip && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={onSkip}
+                data-testid="tutorial-coach-skip"
+                sx={{ minHeight: 0, px: 0.5, py: 0.25, fontSize: 'xs', fontWeight: 'md' }}
+              >
+                Skip step
+              </Button>
+            )}
+            {offerLeave && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={onLeave}
+                data-testid="tutorial-coach-leave"
+                sx={{ minHeight: 0, px: 0.5, py: 0.25, mr: -0.5, fontSize: 'xs', fontWeight: 'md' }}
+              >
+                Leave tutorial
+              </Button>
+            )}
           </Stack>
         )}
       </Sheet>

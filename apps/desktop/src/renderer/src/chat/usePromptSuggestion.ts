@@ -5,6 +5,7 @@ import {
   usePromptSuggestionModel,
   usePromptSuggestions,
 } from './promptSuggestions';
+import { useSessionEvents } from '../host/useSessionEvents';
 
 export interface PromptSuggestionController {
   /** The guess to draw as placeholder text, or null to use the ordinary placeholder. */
@@ -52,10 +53,8 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
     setSuggestion(null);
   }, [enabled, model]);
 
-  useEffect(() => {
-    return window.b4m.chat.onStreamEvent(event => {
-      if (event.sessionId !== activeSessionId.current) return;
-
+  useSessionEvents(sessionId, {
+    event: event => {
       // A new turn invalidates the last one's guess, and any call still in flight for it.
       if (event.type === 'start') {
         request.current += 1;
@@ -84,10 +83,8 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
         // Main answers null for its own failures, so this only catches the channel itself
         // going away. Swallowed for the same reason: no hint is the whole of the fallback.
         .catch(() => undefined);
-    });
-    // Subscribed once. The setting is read live inside the handler instead of being a
-    // dependency, so toggling it does not tear the stream subscription down and rebuild it.
-  }, []);
+    },
+  });
 
   const dismiss = useCallback(() => {
     request.current += 1;

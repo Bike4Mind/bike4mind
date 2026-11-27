@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import type { ChatSessionSummary } from '@shared/chat';
 import type { PrBarState, PrOption } from '@shared/pullRequest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ChatService } from '../chat/ChatService';
@@ -22,11 +23,13 @@ export interface RegisterPullRequestsOptions {
   store: SessionStore;
   logger: PrMonitorLogger;
   send(channel: string, payload: unknown): void;
+  /** Tells every client of a session summary changed outside a request, through the host protocol. */
+  sessionSummary(summary: ChatSessionSummary): void;
 }
 
 /** Build the PR monitor and expose it to the renderer. */
 export function registerPullRequests(options: RegisterPullRequestsOptions): PrMonitor {
-  const { store, logger, send, chat } = options;
+  const { store, logger, send, chat, sessionSummary } = options;
   const watchedSenders = new Set<number>();
   const autoFixAttempts = new AutoFixAttemptsPreference(options.autoFixAttemptsPath);
   const monitor = new PrMonitor({
@@ -53,7 +56,7 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
       archive: async sessionId => {
         const summary = await chat().setSessionArchived(sessionId, true);
         // The sidebar learns of a change it did not ask for through the summary push.
-        if (summary) send(IPC_CHANNELS.chatSessionSummary, summary);
+        if (summary) sessionSummary(summary);
       },
       isBusy: sessionId => chat().isSessionBusy(sessionId),
       startAutoFix: (sessionId, prompt, origin) => chat().startAutomaticTurn(sessionId, prompt, origin),

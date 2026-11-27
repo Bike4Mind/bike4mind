@@ -31,6 +31,7 @@ import {
 import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { admitsPrivateFileInputs } from './questStartBody';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
 import {
@@ -108,7 +109,9 @@ export class ChatCompletionInvoke {
     apiKeyBillingOwnerType,
     oauthClientId,
     adminRoleWithheld,
+    fileInputsAllowed,
     visitId,
+    contributedToolNames,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -122,8 +125,12 @@ export class ChatCompletionInvoke {
     oauthClientId?: string;
     /** See QuestStartBodySchema.adminRoleWithheld. */
     adminRoleWithheld?: boolean;
+    /** Trusted private-file admission from the authenticated door, never the public body. */
+    fileInputsAllowed?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
     visitId?: string;
+    /** Premium tool map keys, governed by the org tool policy beyond the built-in enum. */
+    contributedToolNames: ReadonlySet<string>;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -133,9 +140,9 @@ export class ChatCompletionInvoke {
       params,
       sessionId,
       message,
-      messageFileIds,
+      messageFileIds: requestedMessageFileIds,
       historyCount,
-      fabFileIds,
+      fabFileIds: requestedFabFileIds,
       dashboardParams,
       questId,
       enableMementos,
@@ -168,6 +175,10 @@ export class ChatCompletionInvoke {
       toolMode,
       timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
+
+    const admittedFileInputs = admitsPrivateFileInputs({ authOrigin, apiKeyId, fileInputsAllowed });
+    const messageFileIds = admittedFileInputs ? requestedMessageFileIds : [];
+    const fabFileIds = admittedFileInputs ? requestedFabFileIds : [];
 
     // Parallelize independent operations: API keys, session, organization, and the correction
     // target. The correction lookup rides this batch rather than the quest batch below because its
@@ -218,7 +229,11 @@ export class ChatCompletionInvoke {
     // An API-key caller chose these tools, so it is told which ones the org disallows. Session and
     // platform (internal) turns have them dropped silently when ChatCompletionProcess assembles the list.
     if (authOrigin === 'apiKey') {
-      const disallowedTools = orgDisallowedTools(tools ?? [], readOrgModelPolicy(organization?.modelPolicy));
+      const disallowedTools = orgDisallowedTools(
+        tools ?? [],
+        readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames
+      );
       if (disallowedTools.length > 0) {
         throw new ForbiddenError(`Tools not allowed by your organization: ${disallowedTools.join(', ')}`, {
           errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
@@ -589,6 +604,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        fileInputsAllowed,
         ...(apiKeyBillingOwnerType ? { apiKeyBillingOwnerType } : {}),
         ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         ...(visitId ? { visitId } : {}),

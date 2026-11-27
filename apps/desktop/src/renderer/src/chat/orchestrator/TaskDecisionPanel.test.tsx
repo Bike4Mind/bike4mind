@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { inheritancePolicy, type TaskContract, type WorkerTask } from '@shared/orchestration';
@@ -42,6 +43,7 @@ const taskAction = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: { listModels: vi.fn(async () => ({ models: [{ id: 'worker', name: 'Catalog Worker' }] })), taskAction },
   };
 });

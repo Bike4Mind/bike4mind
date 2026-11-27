@@ -30,6 +30,7 @@ import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettings
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { connectingUserCanStillManage } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -637,6 +638,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
     await resolveRoleAdminPermissions(user);
+    if (!(await connectingUserCanStillManage(user, lake))) {
+      logger.warn('[driveLakeIngest] connecting user can no longer manage the lake; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(
+        'The account that connected this folder can no longer manage this data lake. Reconnect the folder.'
+      );
+      return;
+    }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
     // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the

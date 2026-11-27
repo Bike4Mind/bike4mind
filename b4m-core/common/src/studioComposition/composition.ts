@@ -37,6 +37,8 @@ export const STUDIO_COMPOSITION_LIMITS = {
   briefFieldMaxLength: 500,
   brandColorsMax: 8,
   brandProductFilesMax: 20,
+  brandCharactersMax: 8,
+  characterNameMaxLength: 100,
   shotsMax: 100,
   shotTitleMaxLength: 200,
   shotDescriptionMaxLength: 4000,
@@ -62,6 +64,20 @@ export const StudioCompositionBriefSchema = z.object({
 });
 export type StudioCompositionBrief = z.infer<typeof StudioCompositionBriefSchema>;
 
+const StudioItemIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Ids may contain only letters, digits, "_" and "-"');
+
+/** A recurring person or mascot: a Library image passed as a reference on the shots that feature it. */
+export const StudioCharacterSchema = z.object({
+  id: StudioItemIdSchema,
+  name: z.string().trim().min(1).max(limits.characterNameMaxLength),
+  fileId: StudioFileIdSchema,
+});
+export type StudioCharacter = z.infer<typeof StudioCharacterSchema>;
+
 /** A deliberately small first cut of a brand kit; it grows as templates need more. */
 export const StudioBrandKitSchema = z.object({
   logoFileId: StudioFileIdSchema.optional(),
@@ -71,6 +87,7 @@ export const StudioBrandKitSchema = z.object({
     .default([]),
   fontFamily: z.string().trim().min(1).max(100).optional(),
   productFileIds: z.array(StudioFileIdSchema).max(limits.brandProductFilesMax).default([]),
+  characters: z.array(StudioCharacterSchema).max(limits.brandCharactersMax).default([]),
 });
 export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
 
@@ -80,11 +97,7 @@ export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
  * fields need no Mongoose change.
  */
 export const StudioShotSchema = z.object({
-  id: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[A-Za-z0-9_-]+$/, 'Ids may contain only letters, digits, "_" and "-"'),
+  id: StudioItemIdSchema,
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength),
   description: z.string().trim().max(limits.shotDescriptionMaxLength).optional(),
   durationMs: z.number().int().positive().optional(),
@@ -99,6 +112,8 @@ export const StudioShotSchema = z.object({
   clipFileId: StudioFileIdSchema.optional(),
   // The voiceover or caption line spoken over this shot.
   voiceLine: z.string().trim().max(limits.shotVoiceLineMaxLength).optional(),
+  // Brand kit character ids, in the order their references are passed; an id no longer in the kit is ignored.
+  characterIds: z.array(StudioItemIdSchema).max(limits.brandCharactersMax).optional(),
 });
 export type StudioShot = z.infer<typeof StudioShotSchema>;
 
@@ -323,6 +338,7 @@ export const studioCompositionFileIds = (content: StudioCompositionReferences): 
     ...(content.brief.productFileId ? [content.brief.productFileId] : []),
     ...(content.brandKit.logoFileId ? [content.brandKit.logoFileId] : []),
     ...content.brandKit.productFileIds,
+    ...content.brandKit.characters.map(character => character.fileId),
     ...content.shots.flatMap(shot => [
       ...shot.fileIds,
       ...(shot.chosenFileId ? [shot.chosenFileId] : []),

@@ -12,6 +12,10 @@ import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { hostChat } from '../../host/hostChat';
+import { hostClient } from '../../host/HostClient';
+import { sessionEvents } from '../../host/sessionEvents';
+import { hostForSession } from '../../host/sessionHost';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
@@ -77,7 +81,7 @@ export function useSessionMessages(
       loading = true;
       dirty = false;
       try {
-        const session = await window.b4m.chat.getSession(agentId, false);
+        const session = await hostChat.getSession(agentId, false);
         if (!stale) {
           setLoadError(null);
           setMessages(session ? session.messages : []);
@@ -96,11 +100,10 @@ export function useSessionMessages(
         void load();
       }, 200);
     };
-    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
-      if (event.sessionId === agentId) schedule();
-    });
-    const unsubscribeQueue = window.b4m.chat.onQueueChanged(event => {
-      if (event.sessionId === agentId) schedule();
+    const hostId = hostForSession(agentId);
+    const unsubscribe = sessionEvents.subscribe({ hostId, sessionId: agentId }, { event: schedule, resync: schedule });
+    const unsubscribeQueue = hostClient.onNotification('session/queueChanged', ({ event }, from) => {
+      if (from === hostId && event.sessionId === agentId) schedule();
     });
     void load();
     return () => {
@@ -139,7 +142,16 @@ export function refreshKeyOf(agent: AgentView): string {
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; onAnswered?(): void }) {
+export function PendingRequests({
+  sessionId,
+  calls,
+  onAnswered,
+}: {
+  /** The session the calls belong to. */
+  sessionId: string;
+  calls: ChatToolCall[];
+  onAnswered?(answer: ChatApprovalAnswer): void;
+}) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -147,14 +159,17 @@ export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; 
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).then(onAnswered, (caught: unknown) => {
-      setAnswered(current => {
-        const next = new Set(current);
-        next.delete(approvalId);
-        return next;
-      });
-      setError(errorText(caught));
-    });
+    hostChat.respondToApproval(sessionId, approvalId, answer).then(
+      () => onAnswered?.(answer),
+      (caught: unknown) => {
+        setAnswered(current => {
+          const next = new Set(current);
+          next.delete(approvalId);
+          return next;
+        });
+        setError(errorText(caught));
+      }
+    );
   };
 
   if (open.length === 0 && !error) return null;
@@ -186,8 +201,9 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   // Subscribed for the box's whole life, not just while a note shows: main can announce the enqueue
   // and the flush before `sendMessage` resolves, and a listener added after that would never hear it.
   useEffect(() => {
-    return window.b4m.chat.onQueueChanged(event => {
-      if (event.sessionId !== agentId) return;
+    const hostId = hostForSession(agentId);
+    return hostClient.onNotification('session/queueChanged', ({ event }, from) => {
+      if (from !== hostId || event.sessionId !== agentId) return;
       const ids = new Set(event.queued.map(message => message.id));
       latestQueue.current = { version: latestQueue.current.version + 1, ids };
       setQueued(current => (current && !ids.has(current.id) ? null : current));
@@ -202,7 +218,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
     setError(null);
     const versionBefore = latestQueue.current.version;
     try {
-      const result = await window.b4m.chat.sendMessage({ sessionId: agentId, text: trimmed });
+      const result = await hostChat.sendMessage({ sessionId: agentId, text: trimmed });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -223,7 +239,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   const settleQueued = async (action: 'cancelQueuedMessage' | 'sendQueuedMessageNow') => {
     if (!queued) return;
     try {
-      await window.b4m.chat[action](agentId, queued.id);
+      await hostChat[action](agentId, queued.id);
       setQueued(null);
     } catch (caught) {
       setError(errorText(caught));
@@ -469,8 +485,8 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true,
           }
           onRespond={(approvalId, answer) => {
             setActionError(null);
-            void window.b4m.chat
-              .respondToApproval(approvalId, answer)
+            void hostChat
+              .respondToApproval(agent.id, approvalId, answer)
               .then(refresh, error => setActionError(errorText(error)));
           }}
           onContinue={() => rerun(window.b4m.chat.continueReply)}

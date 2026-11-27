@@ -345,6 +345,38 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ deniedTools: ['create_data_lake'] }));
   });
   // Same boundary: dropped here, a key-driven lake write would be audited as the key's owner.
+  it.each([false, true])('carries authoritative file admission %s through the queued schema', async allowed => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const invoke = makeInvoke();
+    const forgedBody = {
+      ...body,
+      fileInputsAllowed: !allowed,
+      messageFileIds: ['private-canary'],
+      fabFileIds: ['session-canary'],
+    };
+    await invoke.invoke({
+      body: forgedBody,
+      userId: OWNER_ID,
+      authOrigin: 'apiKey',
+      apiKeyId: 'key1',
+      fileInputsAllowed: allowed,
+    });
+    const queued = (invoke as unknown as { questStartParams: unknown }).questStartParams;
+    const parsed = QuestStartBodySchema.parse(JSON.parse(JSON.stringify(queued)));
+    expect(parsed.fileInputsAllowed).toBe(allowed);
+    expect(parsed.apiKeyId).toBe('key1');
+    expect(parsed.messageFileIds).toEqual(allowed ? ['private-canary'] : []);
+    expect(parsed.fabFileIds).toEqual(allowed ? ['session-canary'] : []);
+    expect(mockDb.quests.create.mock.calls[0][0].fabFileIds).toEqual(allowed ? ['private-canary'] : []);
+    expect(ChatCompletionInvokeParamsSchema.parse({ ...body, fileInputsAllowed: true })).not.toHaveProperty(
+      'fileInputsAllowed'
+    );
+  });
+
   it('carries the server-set apiKeyId onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([
       { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },

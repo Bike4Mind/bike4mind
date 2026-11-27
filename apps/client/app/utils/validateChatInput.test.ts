@@ -106,6 +106,32 @@ describe('validateChatInput', () => {
       expect(result).toMatch(/out of credits/i);
     });
 
+    it('returns null at zero credits for a recorded tutorial turn', () => {
+      const result = validateChatInput({
+        ...baseParams,
+        effectiveCredits: 0,
+        enforceCredits: true,
+        recordedTutorialTurn: true,
+      });
+      expect(result).toBeNull();
+    });
+
+    it('still rejects an empty message or missing models on a recorded tutorial turn', () => {
+      const params = { ...baseParams, effectiveCredits: 0, enforceCredits: true, recordedTutorialTurn: true };
+      expect(validateChatInput({ ...params, inputText: '   ' })).toMatch(/empty message/i);
+      expect(validateChatInput({ ...params, accessibleModels: [] })).toMatch(/don't have access to any AI models/i);
+    });
+
+    it('returns Out of Credits at zero credits when it is not a recorded tutorial turn', () => {
+      const result = validateChatInput({
+        ...baseParams,
+        effectiveCredits: 0,
+        enforceCredits: true,
+        recordedTutorialTurn: false,
+      });
+      expect(result).toBe('Out of Credits!');
+    });
+
     it('returns null when out of credits but enforceCredits is off', () => {
       const result = validateChatInput({ ...baseParams, effectiveCredits: 0, enforceCredits: false });
       expect(result).toBeNull();

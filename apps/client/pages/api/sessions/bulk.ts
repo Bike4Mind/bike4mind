@@ -10,6 +10,7 @@ import {
 import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { queueSessionTags } from '@server/sessions/queueSessionTags';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -137,6 +138,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{}, { deletedCount: number; newLastNotebookId: string | null }, { sessionIds: string[] }>(
       async (req, res) => {
+        assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
@@ -161,8 +163,9 @@ const handler = baseApi()
             // the session touched before it tombstones anything, and a ConcurrencyConflictError
             // partway through would otherwise leave some files rewritten and some not with the
             // session still live. Same reason the single-delete route wraps it.
-            const result = await withTransaction(() =>
-              sessionService.deleteSession(
+            const { result, affectedUserIds } = await withTransaction(async () => {
+              const affected = new Set<string>();
+              const result = await sessionService.deleteSession(
                 userId,
                 { id: sessionId },
                 {
@@ -175,9 +178,11 @@ const handler = baseApi()
                     sessionAgentConfigs: sessionAgentConfigRepository,
                   },
                   logger: req.logger,
+                  onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
                 }
-              )
-            );
+              );
+              return { result, affectedUserIds: [...affected] };
+            });
 
             // Keep track of the last valid notebook suggestion
             if (result) {
@@ -185,6 +190,7 @@ const handler = baseApi()
             }
             deletedCount++;
             deletedIds.push(sessionId);
+            await rescopeUserSubscriptions(affectedUserIds, req.logger);
 
             await logEvent(
               { userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId } },
@@ -215,7 +221,7 @@ const handler = baseApi()
       }
       const body = parsed.data;
       // Same scope PUT /api/sessions/[id] requires; favorites stay scope-less like /[id]/favorite. Kept
-      // inside the .post() link so apiKeyScopeRoutes.ts does not attribute it to the scope-less DELETE.
+      // inside the .post() link so apiKeyScopeRoutes.ts attributes it to this verb only.
       if (body.action !== 'favorite') {
         assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
       }

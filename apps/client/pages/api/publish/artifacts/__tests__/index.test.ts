@@ -400,13 +400,32 @@ describe('GET /api/publish/artifacts - cost', () => {
 });
 
 describe('GET /api/publish/artifacts - non-owner row trimming', () => {
-  const OWN = { publicId: 'mine', ownerId: USER, scopeId: 'org-1', previousVersionMeta: { by: 'x' }, gateKind: 'none' };
+  const OWN = {
+    publicId: 'mine',
+    ownerId: USER,
+    scopeId: 'org-1',
+    previousVersionMeta: { by: 'x' },
+    gateKind: 'none',
+    source: { kind: 'reply', sessionId: 'session-1', messageId: 'message-1' },
+  };
   const THEIRS = {
+    _id: 'id-2',
     publicId: 'theirs',
+    tier: 'bundle',
+    slug: 'their-artifact',
+    description: 'Their description',
+    tags: ['a'],
+    visibility: 'public',
+    commentPolicy: 'open',
+    size: 123,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    viewCount: 7,
     ownerId: 'user-2',
     scopeId: 'org-9',
     previousVersionMeta: { by: 'y' },
     gateKind: 'none',
+    source: { kind: 'bundle', artifactId: 'artifact_other_1_0' },
     title: 'Their artifact',
     versionsCount: 4,
     discoverable: true,
@@ -418,13 +437,51 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
   const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
     res._getJSONData().artifacts;
 
-  it('strips the owner, scope and version-provenance identifiers from another user row', async () => {
+  it('strips the owner, scope, version-provenance and source identifiers from another user row', async () => {
     withRows([THEIRS]);
     const [row] = artifacts(await run({}));
-    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind']) {
+    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind', 'source']) {
       expect(field in row).toBe(false);
     }
     expect(row.title).toBe('Their artifact');
+  });
+
+  it('returns exactly the display allowlist for another user row', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}));
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        '_id',
+        'publicId',
+        'tier',
+        'slug',
+        'title',
+        'description',
+        'tags',
+        'visibility',
+        'commentPolicy',
+        'discoverable',
+        'size',
+        'publishedAt',
+        'updatedAt',
+        'viewCount',
+        'versionsCount',
+      ].sort()
+    );
+  });
+
+  it('drops any field not on the display allowlist from another user row', async () => {
+    withRows([{ ...THEIRS, someFutureField: 'x' }]);
+    const [row] = artifacts(await run({}));
+    expect('someFutureField' in row).toBe(false);
+  });
+
+  it('keeps source on the caller own row for the owner-scoped lookups', async () => {
+    for (const query of [{ mine: 'true' }, { sourceArtifactId: 'artifact_x' }, { sourceMessageId: 'message-1' }]) {
+      withRows([OWN]);
+      const [row] = artifacts(await run(query));
+      expect(row.source).toEqual(OWN.source);
+    }
   });
 
   it('keeps versionsCount and discoverable, which the owner management tab reads', async () => {
@@ -445,6 +502,8 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     const [mine, theirs] = artifacts(await run({}));
     expect(mine.ownerId).toBe(USER);
     expect('ownerId' in theirs).toBe(false);
+    expect(mine.source).toEqual(OWN.source);
+    expect('source' in theirs).toBe(false);
   });
 
   it('does not trim for an admin, whose surface is the reason the projection is wide', async () => {

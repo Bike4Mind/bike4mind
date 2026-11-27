@@ -62,6 +62,7 @@ const handler = baseApi({
         // are absent holds NO scope and must deny, never fall through to the
         // browser-caller (undefined) branch. See rotateUserApiKey's escalation guard.
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
+        callerExpiresAt: req.apiKeyInfo?.expiresAt,
       }
     );
 

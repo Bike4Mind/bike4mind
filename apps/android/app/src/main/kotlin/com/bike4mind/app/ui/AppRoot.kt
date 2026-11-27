@@ -1,5 +1,6 @@
 package com.bike4mind.app.ui
 
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -8,6 +9,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
@@ -17,8 +19,10 @@ import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
 import com.bike4mind.kit.links.Route
 import com.bike4mind.kit.shortcuts.ComposeLanding
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Which screen is up. The upgrade screen covers everything while the server refuses this build; the session
@@ -66,10 +70,22 @@ fun AppRoot(
         restored = true
     }
 
-    // A sign-out made while offline is finished on the server once the app is back in front.
-    var resumes by remember { mutableIntStateOf(0) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumes++ }
-    LaunchedEffect(graph, resumes) { graph.session.retryPendingRevocations() }
+    // A sign-out made while offline is finished on the server once the app is back in front, and again when a
+    // server switch brings in a graph whose pending revocations have not been tried yet.
+    val scope = rememberCoroutineScope()
+    fun retryPendingRevocations() {
+        scope.launch {
+            try {
+                graph.session.retryPendingRevocations()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failed: Exception) {
+                Log.w(TAG, "Retrying pending sign-out revocations failed", failed)
+            }
+        }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { retryPendingRevocations() }
+    LaunchedEffect(graph) { retryPendingRevocations() }
 
     // A session that ends (a refresh refused, a sign-out elsewhere) drops what belonged to the account. Checked only
     // once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.
@@ -185,6 +201,7 @@ private sealed interface Screen {
     data class Restore(val graph: AppGraph) : Screen
 }
 
+private const val TAG = "B4MAuth"
 private const val NEW_CHAT = ""
 private const val LATEST_BRIEF = ""
 private const val SETTINGS = "settings"

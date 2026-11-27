@@ -27,6 +27,7 @@ import {
 } from '@bike4mind/common';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { Config } from '../utils/config';
+import { createOctokitLog } from '../integrations/github/octokitLog';
 import { encryptSecret, isEncrypted } from '../security/secretEncryption';
 import { decryptToken } from '../security/tokenEncryption';
 
@@ -607,6 +608,7 @@ export class GitHubService {
         cache,
       },
       userAgent: USER_AGENT,
+      log: createOctokitLog(logger),
       request: {
         timeout: GITHUB_REQUEST_TIMEOUT_MS,
       },
@@ -620,7 +622,7 @@ export class GitHubService {
    *
    * @throws Error if decryption fails (sanitized message)
    */
-  private static createOctokitForPAT(connection: IOrgGitHubConnectionDocument, _logger: Logger): Octokit {
+  private static createOctokitForPAT(connection: IOrgGitHubConnectionDocument, logger: Logger): Octokit {
     if (!connection.accessToken) {
       throw new GitHubAuthInitError('Service account connection missing credentials', 'missing-fields');
     }
@@ -640,6 +642,7 @@ export class GitHubService {
     const octokit = new Octokit({
       auth: token,
       userAgent: USER_AGENT,
+      log: createOctokitLog(logger),
       request: {
         timeout: GITHUB_REQUEST_TIMEOUT_MS,
       },

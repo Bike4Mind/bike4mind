@@ -26,7 +26,7 @@ public final class AuthController: SharedSessionAdmissionProviding {
   public typealias SignOutReason = SessionTermination.Reason
 
   public struct SessionEndScope: Sendable {
-    fileprivate let generation: Int
+    fileprivate let generation: UUID
     fileprivate let baseURL: URL
     fileprivate let incarnation: UUID?
   }
@@ -56,7 +56,7 @@ public final class AuthController: SharedSessionAdmissionProviding {
   @ObservationIgnored private var inFlightUnlock: Task<Bool, Never>?
   /// Bumped whenever the session changes hands, so a refresh that lands after sign-out is discarded
   /// instead of writing a dead session's token back to the Keychain.
-  @ObservationIgnored private var sessionGeneration = 0
+  private var sessionGeneration = UUID()
   @ObservationIgnored private var pendingLocalTermination: SessionTermination?
   @ObservationIgnored private var sharedSnapshot: SharedSessionSnapshot?
   @ObservationIgnored private var isRetryingRevocations = false
@@ -198,11 +198,12 @@ public final class AuthController: SharedSessionAdmissionProviding {
     guard generation == sessionGeneration else { throw AuthError.signedOut }
     if let sharedSession {
       sharedSnapshot = try sharedSession.establish(
-        token: grant.refreshToken, userID: AccountProfile.userID(fromAccessToken: grant.accessToken), replacing: expected)
+        token: grant.refreshToken, userID: AccountProfile.userID(fromAccessToken: grant.accessToken),
+        replacing: expected)
     } else {
       try tokenStore.setRefreshToken(grant.refreshToken)
     }
-    sessionGeneration += 1
+    sessionGeneration = UUID()
     inFlightRefresh = nil
     cachedAccessToken = AccessToken(value: grant.accessToken, issuedAt: now())
     state = .signedIn
@@ -229,8 +230,7 @@ public final class AuthController: SharedSessionAdmissionProviding {
   public func isCurrentSession(_ scope: SessionEndScope) -> Bool {
     guard scope.generation == sessionGeneration, scope.baseURL == environment.baseURL else { return false }
     guard let sharedSession else { return true }
-    do { return try sharedSession.restore()?.record.incarnation == scope.incarnation }
-    catch {
+    do { return try sharedSession.restore()?.record.incarnation == scope.incarnation } catch {
       logger.debug("Ending session scope could not be checked: \(error, privacy: .public)")
       return false
     }
@@ -245,12 +245,14 @@ public final class AuthController: SharedSessionAdmissionProviding {
     guard state != .restoring else { return false }
     let current = try? currentSharedSnapshot()
     let refreshToken = sharedSession != nil ? current?.refreshToken : (try? tokenStore.refreshToken())
-    let accessToken = (sharedSession == nil || current != nil)
+    let accessToken =
+      (sharedSession == nil || current != nil)
       ? cachedAccessToken.flatMap { $0.isUsable(at: now()) ? $0.value : nil } : nil
     guard endSession(reason) else {
       if let refreshToken {
         updatePendingRevocations(
-          removing: [], adding: [PendingRevocation(baseURL: environment.baseURL, refreshToken: refreshToken)])
+          removing: [],
+          adding: [PendingRevocation(baseURL: environment.baseURL, refreshToken: refreshToken, createdAt: now())])
       }
       return false
     }
@@ -268,6 +270,54 @@ public final class AuthController: SharedSessionAdmissionProviding {
     }
     environment = newEnvironment
     state = .signedOut(nil)
+  }
+
+  /// Immutable identity for work admitted under one account and server, including a cold restore.
+  public struct Session: Equatable, Sendable {
+    public let id: UUID
+    public let environment: ServerEnvironment
+  }
+
+  public func captureSession() -> Session {
+    Session(id: sessionGeneration, environment: environment)
+  }
+
+  public func isCurrent(_ session: Session) -> Bool {
+    guard session.id == sessionGeneration, session.environment == environment else { return false }
+    if case .signedOut = state { return false }
+    return true
+  }
+
+  public func scopedTokens(for session: Session) -> any AccessTokenProviding {
+    SessionTokens(auth: self, session: session)
+  }
+
+  @MainActor
+  private final class SessionTokens: AccessTokenProviding {
+    private let auth: AuthController
+    private let session: Session
+
+    init(auth: AuthController, session: Session) {
+      self.auth = auth
+      self.session = session
+    }
+
+    func accessToken() async throws -> String {
+      guard auth.isCurrent(session) else { throw AuthError.signedOut }
+      let token = try await auth.accessToken()
+      guard auth.isCurrent(session) else { throw AuthError.signedOut }
+      return token
+    }
+
+    func invalidateAccessToken(_ token: String) {
+      guard auth.isCurrent(session) else { return }
+      auth.invalidateAccessToken(token)
+    }
+
+    func sessionRejected() {
+      guard auth.isCurrent(session) else { return }
+      auth.sessionRejected()
+    }
   }
 
   // MARK: - Tokens
@@ -309,13 +359,15 @@ public final class AuthController: SharedSessionAdmissionProviding {
 
   public func invalidateAccessToken(_ token: String, admission: SharedSessionAdmission) {
     guard sharedSnapshot?.record.identity == admission.identity,
-      (try? admission.withCurrent { true }) == true else { return }
+      (try? admission.withCurrent { true }) == true
+    else { return }
     invalidateAccessToken(token)
   }
 
   public func sessionRejected(admission: SharedSessionAdmission) {
     guard sharedSnapshot?.record.identity == admission.identity,
-      (try? admission.withCurrent { true }) == true else { return }
+      (try? admission.withCurrent { true }) == true
+    else { return }
     endSession(.sessionEnded)
   }
 
@@ -347,7 +399,7 @@ public final class AuthController: SharedSessionAdmissionProviding {
     }
   }
 
-  private func refreshSession(expected: SharedSessionSnapshot?, generation: Int) async throws -> String {
+  private func refreshSession(expected: SharedSessionSnapshot?, generation: UUID) async throws -> String {
     guard generation == sessionGeneration else { throw AuthError.signedOut }
     guard let presented = try expected?.refreshToken ?? tokenStore.refreshToken() else {
       endSession(.sessionEnded)
@@ -377,7 +429,9 @@ public final class AuthController: SharedSessionAdmissionProviding {
     }
   }
 
-  private func refresh(presenting refreshToken: String, generation: Int, expected: SharedSessionSnapshot?) async throws -> String {
+  private func refresh(
+    presenting refreshToken: String, generation: UUID, expected: SharedSessionSnapshot?
+  ) async throws -> String {
     let result = try await api.refresh(refreshToken: refreshToken)
     guard generation == sessionGeneration else {
       // Signed out (or re-signed in) while the request was in flight: this result belongs to a dead session.
@@ -422,7 +476,7 @@ public final class AuthController: SharedSessionAdmissionProviding {
 
   @discardableResult
   private func endSession(_ reason: SignOutReason) -> Bool {
-    sessionGeneration += 1
+    sessionGeneration = UUID()
     inFlightRefresh = nil
     cachedAccessToken = nil
     do {
@@ -432,10 +486,13 @@ public final class AuthController: SharedSessionAdmissionProviding {
           pendingLocalTermination = SessionTermination(
             incarnation: record.incarnation, baseURL: record.baseURL, userID: record.userID,
             reason: pendingLocalTermination?.reason ?? reason)
-          if try sharedSession.end(incarnation: record.incarnation, reason: pendingLocalTermination?.reason ?? reason, cleanup: { [sessionEndCleanup] target in
-            guard let sessionEndCleanup else { throw SharedSessionError.cleanupPending }
-            try sessionEndCleanup(target)
-          }) {
+          if try sharedSession.end(
+            incarnation: record.incarnation, reason: pendingLocalTermination?.reason ?? reason,
+            cleanup: { [sessionEndCleanup] target in
+              guard let sessionEndCleanup else { throw SharedSessionError.cleanupPending }
+              try sessionEndCleanup(target)
+            })
+          {
             completedTermination = SessionTermination(
               incarnation: record.incarnation, baseURL: record.baseURL, userID: record.userID, reason: reason)
           }
@@ -478,25 +535,26 @@ public final class AuthController: SharedSessionAdmissionProviding {
       logger.notice("Server-side logout failed; will retry: \(error, privacy: .public)")
       guard let latestRefreshToken else { return }
       updatePendingRevocations(
-        removing: [], adding: [PendingRevocation(baseURL: baseURL, refreshToken: latestRefreshToken)])
+        removing: [],
+        adding: [PendingRevocation(baseURL: baseURL, refreshToken: latestRefreshToken, createdAt: now())])
     }
   }
 
-  /// Finishes revocations an earlier sign-out could not complete. Call at launch and on foreground.
+  /// Finishes revocations an earlier sign-out on this server could not complete. Call at launch and on foreground.
   public func retryPendingRevocations() async {
     guard !isRetryingRevocations else { return }
     isRetryingRevocations = true
     defer { isRetryingRevocations = false }
     let pending: [PendingRevocation]
     do {
-      pending = try tokenStore.pendingRevocations()
+      pending = try tokenStore.pendingRevocations().filter { $0.baseURL == environment.baseURL }
     } catch {
       logger.notice("Pending revocations not readable yet: \(error, privacy: .public)")
       return
     }
     guard !pending.isEmpty else { return }
     var stillPending: [PendingRevocation] = []
-    for revocation in pending {
+    for revocation in PendingRevocation.bounded(pending, now: now()) {
       if let retry = await revoke(revocation) { stillPending.append(retry) }
     }
     updatePendingRevocations(removing: pending, adding: stillPending)
@@ -509,7 +567,8 @@ public final class AuthController: SharedSessionAdmissionProviding {
     do {
       let refreshed = try await api.refresh(refreshToken: revocation.refreshToken)
       if let rotated = refreshed.refreshToken {
-        current = PendingRevocation(baseURL: revocation.baseURL, refreshToken: rotated)
+        current = PendingRevocation(
+          baseURL: revocation.baseURL, refreshToken: rotated, createdAt: revocation.createdAt)
       }
       try await api.logout(accessToken: refreshed.accessToken)
       return nil
@@ -524,7 +583,8 @@ public final class AuthController: SharedSessionAdmissionProviding {
   private func updatePendingRevocations(removing: [PendingRevocation], adding: [PendingRevocation]) {
     do {
       let latest = try tokenStore.pendingRevocations()
-      try tokenStore.setPendingRevocations(latest.filter { !removing.contains($0) } + adding)
+      try tokenStore.setPendingRevocations(
+        PendingRevocation.bounded(latest.filter { !removing.contains($0) } + adding, now: now()))
     } catch {
       logger.error("Saving pending revocations failed: \(error, privacy: .public)")
     }

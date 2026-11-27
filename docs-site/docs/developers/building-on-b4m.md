@@ -22,13 +22,14 @@ This guide is about B4M acting as an identity provider _for your app_. If you wa
 
 ## 1. What B4M gives you
 
-| Capability                 | How                                                                                  | Scope                      |
-| -------------------------- | ------------------------------------------------------------------------------------ | -------------------------- |
-| Sign-in                    | OIDC authorization code + PKCE                                                       | `openid email profile`     |
-| Per-user billing           | Exchange the user's ID token for a short-lived API key at `POST /api/oauth/ai-token` | `ai:generate`              |
-| AI completions             | `POST /api/ai/v1/completions` (streamed)                                             | `ai:generate`              |
-| Credit balance             | `GET /api/v1/credits`                                                                | `ai:generate` or `me:read` |
-| User plan and entitlements | `GET /api/v1/me`                                                                     | `me:read`                  |
+| Capability                 | How                                                                                  | Scope                                  |
+| -------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------- |
+| Sign-in                    | OIDC authorization code + PKCE                                                       | `openid email profile`                 |
+| Per-user billing           | Exchange the user's ID token for a short-lived API key at `POST /api/oauth/ai-token` | `ai:generate`                          |
+| AI completions             | `POST /api/ai/v1/completions` (streamed)                                             | `ai:generate`                          |
+| Credit balance             | `GET /api/v1/credits`                                                                | `ai:generate` or `me:read`             |
+| User plan and entitlements | `GET /api/v1/me`                                                                     | `me:read`                              |
+| The user's functions       | [Functions](../api/functions.md) routes, with the exchanged key (opt-in, section 5)  | `functions:invoke`, `functions:author` |
 
 The full public API is described by the OpenAPI spec at `https://<your-b4m-host>/api/v1/openapi.json`, with an interactive reference at `https://<your-b4m-host>/api/v1/docs`. This guide covers the integration flow; use the reference for every endpoint's full request and response shape.
 
@@ -62,7 +63,7 @@ Fetch the discovery document from `https://<your-b4m-host>/.well-known/openid-co
 
 Use `jwks_uri` exactly as published. `/.well-known/jwks.json` also answers today, but it is an alias, not the advertised URL. Both documents are cached for an hour, so cache them on your side too.
 
-Discovery does not list the `ai:generate` and `me:read` scopes because they are not sign-in scopes, but you **must still request them in the authorization request** so the user consents to them. B4M records the scopes the user consented to, and the token exchange (section 5) can only mint scopes from that set wherever the consent check is enforced (see section 5).
+Discovery does not list the `ai:generate` and `me:read` scopes, or the functions scopes, because they are not sign-in scopes, but you **must still request them in the authorization request** so the user consents to them. B4M records the scopes the user consented to, and the token exchange (section 5) can only mint scopes from that set wherever the consent check is enforced (see section 5).
 
 ### The authorization request
 
@@ -199,7 +200,7 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 
 With the script, register the trust config in the same run. To add it to an existing client later, use the admin console, which lets you set the scopes in the same edit. A raw database edit that adds `federatedIdp` leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
 
-An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. Editing a client changes its redirect URIs, active state, allowed scopes and federated trust config. The opt-in `federated:admin-status` scope can be ticked only on a federated relying-party client. Turning federation on in the form ticks `ai:generate` and `me:read`. The script remains the fallback for installs that have no admin user yet.
+An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. Editing a client changes its redirect URIs, active state, allowed scopes and federated trust config. The opt-in scopes, `federated:admin-status`, `functions:invoke`, and `functions:author`, can be ticked only on a federated relying-party client. Turning federation on in the form ticks `ai:generate` and `me:read`. The script remains the fallback for installs that have no admin user yet.
 
 Removing a scope takes effect at once for every user of the client. An app that still requests a removed scope gets 400 `invalid_scope` at `/authorize`. Grants users already approved are kept, but `ai-token` and `federated-admin` calls that need a removed scope return 403 `invalid_scope`, because the client no longer has it. The admin console asks you to confirm before it removes a scope or turns federation off.
 
@@ -237,14 +238,20 @@ To run AI on a user's behalf, your server exchanges that user's B4M ID token for
 
 `POST https://<your-b4m-host>/api/oauth/ai-token` with a JSON body:
 
-| Field           | Value                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------- |
-| `client_id`     | your client id                                                                        |
-| `client_secret` | your client secret (always required, so call this from your server only)              |
-| `id_token`      | the user's B4M ID token from sign-in                                                  |
-| `scope`         | optional, space-separated from `ai:generate` and `me:read`; defaults to `ai:generate` |
+| Field           | Value                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `client_id`     | your client id                                                                                                                 |
+| `client_secret` | your client secret (always required, so call this from your server only)                                                       |
+| `id_token`      | the user's B4M ID token from sign-in                                                                                           |
+| `scope`         | optional, space-separated from `ai:generate`, `me:read`, `functions:invoke`, and `functions:author`; defaults to `ai:generate` |
 
 Every requested scope must be in your client's `allowedScopes`, and the user must have consented to it in the authorization request (section 3). Hosted B4M enforces the consent check. On a self-hosted deployment it is warn-only unless the operator sets `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; set it, and do not rely on the lenient default.
+
+#### The functions scopes
+
+An admin can grant your client `functions:invoke` and `functions:author`, one client at a time; neither is ever a default. Request each in the authorization request beside `ai:generate`, and the consent screen names it in plain words. The exchange then mints one key holding every scope you asked for, and the key reaches the [Functions](../api/functions.md) routes and the routes its other scopes already reach, nothing else. The consent check is always enforced for an exchange that asks for a functions scope, on every deployment.
+
+A key the user creates in their profile follows a stricter rule: a functions scope shares that key only with the other functions scope. An exchanged key may carry them beside `ai:generate` and `me:read` because it lives 15 minutes, belongs to one user and one client, and reaches only the routes that name one of its scopes.
 
 A successful response is:
 
@@ -607,7 +614,9 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     const err: { error?: string; errorCode?: string; request_id?: string } = await res.json().catch(() => ({}));
     if (err.errorCode === 'insufficient_credits') throw new OutOfCreditsError(err.error);
     if (res.status === 429) throw new RateLimitedError(Number(res.headers.get('Retry-After')) || 60);
-    throw new Error(`Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`);
+    throw new Error(
+      `Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`
+    );
   }
   if (!res.body) throw new Error('Completion response had no body');
 

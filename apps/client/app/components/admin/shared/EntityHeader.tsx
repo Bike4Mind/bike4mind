@@ -98,6 +98,9 @@ export const formatUtc = (date: Date): string =>
     timeZone: 'UTC',
   })} UTC`;
 
+/** The date part of formatUtc: "14 Mar 2026". */
+export const formatUtcDay = (date: Date): string => formatUtc(date).split(',')[0];
+
 export type EntityTime = {
   prefix?: string;
   at: string | Date | null | undefined;

@@ -46,7 +46,12 @@ export type DlqStaleWhen = (typeof DLQ_STALE_WHEN)[number];
 /** Limits staleWhen to bodies whose EventBridge detail-type is listed, for a queue shared by several jobs. */
 export type DlqStaleScope = { staleWhen?: DlqStaleWhen; staleDetailTypes?: readonly string[] };
 
-export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp & { describe: DlqDescribe } & DlqStaleScope;
+/** restrictedBody: message bodies carry user content (e.g. full emails); only full admins see them in listings. */
+export type DlqBodyAccess = { restrictedBody?: true };
+
+export type CoreDlqDescriptor = InspectableDlqDescriptor &
+  DlqQueueHelp & { describe: DlqDescribe } & DlqStaleScope &
+  DlqBodyAccess;
 
 const readPath = (value: unknown, path: string): unknown =>
   path
@@ -830,6 +835,7 @@ const DLQ_REGISTRY = [
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Email',
     describe: noEntity,
+    restrictedBody: true,
   },
   {
     label: 'push-events',
@@ -930,7 +936,8 @@ export type RegisteredDlqDescriptor = InspectableDlqDescriptor &
     label: DlqLabel;
     sourceQueue: SourceQueueName | null;
     describe?: DlqDescribe;
-  } & DlqStaleScope;
+  } & DlqStaleScope &
+  DlqBodyAccess;
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;

@@ -79,6 +79,7 @@ async function isSlackWorkspaceAdmin(slackUserId: string, botToken: string): Pro
  */
 export async function handleOrgDefaultsEdit(
   slackUserId: string,
+  slackTeamId: string | undefined,
   triggerId?: string,
   botToken?: string
 ): Promise<Record<string, unknown>> {
@@ -90,7 +91,7 @@ export async function handleOrgDefaultsEdit(
     return { text: 'Only Slack workspace admins can configure org defaults.' };
   }
 
-  const dbUser = await findUserBySlackId(slackUserId);
+  const dbUser = await findUserBySlackId(slackUserId, slackTeamId);
   if (!dbUser?.organizationId) {
     return { text: 'Please link your account and ensure your organization is set up.' };
   }
@@ -356,7 +357,7 @@ export async function refreshAppHomeForAdmin(
     const refreshLogger = new Logger({ metadata: { component: 'AppHomeRefreshAdmin' } });
     const slackClient = new SlackClient(botToken, refreshLogger);
 
-    const dbUser = await findUserBySlackId(slackUserId);
+    const dbUser = await findUserBySlackId(slackUserId, slackTeamId);
 
     let notebooks: AppHomeNotebook[] = [];
     let stats = { totalNotebooks: 0, messagesThisWeek: 0, activeProjects: 0 };

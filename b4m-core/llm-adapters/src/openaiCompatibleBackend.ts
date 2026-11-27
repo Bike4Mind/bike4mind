@@ -44,7 +44,11 @@ import {
   buildIdentityReminder,
   shouldOmitIdentityReminder,
 } from './identityReminder';
-import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
+import {
+  HiddenReasoningOnlyEmptyError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { normalizeOpenAIFinishReason } from './stopReason';
@@ -428,6 +432,15 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       if (finishReason === 'length') throw new OutputBudgetExhaustedError(this.options.label, name);
       if (finishReason === undefined && !options.abortSignal?.aborted) {
         throw new StreamEndedWithoutFinishError(this.options.label, name);
+      }
+      // A finished turn only (an aborted one has no finish reason), and not the capped round (tools
+      // stripped at maxToolCalls), whose empty is deterministic.
+      if (reasoning && finishReason !== undefined && toolCallCount < maxToolCalls) {
+        throw new HiddenReasoningOnlyEmptyError(
+          this.options.label,
+          name,
+          `${this.options.label} returned only reasoning for ${name}, with no displayed text and no tool call (finish_reason: ${finishReason}).`
+        );
       }
       throw new Error(
         `${this.options.label} returned no content for ${name} (finish_reason: ${finishReason ?? 'unknown'}).`

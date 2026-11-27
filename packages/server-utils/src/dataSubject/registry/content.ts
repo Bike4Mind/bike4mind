@@ -36,6 +36,7 @@ export const contentHolders = {
       { path: 'permissions.canWrite', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'permissions.canDelete', matchBy: 'userId', action: 'pullFromArray' },
     ],
+    unrelatedPaths: ['lastVersionNumber'],
   },
   // Artifacts are keyed by their own string `id`, not `_id` (see `purgeArtifacts`).
   ArtifactContent: { kind: 'viaParent', parent: 'Artifact', foreignKey: 'artifactId', parentKey: 'id' },
@@ -47,6 +48,7 @@ export const contentHolders = {
     foreignKey: 'artifactId',
     parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['superseded'],
   },
   AssistantBrief: {
     kind: 'holder',

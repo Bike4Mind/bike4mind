@@ -74,7 +74,11 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const cases = [
   // The edit handlers pre-select the saved model; a new channel config has none.
-  { name: 'handleOrgDefaultsEdit', open: () => handleOrgDefaultsEdit('U1', 'trigger-1', 'xoxb'), preselects: true },
+  {
+    name: 'handleOrgDefaultsEdit',
+    open: () => handleOrgDefaultsEdit('U1', 'T1', 'trigger-1', 'xoxb'),
+    preselects: true,
+  },
   {
     name: 'handleChannelConfigAdd',
     open: () => handleChannelConfigAdd('U1', 'T1', 'trigger-1', 'xoxb'),
@@ -129,7 +133,7 @@ describe('model config modal handlers', () => {
       }),
     });
 
-    await expect(handleOrgDefaultsEdit('U1', 'trigger-1', 'xoxb')).resolves.toEqual({
+    await expect(handleOrgDefaultsEdit('U1', 'T1', 'trigger-1', 'xoxb')).resolves.toEqual({
       text: 'Failed to open configuration dialog.',
     });
     expect(viewsOpen).toHaveBeenCalledTimes(1);

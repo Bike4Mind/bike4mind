@@ -1,5 +1,5 @@
 import type { IUserDocument } from '@bike4mind/common';
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER, slackIdentityFilter } from '@bike4mind/common';
 /**
  * Slack to GitHub Username Mapper
  * Maps Slack User IDs to GitHub usernames for auto-assignment
@@ -16,18 +16,19 @@ export interface SlackGitHubMapping {
 }
 
 /**
- * Maps a single Slack User ID to GitHub username
- * @param slackUserId - The Slack User ID (e.g., "U09JUQJ2KHC")
- * @returns GitHub username if found, null otherwise
+ * Maps a Slack User ID to a GitHub username. Only accounts linked in `slackTeamId` (the requester's
+ * own workspace) are resolved; without a team nothing is.
  */
-export async function mapSlackUserIdToGithubUsername(slackUserId: string): Promise<SlackGitHubMapping> {
+export async function mapSlackUserIdToGithubUsername(
+  slackUserId: string,
+  slackTeamId: string | undefined
+): Promise<SlackGitHubMapping> {
+  if (!slackTeamId) return { slackUserId, githubUsername: null };
   try {
     const { User, McpServer } = getSlackDb();
-    // Find user by Slack User ID
-    const user = await (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
-      'slackSettings.slackUserId': slackUserId,
-      ...VERIFIED_SLACK_IDENTITY_FILTER,
-    });
+    const user = await (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne(
+      slackIdentityFilter(slackUserId, slackTeamId)
+    );
 
     if (!user) {
       Logger.info(`[slack-github-mapper] No user found for Slack User ID: ${slackUserId}`);
@@ -78,9 +79,12 @@ export async function mapSlackUserIdToGithubUsername(slackUserId: string): Promi
  * @param slackUserIds - Array of Slack User IDs
  * @returns Array of mappings
  */
-export async function mapSlackUserIdsToGithubUsernames(slackUserIds: string[]): Promise<SlackGitHubMapping[]> {
+export async function mapSlackUserIdsToGithubUsernames(
+  slackUserIds: string[],
+  slackTeamId: string | undefined
+): Promise<SlackGitHubMapping[]> {
   const uniqueIds = Array.from(new Set(slackUserIds)); // Remove duplicates
-  return Promise.all(uniqueIds.map(id => mapSlackUserIdToGithubUsername(id)));
+  return Promise.all(uniqueIds.map(id => mapSlackUserIdToGithubUsername(id, slackTeamId)));
 }
 
 /**

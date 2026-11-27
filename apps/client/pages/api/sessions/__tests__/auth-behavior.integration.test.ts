@@ -121,7 +121,7 @@ describe('GET /api/sessions auth behavior (issue #626 decision gate)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindRotation.mockResolvedValue(null);
-    mockSearchOwnSessions.mockResolvedValue([]);
+    mockSearchOwnSessions.mockResolvedValue({ data: [], hasMore: false });
     // A consented, non-system, current-version account so a VALID token reaches the handler.
     mockFindById.mockReturnValue(
       Promise.resolve({
@@ -144,7 +144,7 @@ describe('GET /api/sessions auth behavior (issue #626 decision gate)', () => {
     const { req, res } = fire(token);
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual([]);
+    expect(res._getJSONData()).toEqual({ data: [], hasMore: false, nextCursor: null });
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 
@@ -204,7 +204,7 @@ describe('GET /api/sessions auth behavior (issue #626 decision gate)', () => {
     const { req, res } = fire(token);
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual([]);
+    expect(res._getJSONData()).toEqual({ data: [], hasMore: false, nextCursor: null });
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 });

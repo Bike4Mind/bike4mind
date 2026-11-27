@@ -62,6 +62,7 @@ import {
   IUserApiKeyListItem,
   ApiKeyScope,
   ApiKeyScopeValue,
+  CONFINED_API_KEY_SCOPE_FAMILIES,
   getMeContract,
   getCreditBalanceContract,
   listModelsContract,
@@ -203,11 +204,13 @@ const PRESETS: { id: PresetId; label: string; description: string }[] = [
 const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
   a.length === b.length && a.every(x => b.includes(x));
 
-// Confined, so it is an access level of its own: a functions key carries no other scope.
+// Confined, so it is an access level of its own: a functions key carries no scope but these two.
 const FUNCTIONS_SCOPE_OPTION = findApiKeyScopeOption(ApiKeyScope.FUNCTIONS_INVOKE);
+const FUNCTIONS_SCOPES: readonly ApiKeyScopeValue[] =
+  CONFINED_API_KEY_SCOPE_FAMILIES.find(family => family.includes(ApiKeyScope.FUNCTIONS_INVOKE)) ?? [];
 
 const isFunctionsOnly = (scopes: ApiKeyScopeValue[]) =>
-  scopes.length === 1 && scopes[0] === ApiKeyScope.FUNCTIONS_INVOKE;
+  scopes.includes(ApiKeyScope.FUNCTIONS_INVOKE) && scopes.every(scope => FUNCTIONS_SCOPES.includes(scope));
 
 interface NewKeyModalProps {
   open: boolean;
@@ -422,6 +425,14 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                 Lists, reads, and calls your live functions, and nothing else. A Functions key holds no other
                 permission.
               </Typography>
+              <Checkbox
+                size="sm"
+                sx={{ mt: 1 }}
+                label="Also write, test, promote, and share your functions"
+                checked={formData.scopes.includes(ApiKeyScope.FUNCTIONS_AUTHOR)}
+                onChange={() => toggleScope(ApiKeyScope.FUNCTIONS_AUTHOR)}
+                data-testid="api-key-functions-author-checkbox"
+              />
             </Sheet>
           ) : (
             <Box className="project-api-keys-scopes-control">

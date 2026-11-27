@@ -59,6 +59,7 @@ export { CommandHandler } from './CommandHandler';
 export {
   AGENT_REGISTRY,
   buildSystemPrompt,
+  buildUntrustedSlackHistory,
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,

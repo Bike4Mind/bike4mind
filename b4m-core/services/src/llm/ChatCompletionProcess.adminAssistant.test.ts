@@ -9,6 +9,7 @@ import {
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { ADMIN_ASSISTANT_TOOL_NAMES, ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
+import { ToolBuilder } from './tools/ToolBuilder';
 import type { ToolDefinition } from './tools/base/types';
 import { ADMIN_ASSISTANT_SYSTEM_PROMPT } from './adminAssistantPrompt';
 
@@ -121,7 +122,10 @@ type TurnInput = {
   surface?: string | null;
   session?: Record<string, unknown>;
   requestTools?: string[];
+  requestMcpServers?: string[];
   externalTools?: Record<string, ToolDefinition>;
+  orgAllowedTools?: string[];
+  contributedToolNames?: ReadonlySet<string>;
 };
 
 type TurnResult = {
@@ -283,10 +287,24 @@ describe('ChatCompletionProcess admin assistant gate', () => {
       queryComplexity: 'simple',
       promptMeta: {},
       tools: input.requestTools ?? [],
+      mcpServers: input.requestMcpServers,
       projectId: undefined,
       organizationId: undefined,
     };
-    await service.process({ body, logger, externalTools: input.externalTools } as never);
+    await service.process({
+      body,
+      logger,
+      externalTools: input.externalTools,
+      contributedToolNames: input.contributedToolNames,
+      ...(input.orgAllowedTools
+        ? {
+            prefetchedOrganization: {
+              id: 'org1',
+              modelPolicy: { allowedProviders: null, allowedModels: null, allowedTools: input.orgAllowedTools },
+            },
+          }
+        : {}),
+    } as never);
 
     const [, messages, options] = complete.mock.calls.at(-1) ?? [];
     const offeredToolNames = ((options?.tools ?? []) as Array<{ toolSchema: { name: string } }>).map(
@@ -320,6 +338,18 @@ describe('ChatCompletionProcess admin assistant gate', () => {
 
     offersNoAdminTool(turn);
     carriesNoAdminPrompt(turn);
+  });
+
+  it('org tool policy leaves external admin tools alone when they are not in the contributed set', async () => {
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      externalTools: allAdminExternalTools(),
+      orgAllowedTools: [],
+      contributedToolNames: new Set(['unrelated_contributed']),
+    });
+
+    expect(turn.offeredToolNames).toEqual(expect.arrayContaining([...ADMIN_NAMES]));
   });
 
   it('admin-assistant session, admin, admin definitions in externalTools: offers the admin tools and navigate_view, and the session prompt message starts with ADMIN_ASSISTANT_SYSTEM_PROMPT', async () => {
@@ -372,6 +402,63 @@ describe('ChatCompletionProcess admin assistant gate', () => {
 
     offersNoAdminTool(turn);
     carriesNoAdminPrompt(turn);
+  });
+
+  it('admin-assistant session owned by another user, turn run by an admin: none offered, no admin prompt', async () => {
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      session: { userId: 'other-owner', systemPromptText: 'OWNER PROMPT', enabledTools: [...ADMIN_NAMES] },
+      requestTools: [...ADMIN_NAMES],
+      externalTools: allAdminExternalTools(),
+    });
+
+    offersNoAdminTool(turn);
+    carriesNoAdminPrompt(turn);
+  });
+
+  it('admin-assistant session, admin: web and integration tools are withheld alongside the admin tools', async () => {
+    const withheld = ['web_search', 'web_fetch', 'save_content_to_data_lake', 'iss_tracker', 'current_datetime'];
+    // web_search needs a provider key this harness does not supply; the others are offered on a normal turn.
+    const control = await runTurn({ isAdmin: true, surface: null, requestTools: withheld });
+    expect(control.offeredToolNames).toEqual(
+      expect.arrayContaining(['web_fetch', 'save_content_to_data_lake', 'iss_tracker', 'current_datetime'])
+    );
+
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      session: { enabledTools: withheld },
+      requestTools: withheld,
+      externalTools: allAdminExternalTools(),
+    });
+
+    expect(turn.offeredToolNames).toEqual(expect.arrayContaining(ADMIN_NAMES));
+    expect(turn.offeredToolNames.filter(name => withheld.includes(name))).toEqual([]);
+  });
+
+  it('admin-assistant session, admin: the requested MCP servers are dropped and user integrations switched off', async () => {
+    const buildMcpTools = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools');
+    try {
+      await runTurn({ isAdmin: true, surface: null, requestMcpServers: ['server1'] });
+      expect(buildMcpTools.mock.calls.at(-1)?.[0]).toMatchObject({
+        requestedMcpServers: ['server1'],
+        disableUserIntegrations: false,
+      });
+
+      await runTurn({
+        isAdmin: true,
+        surface: 'admin-assistant',
+        requestMcpServers: ['server1'],
+        externalTools: allAdminExternalTools(),
+      });
+      expect(buildMcpTools.mock.calls.at(-1)?.[0]).toMatchObject({
+        requestedMcpServers: [],
+        disableUserIntegrations: true,
+      });
+    } finally {
+      buildMcpTools.mockRestore();
+    }
   });
 
   it('admin-assistant session, admin, no externalTools: offers navigate_view only, does not throw', async () => {

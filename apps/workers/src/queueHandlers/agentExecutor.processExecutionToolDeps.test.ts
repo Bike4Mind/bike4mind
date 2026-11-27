@@ -299,6 +299,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'persistConfidenceGate').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'persistResolvedEnabledTools').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markFailedIfActive').mockResolvedValue(true as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
   vi.spyOn(actual.questRepository, 'addGenerationJobs').mockResolvedValue(undefined as never);
@@ -1309,13 +1310,38 @@ describe('processExecution tool deps', () => {
 
       expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
-      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+      expect(agentExecutionRepository.markFailedIfActive).toHaveBeenCalledExactlyOnceWith(
         'exec-1',
         expect.objectContaining({
           message: 'Workspace session settings resolver for "settings-workspace" failed',
         })
       );
     });
+
+    it.each([
+      { markedFailed: true, notified: true },
+      { markedFailed: false, notified: false },
+    ])(
+      'notifies the client of the failure only when the guarded write marked it failed ($markedFailed)',
+      async ({ markedFailed, notified }) => {
+        resolveWorkspaceSettings.mockRejectedValue(new Error('workspace lookup failed'));
+        const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+        const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
+        vi.mocked(persistRunAsQuest).mockClear();
+        vi.mocked(agentExecutionRepository.markFailedIfActive).mockResolvedValueOnce(markedFailed);
+        vi.mocked(sessionRepository.findById).mockResolvedValue({
+          ...baseSession,
+          surface: 'settings-workspace',
+          disableUserIntegrations: false,
+        } as never);
+        const { handler } = await import('./agentExecutor');
+
+        await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+        expect(ws.frames.some(frame => frame.action === 'failed')).toBe(notified);
+        expect(vi.mocked(persistRunAsQuest).mock.calls.length > 0).toBe(notified);
+      }
+    );
 
     it('refuses a run on a workspace that answers its own turns, before any tool or model work', async () => {
       const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
@@ -1378,6 +1404,11 @@ describe('processExecution tool deps', () => {
             Object.entries(tools).map(([k, t]) => [k, { ...(t as object), guarded: true }])
           ) as typeof tools
       );
+      resolve.mockReturnValueOnce({
+        id: 'synthetic:fixture-profile',
+        allowedTools: ['fixture_tool'],
+        deniedTools: ['fixture_denied'],
+      } as never);
       await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
 
       expect(resolve).toHaveBeenCalledWith(
@@ -1385,7 +1416,7 @@ describe('processExecution tool deps', () => {
         expect.objectContaining({ executionId: 'exec-1', contributedToolNames: ['fixture_tool'] })
       );
       const profile = resolve.mock.results[0].value;
-      expect(profile.id).toBe('synthetic:opti-orchestration');
+      expect(profile.id).toBe('synthetic:fixture-profile');
       expect(profile.allowedTools).toContain('fixture_tool');
 
       expect(guard).toHaveBeenCalledTimes(1);

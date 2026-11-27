@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SlackClient, escapeSlackMrkdwn } from './SlackClient';
 
 vi.mock('./di/registry', () => ({
-  getSlackDeps: () => ({ integrationCircuitBreaker: { isAvailable: vi.fn() } }),
+  getSlackDeps: () => ({ integrationCircuitBreaker: { isAvailable: vi.fn().mockResolvedValue(true) } }),
   getSlackDb: () => ({}),
 }));
 
@@ -53,5 +53,18 @@ describe('SlackClient constructor', () => {
     new SlackClient('xoxb-test-token', logger, { timeoutMs: 10_000 });
 
     expect(WebClientCtor).toHaveBeenCalledWith('xoxb-test-token', expect.objectContaining({ timeout: 10_000 }));
+  });
+});
+
+describe('SlackClient.sendMessage', () => {
+  it('posts without link or media unfurling', async () => {
+    const postMessage = vi.fn().mockResolvedValue({ ok: true, ts: '1.1' });
+    WebClientCtor.mockImplementationOnce(function () {
+      return { chat: { postMessage }, on: vi.fn() };
+    });
+
+    await new SlackClient('xoxb-test-token', logger).sendMessage({ channel: 'C1', text: 'see https://x.example' });
+
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ unfurl_links: false, unfurl_media: false }));
   });
 });

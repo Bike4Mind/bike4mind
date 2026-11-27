@@ -65,7 +65,7 @@ function toSkinTheme(skin: OrchestrateMiniSkin | undefined): SkinTheme {
     states: keep(skin.states),
     surfaces: keep(skin.surfaces),
     ...(skin.fontFamily ? { fontFamily: skin.fontFamily } : {}),
-    sprites: {},
+    scenes: {},
     sounds: {},
   };
 }

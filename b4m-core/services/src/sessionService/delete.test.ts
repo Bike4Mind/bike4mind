@@ -420,6 +420,30 @@ describe('sessionService - delete', () => {
     );
   });
 
+  it('reaches a grant it minted on a file detached from the session before the delete', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null, knowledgeIds: [] };
+    const detachedFile = {
+      id: 'file-detached',
+      userId: otherUserId,
+      users: [
+        { userId: 'carol', permissions: ['read', 'update'], sessionId },
+        { userId: 'carol', permissions: ['read'] },
+      ],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findSharingGrantFilesBySession as Mock).mockResolvedValue([detachedFile]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'file-detached', users: [{ userId: 'carol', permissions: ['read'] }] }),
+      { includeDeleted: true }
+    );
+  });
+
   // softDeletePlugin puts `deletedAt: null` on every findOne and findByIdAndUserId is a bare
   // findOne, so a session tombstoned before the cascade is unreachable on a retry: the guard at
   // the top throws and any grant the loop had not reached stays live with nothing left to clear

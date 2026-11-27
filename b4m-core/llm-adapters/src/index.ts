@@ -843,4 +843,5 @@ export * from './staleReferences';
 export * from './modelSunsetMetrics';
 export * from './thinkingParams';
 export * from './toolPairingUtils';
+export * from './openaiUsageObservation';
 export { convertOpenAIToolHistoryToCanonical } from './messageFormatConverter';

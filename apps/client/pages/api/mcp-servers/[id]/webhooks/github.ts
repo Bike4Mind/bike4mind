@@ -62,7 +62,7 @@ function getWebhookUrl(routingToken: string): string {
   return `${baseUrl}/api/webhooks/github/${routingToken}`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   /**
    * POST - Create or update webhook configuration
    *

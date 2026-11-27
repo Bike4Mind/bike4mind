@@ -112,7 +112,9 @@ export const createVideoGenerationContract = defineEndpoint({
         'An `inputs` file (or `input_image_file_id`) does not name an image you own ' +
         '(`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner ' +
         'minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin ' +
-        'caller; for anyone else it is `403`.',
+        'caller; for anyone else it is `403`. An API key without `files:read` may only name generated images ' +
+        'and images staged by an `ai:generate` key without `files:write`; any other file is ' +
+        '`input_image_not_found`.',
       schema: VideoGenerationErrorResponseSchema,
     },
     422: {

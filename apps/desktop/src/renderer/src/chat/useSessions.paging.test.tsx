@@ -12,6 +12,7 @@ import {
   type SessionPageRequest,
 } from '@shared/sessionPage';
 import { useSessions, type SessionsController } from './useChat';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 const summary = (index: number): ChatSessionSummary =>
   ({
@@ -31,6 +32,7 @@ function pagingHost(count: number) {
   let holdNext = 0;
   const host: HostBridgeApi = {
     request: vi.fn(async (_hostId: string, method: string, params?: unknown) => {
+      if (method === 'session/delete') return { ok: true as const, result: {} };
       if (method !== 'session/page') return { ok: false as const, error: { code: -32601, message: method } };
       const request = sessionPageRequestSchema.parse(params);
       requests.push(request);
@@ -43,8 +45,8 @@ function pagingHost(count: number) {
     onNotification: () => () => undefined,
   };
   vi.stubGlobal('b4m', {
-    host,
-    chat: { onStreamEvent: () => () => undefined, deleteSession: async () => undefined },
+    host: { ...localHostConnections(), ...host },
+    chat: { onStreamEvent: () => () => undefined },
     claudeImport: { onSessionsChanged: () => () => undefined },
   });
   return {

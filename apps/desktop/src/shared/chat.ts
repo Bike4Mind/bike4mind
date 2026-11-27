@@ -773,6 +773,9 @@ export interface ChatChildWaiting {
   summary?: string;
 }
 
+/** Marks a prompt the renderer drew before main stored it; main assigns the real id. */
+export const OPTIMISTIC_ID_PREFIX = 'pending-';
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -1561,6 +1564,11 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  /**
+   * The host the renderer listed this session from. Stamped by the client when a row arrives
+   * (renderer/src/host/sessionDirectory.ts); a host never sends it. Absent means the local host.
+   */
+  hostId?: string;
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
   messageCount: number;
@@ -1647,7 +1655,17 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
+export const CONTEXT_NOTICE_KINDS = ['context-size', 'no-tools', 'run-budget'] as const;
+export type ContextNoticeKind = (typeof CONTEXT_NOTICE_KINDS)[number];
+
+/**
+ * The kinds that are state rather than a turn's passing message: the host withdraws them with
+ * context-notice-cleared and returns those in force from session/get (ContextNotices).
+ */
+export const HELD_CONTEXT_NOTICE_KINDS: readonly ContextNoticeKind[] = ['run-budget'];
+
+/** A held context notice still in force for a session. */
+export type ActiveContextNotice = { kind: ContextNoticeKind; message: string };
 
 /**
  * Where a client stands in one session's event stream. `epoch` names the host process lifetime
@@ -1796,6 +1814,13 @@ export interface ChatSessionStatusEvent {
    * Absent when there are none. Independent of `status`: a 'done' session can still be waiting on them.
    */
   background?: SessionBackgroundJobs;
+  /**
+   * Turns this session has finished since the host started, rising by one per turn whatever its
+   * outcome. Absent before the first. A client reacts to it rising rather than to `status`
+   * moving, which a queued run of turns can skip and a missed push can hide. A host restart starts
+   * it again from zero.
+   */
+  settledTurns?: number;
 }
 
 /** A session's running wake-on-exit background commands, as the Tavern shows them. */

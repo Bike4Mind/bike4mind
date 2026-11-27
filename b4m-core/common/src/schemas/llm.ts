@@ -57,10 +57,6 @@ export const b4mLLMTools = z.enum([
   'save_content_to_data_lake',
   // Agent delegation
   'delegate_to_agent',
-  // OptiHashi optimization tools
-  'optihashi_schedule',
-  'optihashi_formulate',
-  'optihashi_edit_problem',
   // Navigation tool
   'navigate_view',
   // Jupyter notebook generation
@@ -88,6 +84,19 @@ export const DATA_LAKE_WRITE_TOOL_NAMES = [
 
 /** The data-lake tools that only read; withheld from an API key without datalake:read the same way. */
 export const DATA_LAKE_READ_TOOL_NAMES = ['list_my_data_lakes'] as const satisfies readonly B4MLLMTools[];
+
+/**
+ * The tools that read or reuse the content of the caller's files. A key without files:read is not
+ * offered these (fileToolsDeniedFor in server-utils files/fileScopes.ts).
+ */
+export const FILE_READ_TOOL_NAMES = [
+  'search_knowledge_base',
+  'retrieve_knowledge_content',
+  'count_knowledge_base',
+  'describe_knowledge_base',
+  'edit_file',
+  'edit_image',
+] as const satisfies readonly B4MLLMTools[];
 
 /** Every data-lake tool - offered, trimmed and paired together (see resolveEnabledTools in services). */
 export const DATA_LAKE_TOOL_NAMES = [
@@ -133,14 +142,10 @@ export function filterKnownTools(tools: readonly string[] | undefined): B4MLLMTo
  * Tool names implemented by premium overlay packages rather than by the core
  * tool registry. Implementations reach the chat pipeline at runtime via the
  * `externalTools` merge (premium glue codegen); core ships no implementation.
- * The names stay in b4mLLMTools for now so persisted session settings and
- * briefcase prompts that reference them keep parsing - the boundary cleanup
- * sweep removes them from the enum together with this type.
+ * Names an overlay contributes that are not in b4mLLMTools resolve by name from
+ * the generated map and need no entry here.
  */
-export type PremiumOverlayToolName = Extract<
-  B4MLLMTools,
-  'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem' | 'bob_panel_read'
->;
+export type PremiumOverlayToolName = Extract<B4MLLMTools, 'bob_panel_read'>;
 
 /**
  * Recharts chart types.

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -100,6 +102,7 @@ const PULL_REQUEST: PrBarState = {
 };
 
 const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
   busy: false,
   error: null,
   dismissError: vi.fn(),
@@ -210,6 +213,7 @@ beforeEach(() => {
     currentBranch: 'main',
   };
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: { inspectProject: async () => inspection, listRecentFolders: async () => [] },
     getAppInfo: async () => ({ homeDirectory: '' }),
   };
@@ -381,7 +385,10 @@ describe('the Plan section', () => {
 describe('the Background tasks section', () => {
   it('shows a loop as the only background task, with cadence and a stop control', async () => {
     const stop = vi.fn();
-    vi.stubGlobal('b4m', { ...window.b4m, chat: { ...window.b4m.chat, loopCommand: stop } });
+    vi.stubGlobal('b4m', {
+      ...window.b4m,
+      chat: { ...window.b4m.chat, loopCommand: stop },
+    });
     await show({
       background: {
         loop: {

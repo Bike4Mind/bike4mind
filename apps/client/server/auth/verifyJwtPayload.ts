@@ -3,6 +3,7 @@ import { isAuthSessionActive } from '@bike4mind/common';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { isImpersonatorAuthorized } from '@bike4mind/server-utils/auth/impersonatorAccess';
 
 export interface JwtPayloadClaims {
   id: string;
@@ -49,7 +50,11 @@ export async function verifyJwtPayload(
     if (!isTokenTypeAcceptable(jwt_payload.typ, 'access')) {
       return done(null, false);
     }
-    const user = await User.findById(jwt_payload.id);
+    // The session lookup runs alongside the user lookup, so the liveness check adds no latency.
+    const [user, session] = await Promise.all([
+      User.findById(jwt_payload.id),
+      jwt_payload.sid ? authSessionRepository.findBySid(jwt_payload.sid) : null,
+    ]);
     if (user) {
       if (user.isSystem) return done(null, false);
       // Server-side kill switch: reject tokens whose embedded tokenVersion
@@ -60,13 +65,17 @@ export async function verifyJwtPayload(
         return done(null, false);
       }
       assertAccountStateUsable(user);
+      // A token carrying a sid is only as live as its AuthSession: revoking the session (logout,
+      // per-device sign-out, reuse detection) rejects its access tokens on the next request. Tokens
+      // without a sid (legacy, mfaPending, OAuth relying-party) have no session to check.
+      if (jwt_payload.sid && (!session || session.userId !== user.id || !isAuthSessionActive(session))) {
+        return done(null, false);
+      }
       if (jwt_payload.impersonatedBy) {
-        const session = jwt_payload.sid ? await authSessionRepository.findBySid(jwt_payload.sid) : null;
         if (
           !session ||
-          session.userId !== user.id ||
           session.impersonatedBy !== jwt_payload.impersonatedBy ||
-          !isAuthSessionActive(session)
+          !(await isImpersonatorAuthorized(jwt_payload.impersonatedBy))
         )
           return done(null, false);
         Object.assign(user, { impersonationWriteEnabled: !!session.impersonationWriteEnabled });

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "2.2.10",
+  "version": "2.2.15",
   "publishConfig": {
     "access": "restricted"
   },
@@ -68,9 +68,8 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run"
   },
   "devDependencies": {

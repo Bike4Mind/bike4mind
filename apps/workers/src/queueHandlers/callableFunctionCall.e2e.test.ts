@@ -46,7 +46,7 @@ vi.mock('@bike4mind/server-utils/callableFunctions/timeLimit', () => ({
   resolveCallableFunctionPendingCallLimit: async () => 10,
 }));
 
-const { UNCLAIMED_AFTER_MS, queueFunctionCall, readFunctionCall, runQueuedFunctionCall } =
+const { UNCLAIMED_AFTER_MS, cancelFunctionCall, queueFunctionCall, readFunctionCall, runQueuedFunctionCall } =
   await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const { CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } =
   await import('@bike4mind/server-utils/callableFunctions/runtimeParent');
@@ -479,6 +479,56 @@ describe('a queued call', () => {
     expect(call).toMatchObject({ outcome: 'error', reason: 'queue_failed' });
     expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'queue_failed']]);
     expect(await readFunctionCall(OWNER, call.callId)).toMatchObject({ state: 'finished', outcome: 'error' });
+  });
+});
+
+describe('cancelling a call', () => {
+  it('never claims or runs a queued call after its cancel, and keeps its row cancelled', async () => {
+    const { call } = await queue();
+    const cancelled = await cancelFunctionCall(OWNER, call.callId);
+    expect(cancelled).toMatchObject({ state: 'finished', outcome: 'cancelled' });
+    expect((await CallableFunctionResult.findOne({ callId: call.callId }).lean())?.input).toBeUndefined();
+
+    const runner = okRunner();
+    expect(await runQueuedFunctionCall({ callId: call.callId }, { runner })).toBeNull();
+    expect(runner).not.toHaveBeenCalled();
+    expect(await readFunctionCall(OWNER, call.callId)).toMatchObject({ state: 'finished', outcome: 'cancelled' });
+    expect((await rows()).map(r => r.outcome)).toEqual(['cancelled']);
+  });
+
+  it('discards what a running call returns after its cancel, so the late write changes nothing', async () => {
+    const { call } = await queue();
+    const runner: CallableFunctionRunner = async () => {
+      expect(await cancelFunctionCall(OWNER, call.callId)).toMatchObject({ outcome: 'cancelled' });
+      return {
+        outcome: 'ok',
+        outputs: { deflection: 2 },
+        durationMs: 5,
+        runtime: { lockHash: 'a'.repeat(64), packages: [] },
+      };
+    };
+    expect(await runQueuedFunctionCall({ callId: call.callId }, { runner })).toBeNull();
+
+    const result = await readFunctionCall(OWNER, call.callId);
+    expect(result).toMatchObject({ state: 'finished', outcome: 'cancelled' });
+    expect(result?.outputs).toBeUndefined();
+    expect(result?.stamp).toBeUndefined();
+    expect((await rows()).map(r => r.outcome)).toEqual(['cancelled']);
+  });
+
+  it('returns a finished call unchanged, and answers another caller as a missing call', async () => {
+    const { call } = await queue();
+    expect(await cancelFunctionCall(STRANGER, call.callId)).toBeNull();
+    expect(await readFunctionCall(OWNER, call.callId)).toMatchObject({ state: 'queued' });
+
+    await runQueuedFunctionCall({ callId: call.callId }, { runner: okRunner() });
+    expect(await cancelFunctionCall(OWNER, call.callId)).toMatchObject({
+      state: 'finished',
+      outcome: 'ok',
+      outputs: { deflection: 2 },
+    });
+    expect((await rows()).map(r => r.outcome)).toEqual(['ok']);
+    expect(await cancelFunctionCall(OWNER, 'not-an-id')).toBeNull();
   });
 });
 

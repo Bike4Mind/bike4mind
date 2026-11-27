@@ -184,17 +184,39 @@ describe('startModule', () => {
     expect(deleted).toEqual([]);
   });
 
-  it('restart keeps a previous session the user left', async () => {
-    const { deps, progress, deleted } = makeDeps();
+  it('a replay deletes a previous session the user left that holds only recorded turns', async () => {
+    const { deps, progress, sessions, deleted } = makeDeps();
     await startModule(deps, 'u1', 'demo');
     progress.get('u1')!.demo.status = 'left';
+    await startModule(deps, 'u1', 'demo');
+    expect(deleted).toEqual([sessions[0].id]);
+  });
+
+  it('a replay deletes a previous session the user finished that holds only recorded turns', async () => {
+    const { deps, progress, sessions, deleted } = makeDeps();
+    await startModule(deps, 'u1', 'demo');
+    progress.get('u1')!.demo.status = 'finished';
+    await startModule(deps, 'u1', 'demo');
+    expect(deleted).toEqual([sessions[0].id]);
+  });
+
+  it('a replay keeps a finished session the user wrote in', async () => {
+    const { deps, quests, progress, deleted } = makeDeps();
+    const first = await startModule(deps, 'u1', 'demo');
+    if (!first.ok) throw new Error('start failed');
+    await advanceModule(deps, 'u1', { moduleId: 'demo', sessionId: first.sessionId, turn: 0 });
+    quests.push({ ...quests[0], id: 'mine', prompt: 'what is this?', uiSideEffects: [] });
+    progress.get('u1')!.demo.status = 'finished';
     await startModule(deps, 'u1', 'demo');
     expect(deleted).toEqual([]);
   });
 
-  it('restart keeps a previous session the user finished', async () => {
-    const { deps, progress, deleted } = makeDeps();
-    await startModule(deps, 'u1', 'demo');
+  it('a replay keeps a finished session with a recorded turn the user pinned', async () => {
+    const { deps, quests, progress, deleted } = makeDeps();
+    const first = await startModule(deps, 'u1', 'demo');
+    if (!first.ok) throw new Error('start failed');
+    await advanceModule(deps, 'u1', { moduleId: 'demo', sessionId: first.sessionId, turn: 0 });
+    quests[0].pinned = true;
     progress.get('u1')!.demo.status = 'finished';
     await startModule(deps, 'u1', 'demo');
     expect(deleted).toEqual([]);
@@ -720,6 +742,12 @@ describe('enabledModules', () => {
       { ...door, id: 'off', enabled: false },
     ] as unknown as TutorialModule[]);
     expect(listed).toEqual([door]);
+  });
+
+  it('passes the track through when the module has one', () => {
+    const door = { ...MODULE, track: 'basics' } as TutorialModule;
+    expect(enabledModules([door])[0].track).toBe('basics');
+    expect(enabledModules([MODULE as TutorialModule])[0]).not.toHaveProperty('track');
   });
 });
 

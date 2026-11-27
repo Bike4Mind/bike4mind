@@ -101,6 +101,16 @@ describe('POST /api/v1/voice/sessions - admin role in the session token', () => 
     expect(h.signToken).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('signs trusted file-input admission %s for a key', async allowed => {
+    await run({ keyId: 'key-1', scopes: [ApiKeyScope.AI_GENERATE, ...(allowed ? [ApiKeyScope.READ_FILES] : [])] });
+    expect(h.signToken.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+  });
+
+  it('admits file inputs for a signed-in voice session', async () => {
+    await run();
+    expect(h.signToken.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: true }));
+  });
+
   it('marks the role withheld for a key without the admin scope', async () => {
     await run({ keyId: 'key-1', scopes: [ApiKeyScope.AI_GENERATE] });
     expect(mintedClaims().adminRoleWithheld).toBe(true);

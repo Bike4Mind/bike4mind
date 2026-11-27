@@ -12,6 +12,7 @@ import { ProjectEvents } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import type { ProjectMutationContext } from './attachSessionsToProject';
 
 /**
@@ -64,8 +65,9 @@ export async function addFilesToProject(
 }
 
 export async function removeFilesFromProject(ctx: ProjectMutationContext, projectId: string, fileIds: string[]) {
-  const { project, removedIds } = await withTransaction(() =>
-    projectService.removeFiles(
+  const { result, affectedUserIds } = await withTransaction(async () => {
+    const affected = new Set<string>();
+    const result = await projectService.removeFiles(
       ctx.user.id,
       {
         projectId,
@@ -78,9 +80,13 @@ export async function removeFilesFromProject(ctx: ProjectMutationContext, projec
           users: userRepository,
           invites: inviteRepository,
         },
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
       }
-    )
-  );
+    );
+    return { result, affectedUserIds: [...affected] };
+  });
+  const { project, removedIds } = result;
+  await rescopeUserSubscriptions(affectedUserIds, ctx.logger);
 
   await Promise.all(
     removedIds.map((fileId: string) =>
@@ -104,8 +110,9 @@ export async function removeFilesFromProject(ctx: ProjectMutationContext, projec
 }
 
 export async function removeSessionsFromProject(ctx: ProjectMutationContext, projectId: string, sessionIds: string[]) {
-  const { project, removedIds } = await withTransaction(() =>
-    projectService.removeSessions(
+  const { result, affectedUserIds } = await withTransaction(async () => {
+    const affected = new Set<string>();
+    const result = await projectService.removeSessions(
       ctx.user.id,
       {
         projectId,
@@ -114,12 +121,17 @@ export async function removeSessionsFromProject(ctx: ProjectMutationContext, pro
       {
         db: {
           sessions: sessionRepository,
+          fabFiles: fabFileRepository,
           projects: projectRepository,
           users: userRepository,
         },
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
       }
-    )
-  );
+    );
+    return { result, affectedUserIds: [...affected] };
+  });
+  const { project, removedIds } = result;
+  await rescopeUserSubscriptions(affectedUserIds, ctx.logger);
 
   // A retried or no-op removal (v1 DELETE answers 204 for it) must not log a removal that did not happen.
   if (removedIds.length > 0) {

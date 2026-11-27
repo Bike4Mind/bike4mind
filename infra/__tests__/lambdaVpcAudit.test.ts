@@ -17,6 +17,7 @@ const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 // Add a handler here only after tracing that it reaches neither, and record it in the audit doc.
 const OUTSIDE_VPC = [
   'apps/client/server/websocket/heartbeat.func',
+  'apps/workers/src/callableFunctions/sourceFetch.handler',
   'apps/workers/src/cron/providerUsagePoll.handler',
   'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
   'apps/workers/src/events/wafAlarmToSlack.handler',

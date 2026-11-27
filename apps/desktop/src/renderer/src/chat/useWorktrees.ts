@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppWorktree, WorktreeSweepItem } from '@shared/worktreeRemoval';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { useRecentFolders } from './useRecentFolders';
 
 export interface ProjectWorktrees {
@@ -24,7 +25,7 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 
 /** App-created worktrees of every recent project folder, re-read after each removal. */
 export function useWorktrees(): WorktreesState {
-  const { folders } = useRecentFolders();
+  const { folders } = useRecentFolders(LOCAL_HOST_ID);
   const [projects, setProjects] = useState<readonly ProjectWorktrees[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);

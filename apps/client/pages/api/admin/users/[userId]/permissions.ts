@@ -6,6 +6,9 @@ import {
   ForbiddenError,
   assertCanActOnAdminTarget,
   assertCanGrantAdminAccess,
+  EXPLICIT_ONLY_ADMIN_PERMISSIONS,
+  assertCanChangeExplicitOnlyPermissions,
+  isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminPermissions,
   sortAdminRoleIds,
@@ -42,6 +45,20 @@ const describeChange = (changes: {
     .join('; ');
 
 /**
+ * A full admin can gain only the permissions their flag does not imply, granted directly: never other
+ * permissions or roles, which the flag already covers. Other ids already stored may stay as they are.
+ */
+const onlyExplicitOnlyChange = (
+  before: readonly string[],
+  after: readonly string[],
+  rolesRequested: boolean,
+  beforeRoleIds: readonly string[],
+  afterRoleIds: readonly string[]
+) =>
+  after.every(id => isExplicitOnlyAdminPermission(id) || before.includes(id)) &&
+  (!rolesRequested || (beforeRoleIds.length === 0 && afterRoleIds.length === 0));
+
+/**
  * Edits a user's delegated `adminPermissions` and, when the body names them, the admin roles they
  * hold (`adminRoleIds`, b4m-core/common adminRoles.ts). Holding a role grants its permissions, so
  * an assignment passes the same grant rules as a direct permission. Full admins only, and never
@@ -73,8 +90,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
 
     const result = await withTransaction(async () => {
       const { userId, user } = await noteSubject(req, 'settings:manage');
-      if (isFullAdmin(user)) {
-        throw new BadRequestError('Full admins hold every permission. Change their role to limit their access.');
+      if (isFullAdmin(user) && !onlyExplicitOnlyChange(before, after, rolesRequested, beforeRoleIds, afterRoleIds)) {
+        throw new BadRequestError(
+          `Full admins hold every permission except ${EXPLICIT_ONLY_ADMIN_PERMISSIONS.join(', ')}. Change their role to limit their access.`
+        );
       }
       assertCanActOnAdminTarget(req.user, user, 'change admin permissions of');
       const storedRoleIdsRaw = user.adminRoleIds ?? [];
@@ -87,6 +106,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       assertCanGrantAdminAccess(req.user, {
         adminPermissions: sortAdminPermissions([...after, ...nextRoles.flatMap(role => role.permissions)]),
       });
+      const rolesBefore = rolesRequested ? await adminRoleRepository.findByIds(storedRoleIds) : nextRoles;
+      assertCanChangeExplicitOnlyPermissions(
+        req.user,
+        [...before, ...rolesBefore.flatMap(role => role.permissions)],
+        [...after, ...nextRoles.flatMap(role => role.permissions)]
+      );
       // Compare the cleaned set the editor showed; the write below replaces the raw stored array.
       const stored: readonly string[] = user.adminPermissions ?? [];
       const rolesStale = rolesRequested && !sameSet(beforeRoleIds, storedRoleIds);

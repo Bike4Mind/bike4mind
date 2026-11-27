@@ -49,6 +49,18 @@ beforeEach(() => {
 });
 
 describe('ChatPanelControls layout menu', () => {
+  // The name holds the words on the button, so speech control ("click Dock left") reaches it.
+  it.each([
+    { props: { activeLayout: 'dockRight' as const }, shown: 'Dock left', name: 'Chat layout: Dock left' },
+    { props: { activeLayout: 'dockBottom' as const }, shown: 'Dock bottom', name: 'Chat layout: Dock bottom' },
+    { props: {}, shown: 'Layout', name: 'Chat layout' },
+  ])('names the menu for screen readers, with the text it shows: $shown', ({ props, shown, name }) => {
+    renderControls(props);
+    expect(screen.getByRole('combobox', { name })).toBe(trigger());
+    expect(trigger()).toHaveTextContent(shown);
+    expect(name.toLowerCase()).toContain(shown.toLowerCase());
+  });
+
   it('writes the picked dock direction to the session layout', () => {
     renderControls({ activeLayout: 'dockRight' });
 
