@@ -44,9 +44,14 @@ beforeEach(() => {
 describe('ReplyChoiceButtons', () => {
   it('numbers each option and shows its label and full description', () => {
     renderChoices();
-    expect(screen.getByTestId('choice-btn-1-label').textContent).toBe('1Reformulate');
+    expect(screen.getByTestId('choice-btn-1').textContent).toContain('1');
+    expect(screen.getByTestId('choice-btn-1-label').textContent).toBe('Reformulate');
     expect(screen.getByTestId('choice-btn-1-description').textContent).toBe('Re-formulate with all three pools.');
-    expect(screen.getByTestId('choice-btn-2-label').textContent).toBe('2Extend');
+    expect(screen.getByTestId('choice-btn-2-label').textContent).toBe('Extend');
+    expect(screen.getByText('press 1\u20132')).toBeTruthy();
+    expect(screen.getByTestId('choice-btn-1').getAttribute('aria-label')).toBe(
+      'Reformulate: Re-formulate with all three pools.'
+    );
     expect(screen.getByTestId('choice-btn-2-description').textContent).toBe('Extend the loaded brief.');
   });
 
@@ -65,8 +70,23 @@ describe('ReplyChoiceButtons', () => {
         index: 1,
       })
     );
-    expect(screen.getByTestId('choice-btn-2').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('choice-btn-1')).toBeDisabled();
+    expect(screen.getByTestId('choice-receipt-label').textContent).toBe('Extend');
+    expect(screen.queryByTestId('choice-btn-1')).toBeNull();
+  });
+
+  it('picks an option with its digit key, but not while the user types', async () => {
+    renderChoices();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: '1' });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    input.remove();
+
+    fireEvent.keyDown(document.body, { key: '3' });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: '2' });
+    expect(sendPrompt).toHaveBeenCalledWith('Extend: Extend the loaded brief.', { respectBlockedState: true });
+    await waitFor(() => expect(mockRecord).toHaveBeenCalledTimes(1));
   });
 
   it('records nothing and stays clickable when the send is refused', async () => {
@@ -76,7 +96,7 @@ describe('ReplyChoiceButtons', () => {
 
     await waitFor(() => expect(screen.getByTestId('choice-btn-1')).not.toBeDisabled());
     expect(mockRecord).not.toHaveBeenCalled();
-    expect(screen.getByTestId('choice-btn-2').getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByTestId('choice-receipt')).toBeNull();
 
     fireEvent.click(screen.getByTestId('choice-btn-1'));
     expect(sendPrompt).toHaveBeenLastCalledWith('Reformulate: Re-formulate with all three pools.', {
@@ -87,18 +107,19 @@ describe('ReplyChoiceButtons', () => {
 
   it('sends once on a double tap', async () => {
     renderChoices();
-    fireEvent.click(screen.getByTestId('choice-btn-1'));
-    fireEvent.click(screen.getByTestId('choice-btn-1'));
-    fireEvent.click(screen.getByTestId('choice-btn-2'));
+    const [first, second] = [screen.getByTestId('choice-btn-1'), screen.getByTestId('choice-btn-2')];
+    fireEvent.click(first);
+    fireEvent.click(first);
+    fireEvent.click(second);
 
     expect(sendPrompt).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(mockRecord).toHaveBeenCalledTimes(1));
   });
 
-  it('marks a stored pick and disables the rest', () => {
+  it('shows a stored pick as a receipt, never the open list', () => {
     renderChoices({ ...choices, selectedIndex: 0 });
-    expect(screen.getByTestId('choice-btn-1').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('choice-btn-2')).toBeDisabled();
+    expect(screen.getByTestId('choice-receipt-label').textContent).toBe('Reformulate');
+    expect(screen.queryByTestId('choice-btn-1')).toBeNull();
   });
 
   it('is inert once a newer turn exists', () => {
@@ -106,17 +127,17 @@ describe('ReplyChoiceButtons', () => {
     renderChoices();
     expect(screen.getByTestId('choice-btn-1')).toBeDisabled();
     fireEvent.click(screen.getByTestId('choice-btn-1'));
+    fireEvent.keyDown(document.body, { key: '1' });
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 });
 
 describe('NavigationButtons with leading choices', () => {
-  it('renders the choices and the navigation in one row', () => {
+  it('renders the choices above the navigation row', () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
         <CssVarsProvider theme={appTheme}>
           <NavigationButtons
-            label="Your call"
             leading={<ReplyChoiceButtons questId="quest-1" sessionId="sess-1" suggestedChoices={choices} />}
             navigationIntents={[
               {
@@ -133,7 +154,8 @@ describe('NavigationButtons with leading choices', () => {
       </QueryClientProvider>
     );
     const row = screen.getByRole('group', { name: 'Suggested next steps' });
-    expect(row.querySelectorAll('button')).toHaveLength(3);
+    expect(row.querySelectorAll('button')).toHaveLength(1);
+    expect(screen.getByRole('group', { name: 'Your call' }).querySelectorAll('button')).toHaveLength(2);
     expect(screen.getByText('Your call')).toBeTruthy();
     expect(screen.getByTestId('nav-btn-opti.packing')).toBeTruthy();
   });
