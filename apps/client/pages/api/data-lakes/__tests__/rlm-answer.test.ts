@@ -230,6 +230,15 @@ describe('POST /api/data-lakes/rlm-answer - in-REPL retrieval credential', () =>
       expect(mockBuildDataLakeTools).not.toHaveBeenCalled();
     });
 
+    it('refuses the expired marker for a user key past its expiry', async () => {
+      mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'expired' });
+
+      const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+      expect(res.statusCode).toBe(500);
+      expect(mockBuildDataLakeTools).not.toHaveBeenCalled();
+    });
+
     it('refuses a placeholder key from the resolver', async () => {
       mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'not-configured' });
 

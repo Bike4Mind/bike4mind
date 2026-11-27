@@ -187,6 +187,19 @@ describe('getDiscoveryCredentials', () => {
     }
   );
 
+  it.each([
+    ['gemini', 'GEMINI_API_KEY'],
+    ['xai', 'XAI_API_KEY'],
+    ['kimi', 'MOONSHOT_API_KEY'],
+    ['deepseek', 'DEEPSEEK_API_KEY'],
+  ] as const)('still prefers the %s linked secret on hosted', async (provider, envVar) => {
+    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `demo-${provider}` })), {
+      [envVar]: `secret-${provider}`,
+    });
+
+    expect(creds[provider]).toBe(`secret-${provider}`);
+  });
+
   it('leaves every unset provider null instead of inventing a placeholder', async () => {
     const allUnset = Object.fromEntries(Object.keys(keys()).map(field => [field, null])) as Partial<ResolvedKeys>;
     const creds = await getDiscoveryCredentials(adapters(keys(allUnset)), {});

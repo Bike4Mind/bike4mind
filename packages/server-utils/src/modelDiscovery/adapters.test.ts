@@ -348,6 +348,7 @@ describe('discoveryEnv', () => {
   });
 
   it('still bridges the other linked provider secrets', () => {
+    vi.stubEnv('GEMINI_API_KEY', '');
     delete process.env.GEMINI_API_KEY;
 
     expect(discoveryEnv().GEMINI_API_KEY).toBe('gemini-linked');

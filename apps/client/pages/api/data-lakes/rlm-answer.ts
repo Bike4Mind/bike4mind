@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
+import { EXPIRED_API_KEY } from '@bike4mind/auth/apiKeyService';
 import { apiKeyService } from '@bike4mind/services';
 import {
   ReActAgent,
@@ -206,7 +207,7 @@ async function handleRlmAnswer(req: Request, res: Response) {
   const userId = req.user?.id || 'system';
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
   const subLlmAnthropicKey = apiKeyTable?.anthropic;
-  if (!subLlmAnthropicKey || isPlaceholderApiKey(subLlmAnthropicKey)) {
+  if (!subLlmAnthropicKey || subLlmAnthropicKey === EXPIRED_API_KEY || isPlaceholderApiKey(subLlmAnthropicKey)) {
     return res.status(500).json({
       error:
         'No Anthropic API key available for sub-LLM calls. ' +

@@ -48,8 +48,8 @@ export interface DiscoveryCredentialAdapters extends GetEffectiveLLMApiKeysAdapt
 /**
  * A value that is absent, blank, the expiry sentinel, or any recognized
  * placeholder is not a credential. The placeholder matters most on the env tier:
- * DISCOVERY_ENV_KEYS is live on hosted, so on a stage where `sst secret set`
- * never ran the placeholder would beat the AdminSettings key and every request
+ * the hosted env keys (gemini, xai, kimi, deepseek) are live, so on a stage
+ * where `sst secret set` never ran the placeholder would beat the AdminSettings key and every request
  * would go out as `Bearer not-configured`. isPlaceholderApiKey rather than
  * isPlaceholderValue: it is the repo's documented superset, and the values a
  * half-filled .env actually carries (your-api-key, REPLACE_ME, dummy) are in the
