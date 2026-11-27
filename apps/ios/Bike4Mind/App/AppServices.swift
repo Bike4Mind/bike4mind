@@ -321,7 +321,7 @@ final class AppServices {
       api: api, cache: sessionListCache,
       onDeleted: { [weak self] sessionID in
         self?.transcriptCache.remove(sessionID: sessionID)
-        await widgets.recordTurns(sessionID: sessionID, sessionTitle: "", turns: [])
+        await widgets.recordDeleted(sessionID: sessionID)
       },
       onRenamed: { sessionID, name in
         await widgets.recordRename(sessionID: sessionID, title: name)

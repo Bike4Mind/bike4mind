@@ -77,7 +77,8 @@ actor FakeAPI: B4MAPI {
   func deleteSession(id: String) async throws {
     deletes.append(id)
     if holdingMutations { await withCheckedContinuation { heldMutations.append($0) } }
-    if let deleteFailure { throw deleteFailure }
+    // Mirrors `APIClient.deleteSession`, which treats a 404 as already deleted.
+    if let deleteFailure, deleteFailure != .notFound { throw deleteFailure }
     sessionsByID[id] = nil
   }
 

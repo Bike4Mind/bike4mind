@@ -36,6 +36,18 @@ final class WidgetSnapshotRecorderTests: XCTestCase {
     XCTAssertEqual(running?.top, .init(sessionID: "a", title: "Trip notes", status: "running"))
   }
 
+  func testDeletingASessionDropsItFromRunningAgents() async {
+    let (recorder, store, reloader) = makeRecorder()
+    await recorder.recordTurns(sessionID: "a", sessionTitle: "Alpha", turns: [turn("1", status: .running)])
+    let reloadsBefore = reloader.reloads.count
+
+    await recorder.recordDeleted(sessionID: "a")
+    await recorder.recordDeleted(sessionID: "never-running")
+
+    XCTAssertEqual(store.load()?.runningAgents?.count ?? 0, 0)
+    XCTAssertEqual(reloader.reloads.count, reloadsBefore + 1)
+  }
+
   func testRunningTurnsAggregateAcrossSessionsAndLeadWithTheMostRecentlyTouched() async {
     let clock = Clock()
     let store = InMemoryWidgetSnapshotStore()

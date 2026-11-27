@@ -13,7 +13,8 @@ public final class SessionsViewModel {
   public private(set) var loadMoreError: APIError?
   /// `true` while the rows on screen came from disk and have not been confirmed by the server yet.
   public private(set) var isShowingCachedRows = false
-  /// The last rename or delete that failed and was rolled back; `nil` once dismissed or after the next mutation.
+  /// The last rename or delete that failed and was rolled back; stays until dismissed so a later swipe on another
+  /// row cannot hide it.
   public private(set) var mutationError: APIError?
 
   @ObservationIgnored private var pages = PageAccumulator<SessionSummary>()
@@ -24,6 +25,10 @@ public final class SessionsViewModel {
   /// another view is waiting on.
   @ObservationIgnored private var refreshTask: Task<Void, Never>?
   private var mutatingIDs: Set<String> = []
+  /// Deletes in flight. A refresh or next page the server answers before it commits would show the row again.
+  @ObservationIgnored private var pendingDeleteIDs: Set<String> = []
+  /// Bumped each time a refresh replaces the loaded pages, which makes an index taken before it meaningless.
+  @ObservationIgnored private var listEpoch = 0
   @ObservationIgnored private let onDeleted: @MainActor (String) async -> Void
   @ObservationIgnored private let onRenamed: @MainActor (String, String) async -> Void
   /// Bumped by `reset()`. Work that awaited across a reset belongs to the previous account and must not write.
@@ -78,17 +83,14 @@ public final class SessionsViewModel {
       let page = try await api.listSessions(cursor: nil, limit: pageSize)
       guard generation == self.generation else { return }
       pages.replace(with: page)
-      sessions = pages.items
+      listEpoch += 1
+      sessions = visibleItems
       isShowingCachedRows = false
       loadMoreError = nil
       state = .loaded
-      await cache.save(pages.items)
+      await cache.save(sessions)
     } catch {
       guard generation == self.generation else { return }
-      if Self.isCancellation(error) {
-        if state == .loading { state = .idle }
-        return
-      }
       state = .failed(Self.apiError(from: error))
     }
   }
@@ -110,7 +112,7 @@ public final class SessionsViewModel {
       let page = try await api.listSessions(cursor: cursor, limit: pageSize)
       guard generation == self.generation else { return }
       pages.append(page)
-      sessions = pages.items
+      sessions = visibleItems
       loadMoreError = nil
     } catch {
       guard generation == self.generation, !Self.isCancellation(error) else { return }
@@ -128,7 +130,6 @@ public final class SessionsViewModel {
     let generation = self.generation
     mutatingIDs.insert(id)
     defer { if generation == self.generation { mutatingIDs.remove(id) } }
-    mutationError = nil
 
     let optimistic = SessionSummary(
       id: id, name: name, lastUsedModel: original.lastUsedModel, firstCreated: original.firstCreated,
@@ -144,6 +145,8 @@ public final class SessionsViewModel {
       let apiError = Self.apiError(from: error)
       if apiError == .notFound {
         remove(id)
+        await onDeleted(id)
+        guard generation == self.generation else { return }
       } else if sessions.first(where: { $0.id == id })?.name == name {
         // A refresh that landed meanwhile owns the row unless it still shows our optimistic name.
         replace(id, with: original)
@@ -160,23 +163,32 @@ public final class SessionsViewModel {
     guard !mutatingIDs.contains(id), let index = sessions.firstIndex(where: { $0.id == id }) else { return }
     let generation = self.generation
     mutatingIDs.insert(id)
-    defer { if generation == self.generation { mutatingIDs.remove(id) } }
-    mutationError = nil
+    pendingDeleteIDs.insert(id)
+    defer {
+      if generation == self.generation {
+        mutatingIDs.remove(id)
+        pendingDeleteIDs.remove(id)
+      }
+    }
 
     let original = sessions[index]
     let pageIndex = pages.items.firstIndex(where: { $0.id == id })
+    let epoch = listEpoch
     remove(id)
     do {
-      do {
-        try await api.deleteSession(id: id)
-      } catch APIError.notFound {}
+      try await api.deleteSession(id: id)
       guard generation == self.generation else { return }
       // A refresh or next page fetched before the server committed may have brought the row back.
       remove(id)
       await onDeleted(id)
     } catch {
       guard generation == self.generation else { return }
-      if !sessions.contains(where: { $0.id == id }) {
+      pendingDeleteIDs.remove(id)
+      if pages.items.contains(where: { $0.id == id }) {
+        // A refresh or next page brought the row back while it was hidden; show the server's order.
+        sessions = visibleItems
+      } else if epoch == listEpoch, !sessions.contains(where: { $0.id == id }) {
+        // After a refresh the old index points into a different first page; the row returns with its page.
         if let pageIndex { pages.insertItem(original, at: pageIndex) }
         sessions.insert(original, at: min(index, sessions.count))
       }
@@ -198,8 +210,10 @@ public final class SessionsViewModel {
     sessions = []
     state = .idle
     isLoadingMore = false
+    refreshTask?.cancel()
     refreshTask = nil
     mutatingIDs = []
+    pendingDeleteIDs = []
     loadMoreError = nil
     isShowingCachedRows = false
     mutationError = nil
@@ -211,6 +225,8 @@ public final class SessionsViewModel {
     pages.replaceItem(id: id, with: session)
     if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index] = session }
   }
+
+  private var visibleItems: [SessionSummary] { pages.items.filter { !pendingDeleteIDs.contains($0.id) } }
 
   private func remove(_ id: String) {
     pages.removeItem(id: id)

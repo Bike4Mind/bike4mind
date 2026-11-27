@@ -74,6 +74,12 @@ public actor WidgetSnapshotRecorder {
     publishRunning()
   }
 
+  /// Drops a deleted session from the running-agents aggregate.
+  public func recordDeleted(sessionID: String) {
+    guard activeSessions.removeValue(forKey: sessionID) != nil else { return }
+    publishRunning()
+  }
+
   /// The app only observes agents while it is open, so a fresh process knows of none.
   public func clearRunning() {
     activeSessions.removeAll()

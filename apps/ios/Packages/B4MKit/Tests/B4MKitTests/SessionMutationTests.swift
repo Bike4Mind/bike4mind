@@ -66,13 +66,14 @@ final class SessionMutationTests: XCTestCase {
   }
 
   func testRenamingASessionTheServerNoLongerHasDropsTheRow() async {
-    let (model, api, _, _) = await makeModel()
+    let (model, api, _, log) = await makeModel()
     await api.setRenameFailure(.notFound)
 
     await model.rename("b", to: "Trip notes")
 
     XCTAssertEqual(model.sessions.map(\.id), ["a", "c"])
     XCTAssertEqual(model.mutationError, .notFound)
+    XCTAssertEqual(log.ids, ["b"])
   }
 
   func testDeleteRemovesTheRowEverywhere() async {
@@ -156,6 +157,72 @@ final class SessionMutationTests: XCTestCase {
 
     XCTAssertEqual(model.sessions.map(\.name), ["Session a", "Renamed on the web"])
     XCTAssertEqual(model.mutationError, .offline)
+  }
+
+  func testARefreshDuringADeleteKeepsTheRowHidden() async {
+    let (model, api, _, _) = await makeModel()
+    await api.holdMutations()
+
+    let delete = Task { await model.delete("b") }
+    await waitForMutation(api)
+    await model.refresh()
+
+    XCTAssertEqual(model.sessions.map(\.id), ["a", "c"])
+    await api.releaseMutations()
+    await delete.value
+    XCTAssertEqual(model.sessions.map(\.id), ["a", "c"])
+  }
+
+  func testARefusedDeleteAfterARefreshShowsTheServersOrder() async {
+    let (model, api, cache, _) = await makeModel()
+    await api.setDeleteFailure(.conflict)
+    await api.holdMutations()
+
+    let delete = Task { await model.delete("b") }
+    await waitForMutation(api)
+    await api.setSessionPages([nil: Page(items: ["b", "a", "c"].map { Samples.session($0) }, nextCursor: nil)])
+    await model.refresh()
+    await api.releaseMutations()
+    await delete.value
+
+    XCTAssertEqual(model.sessions.map(\.id), ["b", "a", "c"])
+    let cached = await cache.load()
+    XCTAssertEqual(cached?.map(\.id), ["b", "a", "c"])
+  }
+
+  func testARefusedDeleteOfALaterPageRowWaitsForItsPageAfterARefresh() async {
+    let (model, api, _, _) = await makeModel(nextCursor: "c2")
+    await api.setSessionPages([
+      nil: Page(items: ["a", "b"].map { Samples.session($0) }, nextCursor: "c2"),
+      "c2": Page(items: ["c", "d"].map { Samples.session($0) }, nextCursor: nil),
+    ])
+    await model.refresh()
+    await model.loadMore()
+    await api.setDeleteFailure(.conflict)
+    await api.holdMutations()
+
+    let delete = Task { await model.delete("d") }
+    await waitForMutation(api)
+    await model.refresh()
+    await api.releaseMutations()
+    await delete.value
+
+    XCTAssertEqual(model.sessions.map(\.id), ["a", "b"])
+    await model.loadMore()
+    XCTAssertEqual(model.sessions.map(\.id), ["a", "b", "c", "d"])
+  }
+
+  func testAFailureStaysVisibleWhenAnotherRowIsChanged() async {
+    let (model, api, _, _) = await makeModel()
+    await api.setDeleteFailure(.conflict)
+    await model.delete("a")
+    await api.setDeleteFailure(nil)
+
+    await model.rename("b", to: "Trip notes")
+
+    XCTAssertEqual(model.mutationError, .conflict)
+    model.dismissMutationError()
+    XCTAssertNil(model.mutationError)
   }
 
   func testASecondMutationOfARowInFlightIsIgnored() async {
