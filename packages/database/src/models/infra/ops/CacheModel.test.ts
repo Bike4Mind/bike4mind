@@ -205,6 +205,17 @@ describe('CacheRepository.findByKey', () => {
     expect(doc?.result).toEqual({ value: 'fresh' });
   });
 
+  it('keeps empty objects in a stored result on a cache hit', async () => {
+    // The spend timeline caches buckets whose `series` can be `{}`; a hit must hand them back as stored.
+    const key = `cache:empty:${Date.now()}`;
+    const result = { buckets: [{ at: 1, series: {} }], meta: {} };
+    await cacheRepository.createOrUpdate({ key, result, expiresAt: new Date(Date.now() + 60_000) });
+
+    const doc = await cacheRepository.findByKey(key);
+
+    expect(doc?.result).toEqual(result);
+  });
+
   it('resolves exactly null for a key that has no row', async () => {
     expect(await cacheRepository.findByKey(`cache:missing:${Date.now()}`)).toBeNull();
   });
