@@ -200,11 +200,19 @@ function assertInstalledFromTarballs(consumerDir, packages) {
   if (problems.length > 0) throw new Error(problems.join('\n'));
 }
 
+// Third-party declarations (@modelcontextprotocol/sdk) name the DOM-only HeadersInit; a one-type shim keeps the
+// consumer DOM-free (the self-test still proves it) without hiding dangling names in our own dist.
+const SHIMS_FILE = 'shims.d.ts';
+
 function writeTsconfigs(consumerDir) {
+  fs.writeFileSync(
+    path.join(consumerDir, SHIMS_FILE),
+    'type HeadersInit = Record<string, string> | [string, string][];\n'
+  );
   for (const { name, options, entries } of CONFIGS) {
     const compilerOptions = { ...COMPILER_OPTIONS, ...options };
     const selfTestEntries = entries.map(entry => entry.replace(/^(?:esm|cjs)\./, 'selftest.'));
-    writeJson(path.join(consumerDir, `tsconfig.${name}.json`), { compilerOptions, include: entries });
+    writeJson(path.join(consumerDir, `tsconfig.${name}.json`), { compilerOptions, include: [...entries, SHIMS_FILE] });
     writeJson(path.join(consumerDir, `tsconfig.selftest-${name}.json`), { compilerOptions, include: selfTestEntries });
   }
 }
