@@ -87,7 +87,9 @@ def dependency_inputs(ref):
             if not version.startswith(('link:', 'workspace:')):
                 version = version[4:] if version.startswith('npm:') else version
                 # An npm alias resolves to `<target>@<version>`, which is already the snapshot key.
-                queue.append(version if '@' in version.split('(')[0][1:] else f'{name}@{version}')
+                bare = version.split('(')[0]
+                is_alias = '@' in bare[1:] and '://' not in bare and not bare.startswith('file:')
+                queue.append(version if is_alias else f'{name}@{version}')
 
     for importer in importers.values():
         for group in GROUPS:
