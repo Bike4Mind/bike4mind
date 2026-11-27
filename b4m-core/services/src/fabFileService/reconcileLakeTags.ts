@@ -242,7 +242,7 @@ export const reconcileLakeTags = async (
   for (const lake of [...joins]) {
     // Managing the lake is not enough: its meta-tag is read access, so the cold-add ownership rule applies.
     const mayJoin = canManage(lake) && canColdAddFileToLake(lake, actor, grantResolver.get(lake.id), owner);
-    if (!mayJoin && canManage(lake) && resentNonCanonicalLakes.has(lake)) {
+    if (!mayJoin && resentNonCanonicalLakes.has(lake)) {
       // A stale miscased tag the actor may not turn into membership: drop it rather than refuse,
       // so an unrelated edit (rename, content) still saves.
       joins.splice(joins.indexOf(lake), 1);
