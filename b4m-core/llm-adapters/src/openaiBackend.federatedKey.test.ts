@@ -93,7 +93,11 @@ describe('OpenAIBackend federated key', () => {
 
     const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
     expect(clientKey(backend)).toBeNull();
-    await expect(apiOf(backend)._options.apiKey()).resolves.toBe('openai-access-token');
+    const resolveBeforeSend = (backend as unknown as { clientForNextRequest(): Promise<{ token?: string }> })
+      .clientForNextRequest;
+    await expect(resolveBeforeSend.call(backend)).resolves.toMatchObject({ token: { value: 'openai-access-token' } });
+    // The client only sends a token resolved before send, never exchanging inside a request.
+    await expect(apiOf(backend)._options.apiKey()).rejects.toThrow(/resolved before send/);
     expect(stsSend).toHaveBeenCalledWith(
       { input: { Audience: ['aud-sts'], SigningAlgorithm: 'RS256' } },
       {
@@ -106,6 +110,74 @@ describe('OpenAIBackend federated key', () => {
       service_account_id: 'sa_sts',
     });
   });
+
+  it.each([
+    [60, 2],
+    [3600, 1],
+  ])(
+    'exchanges again up front once under two minutes remain (expires_in %ss -> %s exchanges for two calls)',
+    async (expiresIn, exchanges) => {
+      process.env.PROVIDER_WIF_TOKEN_SOURCE = 'aws-sts';
+      process.env.OPENAI_IDENTITY_PROVIDER_ID = 'idp_expiry';
+      process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_expiry';
+      process.env.OPENAI_WIF_AUDIENCE = `aud-expiry-${expiresIn}`;
+      stsSend.mockResolvedValue({ WebIdentityToken: 'sts-jwt' });
+      const tokenExchange = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ access_token: 'openai-access-token', expires_in: expiresIn }), {
+            status: 200,
+          })
+      );
+      vi.stubGlobal('fetch', tokenExchange);
+      const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
+      const resolveBeforeSend = (backend as unknown as { clientForNextRequest(): Promise<{ token?: string }> })
+        .clientForNextRequest;
+      await resolveBeforeSend.call(backend);
+      await resolveBeforeSend.call(backend);
+      expect(tokenExchange).toHaveBeenCalledTimes(exchanges);
+    }
+  );
+
+  it.each([
+    [20, 2],
+    [3600, 1],
+  ])(
+    'exchanges again inside the request only when the call token would not outlive it (expires_in %ss -> %s)',
+    async (expiresIn, exchanges) => {
+      process.env.PROVIDER_WIF_TOKEN_SOURCE = 'aws-sts';
+      process.env.OPENAI_IDENTITY_PROVIDER_ID = 'idp_retry';
+      process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_retry';
+      process.env.OPENAI_WIF_AUDIENCE = `aud-retry-${expiresIn}`;
+      stsSend.mockResolvedValue({ WebIdentityToken: 'sts-jwt' });
+      const tokenExchanges: string[] = [];
+      const sentAuth: (string | null)[] = [];
+      vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body === 'string' && init.body.includes('subject_token')) {
+          tokenExchanges.push(String(input));
+          const accessToken = `token-${tokenExchanges.length}`;
+          return new Response(JSON.stringify({ access_token: accessToken, expires_in: expiresIn }), { status: 200 });
+        }
+        sentAuth.push(new Headers(init?.headers).get('authorization'));
+        return new Response(
+          JSON.stringify({
+            id: 'c1',
+            object: 'chat.completion',
+            created: 0,
+            model: 'gpt-4o',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      });
+
+      const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
+      await backend.complete('gpt-4o', [{ role: 'user', content: 'hi' }], { stream: false }, async () => {});
+
+      expect(tokenExchanges).toHaveLength(exchanges);
+      expect(sentAuth).toEqual([`Bearer token-${exchanges}`]);
+    }
+  );
 
   it('names the missing variables instead of failing later', () => {
     expect(() => new OpenAIBackend(OPENAI_FEDERATED_KEY)).toThrow(/OPENAI_IDENTITY_PROVIDER_ID/);
@@ -121,7 +193,7 @@ describe('OpenAIBackend federated key', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://token.example/oidc?api-version=2.0&audience=https%3A%2F%2Fapi.openai.com%2Fv1',
-      { headers: { Authorization: 'Bearer req-token' } }
+      { headers: { Authorization: 'Bearer req-token' }, signal: expect.any(AbortSignal) }
     );
   });
 

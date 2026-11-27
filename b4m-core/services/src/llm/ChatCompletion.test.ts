@@ -16109,6 +16109,23 @@ describe('prompt moderation', () => {
     expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: false, anthropic: false });
   });
 
+  it.each([
+    ['federated', { openai: false, anthropic: true }],
+    ['static', { openai: false, anthropic: false }],
+  ] as const)('wires anthropicCredentialMode=%s to the anthropic key only', async (mode, expected) => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key', anthropic: 'demo-anthropic-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: true });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ anthropicCredentialMode: mode, openaiCredentialMode: 'static' });
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(federatedSharedKeyProviders(chatKeys!)).toEqual(expected);
+  });
+
   it('retains the primary chat federation provenance when attempting a fallback', async () => {
     wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
     const effectiveKeys = { openai: 'demo-key' };

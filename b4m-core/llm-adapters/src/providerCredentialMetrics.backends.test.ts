@@ -27,6 +27,7 @@ vi.mock('@aws-sdk/client-sts', () => ({
 import { ANTHROPIC_FEDERATED_KEY, AnthropicBackend } from './anthropicBackend';
 import { OPENAI_FEDERATED_KEY, OpenAIBackend } from './openaiBackend';
 import type { ProviderCredentialSpec } from './providerAuth';
+import { resetProviderCredentialBackoff } from './providerCredentialResolution';
 
 type Backend = AnthropicBackend | OpenAIBackend;
 type Messages = Parameters<Backend['complete']>[1];
@@ -92,6 +93,7 @@ describe.each(['anthropic', 'openai'] as const)('%s backend credential resolutio
     anthropicExchange.mockReset();
     openaiExchange.mockReset();
     openaiInvalidate.mockReset();
+    resetProviderCredentialBackoff();
     stubFederationEnv();
     sent = stubProviderApi();
   });
@@ -168,64 +170,154 @@ describe('openai backend federated 401', () => {
   it('drops the cached token on a 401 so the next call re-exchanges, without resending', async () => {
     recordProviderCredentialUse.mockReset();
     openaiInvalidate.mockReset();
+    resetProviderCredentialBackoff();
     stubFederationEnv();
     const sent = stubProviderApi(401);
     openaiExchange.mockResolvedValue(FEDERATED_TOKEN);
     const backend = new OpenAIBackend({ kind: 'federated', fallbackKey: PLATFORM_KEY });
     await expect(backend.complete(ChatModels.GPT4o, messages, { stream: false }, async () => {})).rejects.toBeDefined();
     expect(sent.credentials).toEqual([FEDERATED_TOKEN]);
-    expect(openaiInvalidate).toHaveBeenCalledTimes(1);
+    // Invalidated after the rejected request, not only before sending.
+    const requestOrder = vi.mocked(fetch).mock.invocationCallOrder[0];
+    expect(openaiInvalidate.mock.invocationCallOrder.at(-1)).toBeGreaterThan(requestOrder);
   });
 });
 
-describe('openai backend concurrent calls', () => {
+const sampleTool = {
+  toolSchema: {
+    name: 'lookup',
+    description: 'Look something up.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+  },
+};
+
+// A 503 our withRetry retries (by its message) and the SDKs do not (x-should-retry: false).
+const retryable503 = () =>
+  new Response(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'service unavailable' } }), {
+    status: 503,
+    headers: { 'content-type': 'application/json', 'x-should-retry': 'false' },
+  });
+const rejected400 = () =>
+  new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'rejected' } }), {
+    status: 400,
+    headers: { 'content-type': 'application/json' },
+  });
+
+/** Every provider API request, by the credential it carried; `respond` answers the n-th (0-based). */
+function stubProviderApiWith(respond: (n: number) => Response): { credentials: string[] } {
+  const sent = { credentials: [] as string[] };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { headers?: HeadersInit }) => {
+      const headers = new Headers(init?.headers);
+      sent.credentials.push(headers.get('x-api-key') ?? headers.get('authorization')?.replace(/^Bearer /, '') ?? '');
+      return respond(sent.credentials.length - 1);
+    })
+  );
+  return sent;
+}
+
+describe.each(['anthropic', 'openai'] as const)('%s backend credential resolution, other paths', provider => {
+  beforeEach(() => {
+    recordProviderCredentialUse.mockReset();
+    anthropicExchange.mockReset();
+    openaiExchange.mockReset();
+    resetProviderCredentialBackoff();
+    stubFederationEnv();
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
+  // Anthropic streaming and the OpenAI Responses API each send from their own call site.
+  const otherPath = (): Options =>
+    provider === 'anthropic' ? { stream: true } : ({ stream: false, tools: [sampleTool] } as Options);
+  const otherModel = () => (provider === 'anthropic' ? ChatModels.CLAUDE_4_5_HAIKU : ChatModels.GPT5);
+
+  it('sends the federated token on the streaming / Responses path', async () => {
+    exchangeSucceeds();
+    const sent = stubProviderApiWith(rejected400);
+    const backend = build(provider, { kind: 'federated', fallbackKey: PLATFORM_KEY });
+    await backend.complete(otherModel(), messages, otherPath(), async () => {}).catch(() => {});
+    expect(sent.credentials).toEqual([FEDERATED_TOKEN]);
+    expect(recordProviderCredentialUse).toHaveBeenCalledExactlyOnceWith(provider, 'federated');
+  });
+
+  it('sends the platform key on the streaming / Responses path when the exchange fails', async () => {
+    anthropicExchange.mockRejectedValue(new Error('exchange refused'));
+    openaiExchange.mockRejectedValue(new Error('exchange refused'));
+    const sent = stubProviderApiWith(rejected400);
+    const backend = build(provider, { kind: 'federated', fallbackKey: PLATFORM_KEY });
+    await backend.complete(otherModel(), messages, otherPath(), async () => {}).catch(() => {});
+    expect(sent.credentials).toEqual([PLATFORM_KEY]);
+    expect(recordProviderCredentialUse).toHaveBeenCalledExactlyOnceWith(provider, 'static_fallback');
+  });
+
+  it('fails the call, never resolving it as an abort, when a keyless exchange times out', async () => {
+    const timeout = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    anthropicExchange.mockRejectedValue(timeout);
+    openaiExchange.mockRejectedValue(timeout);
+    const sent = stubProviderApiWith(rejected400);
+    const backend = build(provider, { kind: 'federated', fallbackKey: null });
+    await expect(backend.complete(otherModel(), messages, otherPath(), async () => {})).rejects.toThrow(
+      /federated token exchange failed/
+    );
+    expect(sent.credentials).toEqual([]);
+  });
+
+  it('retries a 5xx with the federated token and never falls back', { timeout: 20_000 }, async () => {
+    exchangeSucceeds();
+    const sent = stubProviderApiWith(retryable503);
+    const backend = build(provider, { kind: 'federated', fallbackKey: PLATFORM_KEY });
+    await completeIgnoringFailure(backend, provider);
+    expect(sent.credentials.length).toBeGreaterThan(1);
+    expect(new Set(sent.credentials)).toEqual(new Set([FEDERATED_TOKEN]));
+    expect(recordProviderCredentialUse).toHaveBeenCalledExactlyOnceWith(provider, 'federated');
+  });
+
   it("keeps a fallback call's retry on the static key while a federated call completes during its backoff", async () => {
-    recordProviderCredentialUse.mockReset();
-    openaiExchange.mockReset();
-    stubFederationEnv();
-    const credentials: string[] = [];
     let firstRequestSeen!: () => void;
     const firstRequest = new Promise<void>(resolve => (firstRequestSeen = resolve));
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_input: unknown, init?: { headers?: HeadersInit }) => {
-        const headers = new Headers(init?.headers);
-        credentials.push(headers.get('authorization')?.replace(/^Bearer /, '') ?? '');
-        if (credentials.length === 1) {
-          firstRequestSeen();
-          // Retryable for our withRetry, but not retried inside the SDK.
-          return new Response(JSON.stringify({ error: { message: 'service unavailable' } }), {
-            status: 503,
-            headers: { 'content-type': 'application/json', 'x-should-retry': 'false' },
-          });
-        }
-        return new Response(JSON.stringify({ error: { message: 'rejected in test' } }), {
-          status: 400,
-          headers: { 'content-type': 'application/json' },
-        });
-      })
-    );
-    openaiExchange.mockRejectedValueOnce(new Error('Token exchange failed with status 503'));
-    openaiExchange.mockResolvedValue(FEDERATED_TOKEN);
-    const backend = new OpenAIBackend({ kind: 'federated', fallbackKey: PLATFORM_KEY });
-    const complete = () =>
-      backend.complete(ChatModels.GPT4o, messages, { stream: false }, async () => {}).catch(() => {});
+    const sent = stubProviderApiWith(n => {
+      if (n > 0) return rejected400();
+      firstRequestSeen();
+      return retryable503();
+    });
+    anthropicExchange
+      .mockRejectedValueOnce(new Error('exchange refused'))
+      .mockResolvedValue({ token: FEDERATED_TOKEN, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
+    openaiExchange.mockRejectedValueOnce(new Error('exchange refused')).mockResolvedValue(FEDERATED_TOKEN);
+    const backend = build(provider, { kind: 'federated', fallbackKey: PLATFORM_KEY });
 
-    const fallbackCall = complete();
+    const fallbackCall = completeIgnoringFailure(backend, provider);
     await firstRequest;
+    // Stand in for the exchange backoff window having passed, so the next call federates.
+    resetProviderCredentialBackoff();
     // Resolves while the fallback call sits in its retry backoff.
-    await complete();
+    await completeIgnoringFailure(backend, provider);
     await fallbackCall;
 
-    expect(credentials).toEqual([PLATFORM_KEY, FEDERATED_TOKEN, PLATFORM_KEY]);
+    expect(sent.credentials).toEqual([PLATFORM_KEY, FEDERATED_TOKEN, PLATFORM_KEY]);
     expect(recordProviderCredentialUse.mock.calls).toEqual([
-      ['openai', 'static_fallback'],
-      ['openai', 'federated'],
+      [provider, 'static_fallback'],
+      [provider, 'federated'],
+    ]);
+  });
+
+  it('skips the exchange during the backoff after a failure, still recording static_fallback', async () => {
+    const exchange = provider === 'anthropic' ? anthropicExchange : openaiExchange;
+    exchange.mockRejectedValue(new Error('exchange refused'));
+    const sent = stubProviderApiWith(rejected400);
+    const backend = build(provider, { kind: 'federated', fallbackKey: PLATFORM_KEY });
+    await completeIgnoringFailure(backend, provider);
+    await completeIgnoringFailure(backend, provider);
+    expect(exchange).toHaveBeenCalledTimes(1);
+    expect(sent.credentials).toEqual([PLATFORM_KEY, PLATFORM_KEY]);
+    expect(recordProviderCredentialUse.mock.calls).toEqual([
+      [provider, 'static_fallback'],
+      [provider, 'static_fallback'],
     ]);
   });
 });

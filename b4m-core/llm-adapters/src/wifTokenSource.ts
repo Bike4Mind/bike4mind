@@ -34,7 +34,7 @@ export async function githubActionsIdToken(audience: string): Promise<string> {
   if (!url || !requestToken) {
     throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
   }
-  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
+  const res = await exchangeFetch(`${url}&audience=${encodeURIComponent(audience)}`, {
     headers: { Authorization: `Bearer ${requestToken}` },
   });
   if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);

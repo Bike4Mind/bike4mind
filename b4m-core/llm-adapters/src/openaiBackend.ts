@@ -141,18 +141,90 @@ const effortMap_GPT5_1_2 = {
  */
 export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
-type FederatedOpenAI = { client: OpenAI; auth: WorkloadIdentityAuth };
+/** A token is exchanged again up front, before the call is sent, once less than this is left. */
+export const MIN_FEDERATED_TOKEN_LIFETIME_MS = 120_000;
+
+/**
+ * A retry inside one call reuses the call's token while at least this is left. Past it (a long
+ * call that is then retried) the retry exchanges again inside the request, as the SDK's own
+ * lazy exchange did; a failure there fails that attempt, never switches credential.
+ */
+const RETRY_TOKEN_MARGIN_MS = 30_000;
+
+type IssuedToken = { value: string; expiresAt: number };
+
+/** Exchanged OpenAI access tokens, with their expiry tracked from each exchange response. */
+class FederatedOpenAIToken {
+  private readonly auth: WorkloadIdentityAuth;
+  private expiresAt = 0;
+  private refreshing?: Promise<string>;
+
+  constructor(config: ConstructorParameters<typeof WorkloadIdentityAuth>[0]) {
+    this.auth = new WorkloadIdentityAuth(config, this.trackingFetch);
+  }
+
+  /** A token with at least MIN_FEDERATED_TOKEN_LIFETIME_MS left, exchanging again when below. */
+  async fresh(): Promise<IssuedToken> {
+    const value = await this.freshValue();
+    return { value, expiresAt: this.expiresAt };
+  }
+
+  private freshValue(): Promise<string> {
+    if (this.expiresAt - Date.now() >= MIN_FEDERATED_TOKEN_LIFETIME_MS) return this.auth.getToken();
+    this.refreshing ??= (async () => {
+      try {
+        this.auth.invalidateToken();
+        return await this.auth.getToken();
+      } finally {
+        this.refreshing = undefined;
+      }
+    })();
+    return this.refreshing;
+  }
+
+  invalidate(): void {
+    this.expiresAt = 0;
+    this.auth.invalidateToken();
+  }
+
+  // Reads `expires_in` the way WorkloadIdentityAuth does (default 3600 s), timed slightly earlier.
+  private readonly trackingFetch: typeof fetch = async (input, init) => {
+    const issuedAt = Date.now();
+    const response = await exchangeFetch(input, init);
+    if (response.ok) {
+      const body: unknown = await response
+        .clone()
+        .json()
+        .catch(() => undefined);
+      const expiresIn =
+        typeof body === 'object' && body !== null && 'expires_in' in body && typeof body.expires_in === 'number'
+          ? body.expires_in
+          : 3600;
+      this.expiresAt = issuedAt + expiresIn * 1000;
+    }
+    return response;
+  };
+}
+
+type FederatedOpenAI = { client: OpenAI; token: FederatedOpenAIToken };
 
 // One client per config so its exchanged-token cache outlives the per-request backend.
 const federatedOpenAIClients = new Map<string, FederatedOpenAI>();
 
+// The token the in-flight complete() call resolved before sending; see federatedOpenAIClient.
+const callToken = new AsyncLocalStorage<IssuedToken>();
+
 /**
- * The client authenticates through `apiKey: () => auth.getToken()` rather than the SDK's
- * `workloadIdentity` option, whose exchange runs lazily inside the request and is not reachable
- * from outside. Holding the WorkloadIdentityAuth lets the backend run the exchange before a
- * request is sent (see OpenAIBackend.clientForNextRequest); the request then reads the
- * cached token. Unlike `workloadIdentity`, a 401 is not retried (the request was sent); the
- * backend drops the cached token so the next request exchanges again.
+ * The client authenticates through a function `apiKey` rather than the SDK's `workloadIdentity`
+ * option, whose exchange runs lazily inside the request. The backend exchanges before a request
+ * is sent (OpenAIBackend.clientForNextRequest) and runs the call with that token in `callToken`;
+ * the SDK reads it on every attempt, exchanging again only for a retry the call's token would
+ * not outlive (RETRY_TOKEN_MARGIN_MS). A 401 is not retried (the request was sent); the backend
+ * drops the token so the next call exchanges again.
+ *
+ * The SDK stores the key on the shared client before building headers, so two concurrent calls
+ * can send each other's token. Both are live tokens of this one identity, so only which of them
+ * is sent can differ, never the credential kind.
  */
 function federatedOpenAIClient(): FederatedOpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
@@ -168,21 +240,26 @@ function federatedOpenAIClient(): FederatedOpenAI {
   let federated = federatedOpenAIClients.get(cacheKey);
   if (!federated) {
     const getSubjectToken = subjectTokenSource(source);
-    const auth = new WorkloadIdentityAuth(
-      {
-        identityProviderId,
-        serviceAccountId,
-        provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
-        // No background refresh: its failure is an unawaited rejection, and it would let a
-        // request count as federated while the exchange is failing. A token is exchanged again
-        // once it expires, on the awaited path the backend runs before sending.
-        refreshBufferSeconds: 0,
-      },
-      exchangeFetch
-    );
+    const token = new FederatedOpenAIToken({
+      identityProviderId,
+      serviceAccountId,
+      provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
+      // No background refresh: its failure is an unawaited rejection. FederatedOpenAIToken
+      // exchanges again, on the awaited path before sending, once the token runs low.
+      refreshBufferSeconds: 0,
+    });
     // A function apiKey never falls back to an OPENAI_API_KEY in the environment.
-    const client = new OpenAI({ apiKey: () => auth.getToken(), fetchOptions: providerFetchOptions() });
-    federated = { client, auth };
+    const client = new OpenAI({
+      apiKey: async () => {
+        const resolved = callToken.getStore();
+        if (resolved === undefined)
+          throw new Error('Federated OpenAI request sent without a token resolved before send');
+        if (resolved.expiresAt - Date.now() >= RETRY_TOKEN_MARGIN_MS) return resolved.value;
+        return (await token.fresh()).value;
+      },
+      fetchOptions: providerFetchOptions(),
+    });
+    federated = { client, token };
     federatedOpenAIClients.set(cacheKey, federated);
   }
   return federated;
@@ -314,23 +391,27 @@ export class OpenAIBackend implements ICompletionBackend {
    * before anything is sent; see ResolvedProviderCredential for why a later failure never
    * falls back. The exchange itself is forced here via the shared WorkloadIdentityAuth.
    */
-  private async clientForNextRequest(): Promise<OpenAI> {
+  private async clientForNextRequest(signal?: AbortSignal): Promise<{ client: OpenAI; token?: IssuedToken }> {
     const federated = this.federated;
+    let token: IssuedToken | undefined;
     const resolved = await resolveCredentialBeforeSend({
       provider: 'openai',
       spec: this.credential,
       setupError: this.federationSetupError,
       exchange: async () => {
-        await federated?.auth.getToken();
+        token = await federated?.token.fresh();
       },
       logger: this.logger,
+      signal,
     });
     // A static or user key keeps the constructor's client; `_api` itself is never reassigned, so
     // concurrent calls on this instance each send on the client their own credential resolved.
-    if (resolved.kind === 'static_fallback') return this.staticClient(resolved.key);
-    if (resolved.kind !== 'federated') return this._api;
-    if (!federated) throw new Error('Federated OpenAI credential resolved without a federated client');
-    return federated.client;
+    if (resolved.kind === 'static_fallback') return { client: this.staticClient(resolved.key) };
+    if (resolved.kind !== 'federated') return { client: this._api };
+    if (!federated || token === undefined) {
+      throw new Error('Federated OpenAI credential resolved without a federated client');
+    }
+    return { client: federated.client, token };
   }
 
   setDispatchModel(info: ModelInfo): void {
@@ -1200,16 +1281,18 @@ export class OpenAIBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    const client = await this.clientForNextRequest();
-    try {
-      return await this.requestClient.run(client, () =>
+    const { client, token } = await this.clientForNextRequest(options.abortSignal);
+    const run = () =>
+      this.requestClient.run(client, () =>
         this.completeWithResolvedCredential(model, messages, options, callback, toolsUsed)
       );
+    try {
+      return await (token === undefined ? run() : callToken.run(token, run));
     } catch (err) {
       // The provider rejected an issued token (e.g. revoked early): never resend, but stop
       // serving that token from the cache.
       if (err instanceof OpenAI.AuthenticationError && this.federated?.client === client) {
-        this.federated.auth.invalidateToken();
+        this.federated.token.invalidate();
       }
       throw err;
     }
