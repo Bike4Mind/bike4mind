@@ -19,11 +19,15 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 vi.mock('./tokenGenerator', () => ({ authTokenGenerator: { signAccessToken: vi.fn() } }));
 vi.mock('./sessionDevice', () => ({ buildSessionDevice: () => ({ label: 'test' }) }));
-vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({ setRefreshCookie: vi.fn() }));
+const setRefreshCookie = vi.fn();
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
+  setRefreshCookie: (...args: unknown[]) => setRefreshCookie(...args),
+}));
 const recordLoginEvent = vi.fn();
 vi.mock('./networkMeta', () => ({ recordLoginEvent: (...args: unknown[]) => recordLoginEvent(...args) }));
 
-import { issueSessionForRequest } from './issueSession';
+import { issueBrowserSession, issueSessionForRequest } from './issueSession';
+import { authTokenGenerator } from './tokenGenerator';
 
 const req = { headers: {} };
 
@@ -59,6 +63,26 @@ describe('issueSessionForRequest', () => {
       expect(recordLoginEvent).not.toHaveBeenCalled();
     }
   );
+
+  it('binds the access-token signer to the shared generator', async () => {
+    issueSession.mockImplementation(async (_id, _params, deps) => {
+      deps.signAccessToken('u1', 2, { kind: 'oauth' });
+      return { accessToken: 'a', refreshToken: 'r', sid: 's' };
+    });
+
+    await issueSessionForRequest(req, 'u1', { createdVia: 'device', tokenVersion: 0 });
+
+    expect(authTokenGenerator.signAccessToken).toHaveBeenCalledWith('u1', 2, { kind: 'oauth' });
+  });
+
+  it('issueBrowserSession puts the refresh token in the cookie and returns only the access token', async () => {
+    const res = {} as never;
+
+    const out = await issueBrowserSession(req, res, 'u1', { createdVia: 'otc', tokenVersion: 0 });
+
+    expect(setRefreshCookie).toHaveBeenCalledWith(res, 'r');
+    expect(out).toEqual({ accessToken: 'a', sid: 's' });
+  });
 
   describe('test personas', () => {
     const future = () => new Date(Date.now() + 60_000);

@@ -35,7 +35,8 @@ public final class BusyBlockBackgroundRefresh {
   public let identifier: String
   private let scheduler: any BackgroundRefreshScheduling
   private let now: @Sendable () -> Date
-  private let sync: @MainActor () async -> BusyBlockSyncOutcome
+  public typealias PreparedSync = @MainActor @Sendable () async -> BusyBlockSyncOutcome
+  private let prepareSync: @MainActor () -> PreparedSync
   private let logger = Logger(subsystem: "com.bike4mind.app", category: "busy-blocks")
 
   public init(
@@ -45,7 +46,17 @@ public final class BusyBlockBackgroundRefresh {
     self.identifier = identifier
     self.scheduler = scheduler
     self.now = now
-    self.sync = sync
+    self.prepareSync = { { await sync() } }
+  }
+
+  public init(
+    identifier: String, scheduler: any BackgroundRefreshScheduling, now: @escaping @Sendable () -> Date = { Date() },
+    prepareSync: @escaping @MainActor () -> PreparedSync
+  ) {
+    self.identifier = identifier
+    self.scheduler = scheduler
+    self.now = now
+    self.prepareSync = prepareSync
   }
 
   /// Submits the next run for the last known sync outcome (nil when unknown). Submit failures (the Simulator,
@@ -68,6 +79,7 @@ public final class BusyBlockBackgroundRefresh {
   /// expired the run first.
   public func handle(_ task: any BackgroundRefreshTask) {
     let completion = Completion(task: task)
+    let sync = prepareSync()
     let run = Task { await sync() }
     task.expirationHandler = { [weak self] in
       run.cancel()
