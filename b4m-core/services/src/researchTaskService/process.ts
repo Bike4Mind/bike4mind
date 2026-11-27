@@ -419,6 +419,7 @@ const processScrape = async (
           storage: adapters.storage,
         };
         mainFile = await fabFilesService.createFabFile(user.id, mainFileData, createFileAdapters);
+        if (result) await db.researchDatas.update({ id: result.researchData.id, fabFileId: mainFile.id });
       }
 
       files.push(mainFile);

@@ -76,7 +76,14 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
     return result?.toJSON() ?? null;
   }
 
-  async findAllByResearchTaskIdWithFiles(researchTaskId: string): Promise<IResearchDataWithFiles[]> {
+  async findAllByResearchTaskIdWithFiles(
+    researchTaskId: string,
+    ownerUserId: string
+  ): Promise<IResearchDataWithFiles[]> {
+    // FabFile.userId is stored as a string or an ObjectId depending on the writer, so match both.
+    const ownerIds: unknown[] = mongoose.isObjectIdOrHexString(ownerUserId)
+      ? [ownerUserId, new mongoose.Types.ObjectId(ownerUserId)]
+      : [ownerUserId];
     const pipeline = [
       {
         $match: {
@@ -103,6 +110,7 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
       {
         $unwind: '$fabFile',
       },
+      { $match: { 'fabFile.userId': { $in: ownerIds } } },
       {
         $addFields: {
           'fabFile.id': '$originalFabFileId',

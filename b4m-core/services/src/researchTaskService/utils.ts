@@ -61,6 +61,8 @@ export async function findExistingResearchData(
  * @param adapters - Service adapters containing repositories and storage
  * @param logger - Optional logger for tracking operations
  * @returns the file and matching research data if a duplicate already existed (content re-uploaded), or null when no existing record was found.
+ * `file` is null when the matching research data links a file the caller does not own: the caller creates a fresh
+ * file and relinks `researchData` to it.
  * `storageLimitReached` is true when the owner's quota refused the new content and the previous crawl was kept;
  * callers tell the user, since the task itself still succeeds.
  */
@@ -80,7 +82,7 @@ export async function findOrUpdateExistingResearchData(
     storage: CreateFabFileAdapters['storage'];
   },
   logger?: Pick<ILogger, 'info'> & Partial<Pick<ILogger, 'warn'>>
-): Promise<{ file: IFabFileDocument; researchData: IResearchData; storageLimitReached: boolean } | null> {
+): Promise<{ file: IFabFileDocument | null; researchData: IResearchData; storageLimitReached: boolean } | null> {
   const DEFAULT_EXPIRE_IN_SECONDS = 3600;
 
   // Find existing research data using the standardized lookup
@@ -90,6 +92,10 @@ export async function findOrUpdateExistingResearchData(
     logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Research data already exists for ${url}`);
 
     const existingFile = await adapters.db.fabFiles.findById(existingResearchData.fabFileId);
+    if (existingFile && String(existingFile.userId) !== user.id) {
+      logger?.warn?.(`[RESEARCH_DATA_EXISTS] Research data ${existingResearchData.id} links a file of another owner`);
+      return { file: null, researchData: existingResearchData, storageLimitReached: false };
+    }
     if (existingFile && existingFile.filePath) {
       const newSize = typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.length;
       let fits = true;
