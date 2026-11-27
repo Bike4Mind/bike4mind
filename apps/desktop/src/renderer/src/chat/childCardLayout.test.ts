@@ -149,4 +149,26 @@ describe('childCardLayout', () => {
     expect(noticeChildId(legacy)).toBeUndefined();
     expect(childCardLayout([legacy]).folded.size).toBe(0);
   });
+
+  it('marks an archived child and a child missing from a loaded list as gone', () => {
+    const messages = [reportMessage('kept'), reportMessage('shelved'), reportMessage('removed'), reportMessage('busy')];
+    const { cards } = childCardLayout(
+      messages,
+      live([session('kept'), session('shelved', { archived: true })], [['busy', 'processing']])
+    );
+    const goneOf = (id: string) => cards.find(card => card.sessionId === id)?.gone;
+    expect(goneOf('kept')).toBeUndefined();
+    expect(goneOf('shelved')).toBe('archived');
+    expect(goneOf('removed')).toBe('deleted');
+    // A child with a live status is not deleted, even before its row reaches the list.
+    expect(goneOf('busy')).toBeUndefined();
+    // The deleted child keeps the title its report carried.
+    expect(cards.find(card => card.sessionId === 'removed')?.title).toBe('removed title');
+  });
+
+  it('marks nothing gone while the session list is still empty or absent', () => {
+    const messages = [reportMessage('solo')];
+    expect(childCardLayout(messages, live([], [])).cards[0]?.gone).toBeUndefined();
+    expect(childCardLayout(messages).cards[0]?.gone).toBeUndefined();
+  });
 });
