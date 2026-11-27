@@ -10,12 +10,13 @@ import {
 /**
  * Publish - the per-user daily publish allowance (`PUBLISH_RATE_LIMITS`).
  *
- * Every publish write route (upload-url, reply/fabfile via settlePublication, revise, restore)
- * calls `consumePublishAction` once, after its own validation, permission and storage-quota
- * checks and before it does the work, so a refused or invalid request does not use up the
- * allowance. A route that is counted and then fails before anything is published (a failed storage
- * or record write, say) hands the action back with the receipt's `refund`, except that a revise
- * attempt that reaches the model keeps its count whatever the outcome.
+ * Every publish write route (upload-url, reply/fabfile via settlePublication, revise, restore, an
+ * artifact PATCH that widens exposure, a share-link mint) calls `consumePublishAction` once,
+ * after its own validation, permission and storage-quota checks and before it does the work, so a
+ * refused or invalid request does not use up the allowance. A route that is counted and then
+ * fails before anything is published (a failed storage or record write, say) hands the action
+ * back with the receipt's `refund`, except that a revise attempt that reaches the model keeps its
+ * count whatever the outcome.
  * finalize does not call it: it only promotes a draft a counted upload-url issued.
  *
  * Storage is the shared Mongo cache's lease primitive (`cacheRepository.tryAcquireLease`), used

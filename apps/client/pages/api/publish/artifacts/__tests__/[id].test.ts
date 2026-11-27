@@ -65,6 +65,14 @@ vi.mock('@server/services/publish', () => ({
   validateEmbedOrigins: vi.fn(() => ({ ok: true, value: [] })),
 }));
 
+// The limiter itself is pinned against real Mongo in publishRateLimit.e2e.test.ts; here only
+// "charged or not, refunded or not" is asserted.
+const { consumePublish, refundPublish } = vi.hoisted(() => {
+  const refundPublish = vi.fn(async () => undefined as void);
+  return { refundPublish, consumePublish: vi.fn(async (_actor: unknown) => ({ refund: refundPublish })) };
+});
+vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: consumePublish }));
+
 import handler from '../[id]';
 
 const OWNER = 'owner-1';
@@ -110,6 +118,8 @@ beforeEach(() => {
   assertOutbound.mockClear();
   loadLiveOwner.mockReset();
   loadLiveOwner.mockResolvedValue({ name: 'Owner' });
+  consumePublish.mockClear();
+  refundPublish.mockClear();
 });
 
 /** A public artifact carrying owner/moderation/storage internals. */
@@ -942,5 +952,95 @@ describe('PATCH /api/publish/artifacts/[id] - outbound gate on widening exposure
     const { res } = await patch(body, build());
     expect(res._getStatusCode()).toBe(200);
     expect(assertOutbound).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/publish/artifacts/[id] - publish allowance on widening exposure', () => {
+  const USER = { id: OWNER, isAdmin: false, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+
+  async function patch(body: Record<string, unknown>, artifact: ReturnType<typeof makeArtifact>) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = USER;
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  const privateArtifact = () => Object.assign(makeArtifact(), { visibility: 'private' });
+  const passphraseGated = () =>
+    Object.assign(makeArtifact(), { accessGate: { kind: 'passphrase', passphraseHash: 'x' } as unknown });
+
+  it.each([
+    ['making a private page public', { visibility: 'public' }, privateArtifact],
+    ['clearing the gate on a public page', { accessGate: null }, passphraseGated],
+    ['turning on search indexing', { discoverable: true }, makeArtifact],
+    ['widening several ways in one request', { visibility: 'public', discoverable: true }, privateArtifact],
+  ])('charges %s once, for the caller', async (_label, body, build) => {
+    const { res, artifact } = await patch(body, build());
+    expect(res._getStatusCode()).toBe(200);
+    expect(consumePublish).toHaveBeenCalledOnce();
+    expect(consumePublish).toHaveBeenCalledWith(USER);
+    expect(artifact.save).toHaveBeenCalled();
+    expect(refundPublish).not.toHaveBeenCalled();
+  });
+
+  it('charges adding an embed origin', async () => {
+    const { validateEmbedOrigins } = await import('@server/services/publish');
+    vi.mocked(validateEmbedOrigins).mockReturnValueOnce({ ok: true, value: ['https://example.com'] });
+    const { res } = await patch({ embedOrigins: ['https://example.com'] }, makeArtifact());
+    expect(res._getStatusCode()).toBe(200);
+    expect(consumePublish).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a title-only edit', { title: 'Renamed' }, makeArtifact],
+    ['making a public page private', { visibility: 'private' }, makeArtifact],
+    ['moving a private page to the organization', { visibility: 'organization' }, privateArtifact],
+    [
+      'adding a passphrase to an open public page',
+      { accessGate: { kind: 'passphrase', passphrase: 'long-enough-pass' } },
+      makeArtifact,
+    ],
+    [
+      'turning search indexing off',
+      { discoverable: false },
+      () => Object.assign(makeArtifact(), { discoverable: true }),
+    ],
+  ])('does not charge %s', async (_label, body, build) => {
+    const { res } = await patch(body, build());
+    expect(res._getStatusCode()).toBe(200);
+    expect(consumePublish).not.toHaveBeenCalled();
+  });
+
+  it('does not charge a widening request refused by validation', async () => {
+    const { validateEmbedOrigins } = await import('@server/services/publish');
+    vi.mocked(validateEmbedOrigins).mockReturnValueOnce({
+      ok: false,
+      error: 'bad',
+      code: 'INVALID_EMBED_ORIGIN',
+    } as never);
+    const { res } = await patch({ visibility: 'public', embedOrigins: ['nope'] }, privateArtifact());
+    expect(res._getStatusCode()).toBe(400);
+    expect(consumePublish).not.toHaveBeenCalled();
+  });
+
+  it('propagates the 429 and saves nothing when the allowance is used up', async () => {
+    const { TooManyRequestsError } = await import('@bike4mind/common');
+    const limited = new TooManyRequestsError('limited', { code: 'publish_rate_limited', retryAfter: 60 });
+    consumePublish.mockRejectedValueOnce(limited);
+    const artifact = privateArtifact();
+    await expect(patch({ visibility: 'public' }, artifact)).rejects.toBe(limited);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('refunds the action when the save fails, and rethrows', async () => {
+    const dbDown = new Error('db down');
+    const artifact = privateArtifact();
+    artifact.save.mockRejectedValueOnce(dbDown);
+    await expect(patch({ visibility: 'public' }, artifact)).rejects.toBe(dbDown);
+    expect(refundPublish).toHaveBeenCalledOnce();
   });
 });

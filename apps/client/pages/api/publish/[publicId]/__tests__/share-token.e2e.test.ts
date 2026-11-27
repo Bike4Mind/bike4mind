@@ -7,7 +7,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
-import { PublishedArtifact, liveShareTokens, shareTokenFilter } from '@bike4mind/database';
+import { Cache, PublishedArtifact, liveShareTokens, shareTokenFilter } from '@bike4mind/database';
+import { PUBLISH_RATE_LIMITED, PUBLISH_RATE_LIMITS, TooManyRequestsError } from '@bike4mind/common';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -59,6 +60,7 @@ let mongoServer: MongoMemoryServer;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  await Cache.init();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -67,17 +69,28 @@ afterAll(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await PublishedArtifact.deleteMany({});
+  await Cache.deleteMany({});
 });
 
-type CallOpts = { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; query?: Record<string, string> };
-const call = async ({ method = 'POST', body = {}, query = {} }: CallOpts = {}) => {
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Every mint is counted against the real publish allowance, so the default caller is an established
+// account: the cap loops below mint well past the new-account allowance.
+const ESTABLISHED_OWNER = { id: 'owner1', isAdmin: false, createdAt: new Date(Date.now() - 30 * DAY_MS) };
+
+type CallOpts = {
+  method?: 'GET' | 'POST' | 'DELETE';
+  body?: unknown;
+  query?: Record<string, string>;
+  user?: Record<string, unknown>;
+};
+const call = async ({ method = 'POST', body = {}, query = {}, user = ESTABLISHED_OWNER }: CallOpts = {}) => {
   const { req, res } = createMocks({
     method,
     query: { publicId: 'pub1', ...query },
     body: body as Record<string, unknown>,
   });
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn() };
-  (req as Record<string, unknown>).user = { id: 'owner1' };
+  (req as Record<string, unknown>).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return { status: res._getStatusCode(), body: res._getJSONData() };
 };
@@ -394,5 +407,45 @@ describe('share-token route against real storage', () => {
       expect(added.status).toBe(200);
       expect(liveShareTokens((await raw()) as never)).toHaveLength(MAX_LIVE_SHARE_LINKS);
     });
+  });
+});
+
+describe('share-link mints against the real publish allowance', () => {
+  // Rotating keeps one live link, so the live-link ceiling never interferes with the count.
+  const rotate = (user: Record<string, unknown>) => call({ body: { regenerate: true }, user });
+
+  it('admits a new account its allowance of mints, then refuses with a retry time', async () => {
+    await seed();
+    const newOwner = { id: 'owner1', isAdmin: false, createdAt: new Date() };
+    for (let i = 0; i < PUBLISH_RATE_LIMITS.newAccount.maxActions; i++) {
+      expect((await rotate(newOwner)).status).toBe(200);
+    }
+    const refused = await rotate(newOwner).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(TooManyRequestsError);
+    const info = (refused as TooManyRequestsError).additionalInfo;
+    expect(info?.code).toBe(PUBLISH_RATE_LIMITED);
+    expect(info?.retryAfter as number).toBeGreaterThan(0);
+  });
+
+  it('admits an established account the standard allowance, past the new-account one', async () => {
+    await seed();
+    for (let i = 0; i < PUBLISH_RATE_LIMITS.maxActions; i++) {
+      expect((await rotate(ESTABLISHED_OWNER)).status).toBe(200);
+    }
+    await expect(rotate(ESTABLISHED_OWNER)).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
+  it('does not count returning the live link', async () => {
+    await seed();
+    const newOwner = { id: 'owner1', isAdmin: false, createdAt: new Date() };
+    expect((await call({ user: newOwner })).status).toBe(200);
+    for (let i = 0; i < PUBLISH_RATE_LIMITS.newAccount.maxActions * 2; i++) {
+      expect((await call({ user: newOwner })).status).toBe(200);
+    }
+    // One mint taken, so the rest of the allowance is still there for rotations.
+    for (let i = 1; i < PUBLISH_RATE_LIMITS.newAccount.maxActions; i++) {
+      expect((await rotate(newOwner)).status).toBe(200);
+    }
+    await expect(rotate(newOwner)).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 });
