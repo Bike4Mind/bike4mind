@@ -4,10 +4,16 @@ import {
   ActionDialog,
   ADMIN_REASON_PRESETS,
   ChangePreview,
+  CreditGrantNotice,
+  isCreditGrantLimitError,
+  planCreditGrant,
+  planTypedConfirm,
   SegmentedControl,
   undoAdminReason,
   useUndoToast,
 } from '../../../shared';
+import { RecentCreditGrants } from '../../../shared/RecentCreditGrants';
+import { useAdminRecentCreditGrants } from '@client/app/hooks/data/adminUserCredits';
 import {
   CREDIT_ADJUSTMENT_MODES,
   CREDIT_AMOUNT_HINT,
@@ -18,7 +24,7 @@ import {
   parseCreditAmount,
   type CreditAdjustmentMode,
 } from './creditAdjustment';
-import { useAdminUserUpdate } from './useAdminUserUpdate';
+import { useAdminUserUpdate, type AdminUserUpdate } from './useAdminUserUpdate';
 import { BALANCE_REFRESH_FAILED, useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
@@ -36,10 +42,14 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
   const [rawAmount, setRawAmount] = useState('0');
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
+  const recentGrants = useAdminRecentCreditGrants(user.id);
 
   const amount = parseCreditAmount(rawAmount);
   const adjustment = amount === null ? null : computeCreditAdjustment(balance, mode, amount);
   const modeConfig = CREDIT_ADJUSTMENT_MODES.find(entry => entry.mode === mode) ?? CREDIT_ADJUSTMENT_MODES[0];
+  const granted = Math.max(0, adjustment?.delta ?? 0);
+  const plan = planCreditGrant(granted, recentGrants.data);
+  const typedConfirm = planTypedConfirm(plan);
 
   const blockedReason = refreshFailed
     ? BALANCE_REFRESH_FAILED
@@ -47,17 +57,25 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
       ? CREDIT_AMOUNT_HINT
       : adjustment.delta === 0
         ? `The balance is already ${formatCredits(balance)}.`
-        : null;
+        : plan.kind === 'over_limit'
+          ? plan.notice
+          : null;
 
   const changeMode = (next: CreditAdjustmentMode) => {
     setMode(next);
     setRawAmount(next === 'set' ? String(Math.max(balance, 0)) : '0');
   };
 
-  const handleConfirm = async (reason: string) => {
-    if (amount === null || !adjustment) return;
-    const result: unknown = await update({ ...creditAdjustmentPayload(mode, amount), creditReason: reason });
+  const submit = async (payload: AdminUserUpdate, reason: string) => {
+    let result: unknown;
+    try {
+      result = await update({ ...payload, creditReason: reason });
+    } catch (error) {
+      if (isCreditGrantLimitError(error)) void recentGrants.refetch();
+      throw error;
+    }
     onClose();
+    // A grant held for approval comes back pending, with nothing applied to undo.
     if (!result || typeof result !== 'object' || !('appliedCreditDelta' in result)) return;
     const delta = result.appliedCreditDelta;
     if (typeof delta !== 'number' || !Number.isSafeInteger(delta) || delta === 0) return;
@@ -73,6 +91,27 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
     });
   };
 
+  const handleConfirm = async (reason: string) => {
+    if (amount === null || !adjustment) return;
+    const confirmed = typedConfirm ? { confirmLargeGrant: true } : {};
+    await submit({ ...creditAdjustmentPayload(mode, amount), ...confirmed }, reason);
+  };
+
+  // Sent as an added amount whatever the mode, since the server never splits the larger grant itself.
+  const grantNow =
+    (plan.kind === 'approval' || plan.kind === 'over_limit') && plan.grantNow > 0
+      ? {
+          label: `Grant ${formatCredits(plan.grantNow)} now`,
+          onConfirm: (reason: string) =>
+            submit(
+              { creditDelta: plan.grantNow, ...(plan.grantNowNeedsPhrase ? { confirmLargeGrant: true } : {}) },
+              reason
+            ),
+          ignoreBlockedReason: plan.kind === 'over_limit',
+          skipTypedConfirm: !plan.grantNowNeedsPhrase,
+        }
+      : undefined;
+
   return (
     <ActionDialog
       open
@@ -81,9 +120,15 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
       description={`${displayName(user)} \u00b7 current balance ${formatCredits(balance)}`}
       reasonPresets={ADMIN_REASON_PRESETS.creditAdjustment}
       confirmLabel={
-        adjustment && adjustment.delta !== 0 ? `Set balance to ${formatCredits(adjustment.after)}` : 'Apply'
+        plan.kind === 'approval'
+          ? 'Submit for approval'
+          : adjustment && adjustment.delta !== 0
+            ? `Set balance to ${formatCredits(adjustment.after)}`
+            : 'Apply'
       }
       blockedReason={blockedReason}
+      typedConfirm={typedConfirm}
+      secondaryAction={grantNow}
       pending={refreshing}
       onConfirm={handleConfirm}
       data-testid="adjust-credits-dialog"
@@ -126,6 +171,8 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
         }
         data-testid="adjust-credits-preview"
       />
+      <CreditGrantNotice credits={granted} plan={plan} data-testid="adjust-credits-grant-value" />
+      <RecentCreditGrants userId={user.id} data-testid="adjust-credits-recent-grants" />
     </ActionDialog>
   );
 };

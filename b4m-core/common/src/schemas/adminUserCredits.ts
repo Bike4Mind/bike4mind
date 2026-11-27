@@ -222,3 +222,31 @@ export type AdminRevokeAllApiKeysResponse = z.infer<typeof adminRevokeAllApiKeys
 
 /** Minutes after an admin revoke during which the same admin may restore the key (backs Undo). */
 export const ADMIN_API_KEY_RESTORE_WINDOW_MINUTES = 5;
+
+export const ADMIN_RECENT_CREDIT_GRANTS_LIMIT = 3;
+
+/**
+ * GET /api/admin/users/[userId]/recent-credit-grants: the admin grants a user received in the grant cap
+ * window (adminCreditGrants.ts ADMIN_GRANT_WINDOW_MS), from the audit rows the cap counts, and what the cap
+ * allows the calling admin, so a grant dialog can say before submit what runs now and what goes for approval
+ * (adminGrantRoom).
+ */
+export const adminRecentCreditGrantsSchema = z.object({
+  /** Admin-granted credits the user received in the window, reservations included, as the cap counts them. */
+  receivedCredits: z.number(),
+  /**
+   * What the caller may take this user to at once: ADMIN_GRANT_IMMEDIATE_LIMIT, or the hard limit for a listed
+   * approver granting another user or a listed credits:self_grant holder granting their own account.
+   */
+  immediateLimit: z.number(),
+  /** Newest first, at most ADMIN_RECENT_CREDIT_GRANTS_LIMIT. */
+  grants: z.array(
+    z.object({
+      at: z.string(),
+      credits: z.number(),
+      /** The granting admin's name, or their email when the audit row has no name. */
+      grantedBy: z.string(),
+    })
+  ),
+});
+export type AdminRecentCreditGrants = z.infer<typeof adminRecentCreditGrantsSchema>;

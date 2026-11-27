@@ -6,6 +6,8 @@ export const DEFAULT_MANIFEST = {
   // --- secret ---
   // Integration secrets are optional: unset disables that integration. Only the
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
+  // Unset = no senior admin credit granters.
+  ADMIN_SENIOR_GRANTER_IDS: { kind: 'secret', optional: true },
   ANTHROPIC_ADMIN_API_KEY: { kind: 'secret', optional: true },
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
   // APNs push delivery for first-party native clients; any one unset disables push.

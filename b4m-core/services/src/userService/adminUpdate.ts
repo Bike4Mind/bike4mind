@@ -128,6 +128,25 @@ export interface AdminUpdateUserAdapters {
   };
   /** Resolves the acting admin's role permissions on the re-read below. */
   resolveAdminRoles?: ResolveAdminRoles;
+  /**
+   * Re-runs the admin grant cap (apps/client/server/admin/creditGrants/tierCap.ts) for the grant computed
+   * here from the balance this write reads, which can exceed the caller's earlier read; throws to refuse.
+   * Called only for a positive grant, before anything is written.
+   */
+  confirmCreditGrant?: (credits: number) => Promise<void>;
+}
+
+/**
+ * Credits an admin update grants: a positive `creditDelta`, or else an absolute `currentCredits` above the
+ * balance (`new - old`). 0 for a deduction or no credit change; a negative change is never a grant.
+ */
+export function adminCreditGrant(
+  params: Pick<AdminUpdateUserParameters, 'creditDelta' | 'currentCredits'>,
+  previousBalance: number
+): number {
+  if (params.creditDelta !== undefined) return Math.max(0, params.creditDelta);
+  if (params.currentCredits === undefined) return 0;
+  return Math.max(0, params.currentCredits - previousBalance);
 }
 
 /** The balance change an admin update applied; signed, after the non-negative floor. */
@@ -177,7 +196,7 @@ async function sendFriendRequestsToOrgMembers(
 export async function adminUpdateUser(
   userId: string,
   parameters: AdminUpdateUserParameters,
-  { db, resolveAdminRoles }: AdminUpdateUserAdapters
+  { db, resolveAdminRoles, confirmCreditGrant }: AdminUpdateUserAdapters
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
   const stored = await db.users.findById(userId);
@@ -244,6 +263,7 @@ export async function adminUpdateUser(
     throw new BadRequestError('Balance is already at or below zero; nothing to deduct');
   }
   const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
+  if (confirmCreditGrant && creditDelta > 0) await confirmCreditGrant(creditDelta);
   const note = creditReason?.trim() || undefined;
 
   const requestedOverride =

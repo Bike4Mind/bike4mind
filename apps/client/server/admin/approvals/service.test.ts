@@ -35,6 +35,14 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
 vi.mock('./executors', () => ({
   approvalExecutors: new Proxy({}, { get: () => mocks.execute }),
 }));
+// The real list check (seniorGranters.ts) runs over this list; every other Config value stays real.
+vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>();
+  return {
+    ...actual,
+    Config: Object.create(actual.Config, { ADMIN_SENIOR_GRANTER_IDS: { value: 'bbbbbbbbbbbbbbbbbbbbbbbb' } }),
+  };
+});
 
 import {
   approveApproval,
@@ -204,6 +212,23 @@ describe('approveApproval', () => {
     const moderator = reqAs({ id: APPROVER, adminPermissions: ['users:moderate'] });
     await expect(approveApproval(moderator, ID)).rejects.toMatchObject({ statusCode: 403 });
     expect(mocks.repo.claim).not.toHaveBeenCalled();
+  });
+
+  it('lets only a listed holder decide a request for credits:approve_self_grant', async () => {
+    mocks.repo.findById.mockResolvedValue(approvalOf({ requiredPermission: 'credits:approve_self_grant' }));
+    const OTHER = 'dddddddddddddddddddddddd';
+    const holder = { adminPermissions: ['credits:approve_self_grant'] };
+
+    await expect(approveApproval(fullAdmin(OTHER, holder), ID)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(rejectApproval(fullAdmin(OTHER, holder), ID, 'not needed')).rejects.toMatchObject({ statusCode: 403 });
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(approveApproval(fullAdmin(APPROVER, { ...holder, impersonatedBy: OTHER }), ID)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.repo.claim).not.toHaveBeenCalled();
+
+    await approveApproval(fullAdmin(APPROVER, holder), ID);
+    expect(mocks.execute).toHaveBeenCalled();
   });
 
   it('answers 410 and closes an expired record', async () => {

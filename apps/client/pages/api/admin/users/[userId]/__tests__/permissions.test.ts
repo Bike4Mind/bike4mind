@@ -53,6 +53,15 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   recordAdminActionFromRequest: mocks.audit,
   denySelfAdminAction: mocks.deny,
 }));
+// The real list check (seniorGranters.ts) runs over `seniorList`; every other Config value stays real.
+const seniorList = vi.hoisted(() => ({ value: '' }));
+vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>();
+  return {
+    ...actual,
+    Config: Object.create(actual.Config, { ADMIN_SENIOR_GRANTER_IDS: { get: () => seniorList.value } }),
+  };
+});
 await import('../permissions');
 
 const ADMIN = '650000000000000000000009';
@@ -65,6 +74,7 @@ const ROLES: Record<string, { name: string; permissions: string[] }> = {
   [BILLING_ROLE]: { name: 'Billing', permissions: ['support:read', 'credits:adjust'] },
 };
 
+const UNLISTED = '650000000000000000000002';
 const HOLDER = { id: ADMIN, isAdmin: true, adminPermissions: ['credits:self_grant', 'credits:approve_self_grant'] };
 
 const target = (fields: Record<string, unknown>) =>
@@ -84,6 +94,7 @@ const call = async (
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seniorList.value = `${ADMIN},${TARGET}`;
   target({ isAdmin: false, adminPermissions: [] });
   mocks.update.mockResolvedValue({ matchedCount: 1 });
   mocks.fenceRole.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
@@ -279,6 +290,55 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
       { actor: HOLDER }
     );
     expect(res._getJSONData()).toEqual({ adminPermissions: ['credits:approve_self_grant'], adminRoleIds: [] });
+  });
+
+  describe('the senior granter list', () => {
+    it('refuses giving an explicit-only permission to an account not on the list', async () => {
+      target({ isAdmin: true, adminPermissions: [] });
+      await expect(
+        call(
+          { before: [], adminPermissions: ['credits:approve_self_grant'], reason: REASON },
+          { actor: HOLDER, userId: UNLISTED }
+        )
+      ).rejects.toThrow(
+        "credits:approve_self_grant can only be held by an account on the deployment's senior granter list"
+      );
+      expect(mocks.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a role carrying one for an account not on the list', async () => {
+      const APPROVERS = '660000000000000000000003';
+      ROLES[APPROVERS] = { name: 'Approvers', permissions: ['credits:approve_self_grant'] };
+      try {
+        await expect(
+          call(
+            { before: [], adminPermissions: [], beforeAdminRoleIds: [], adminRoleIds: [APPROVERS], reason: REASON },
+            { actor: HOLDER, userId: UNLISTED }
+          )
+        ).rejects.toMatchObject({ statusCode: 403 });
+        expect(mocks.update).not.toHaveBeenCalled();
+      } finally {
+        delete ROLES[APPROVERS];
+      }
+    });
+
+    it('lets a holder remove one from an account not on the list', async () => {
+      target({ isAdmin: true, adminPermissions: ['credits:self_grant'] });
+      const res = await call(
+        { before: ['credits:self_grant'], adminPermissions: [], reason: REASON },
+        { actor: HOLDER, userId: UNLISTED }
+      );
+      expect(res._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
+    });
+
+    it('ignores the holdings of an actor who is not on the list', async () => {
+      seniorList.value = TARGET;
+      target({ isAdmin: true, adminPermissions: [] });
+      await expect(
+        call({ before: [], adminPermissions: ['credits:self_grant'], reason: REASON }, { actor: HOLDER })
+      ).rejects.toThrow('Only an admin who holds credits:self_grant can grant or revoke it');
+      expect(mocks.update).not.toHaveBeenCalled();
+    });
   });
 
   it('still blocks an admin from granting themselves credits:self_grant', async () => {

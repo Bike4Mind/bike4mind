@@ -31,6 +31,7 @@ const preview = (overrides: Partial<AdminUsersBulkPreview> = {}): AdminUsersBulk
   overCap: false,
   apiKeysToRevoke: 4,
   creditsDelta: 900,
+  creditsGranted: 0,
   creditsOverCap: false,
   cohortHash: 'c'.repeat(64),
   emailDomains: null,
@@ -243,6 +244,22 @@ describe('UsersBulkActionDialog', () => {
       target: TARGET,
       action: { type: 'adjustCredits', mode: 'set', amount: 0 },
     });
+  });
+
+  it('shows the dollar value of the credits the batch adds in total, with no typed phrase', async () => {
+    apiPost.mockResolvedValue({ data: preview({ creditsDelta: -5_000_000, creditsGranted: 5_000_000 }) });
+    renderDialog('adjustCredits');
+    expect(await screen.findByTestId('admin-users-bulk-grant-value')).toHaveTextContent(
+      'You are granting $3,000 worth of credits.'
+    );
+    expect(screen.queryByTestId('admin-users-bulk-adjustCredits-typed-input')).not.toBeInTheDocument();
+  });
+
+  it('shows no dollar value when the batch adds no credits', async () => {
+    apiPost.mockResolvedValue({ data: preview({ creditsGranted: 0 }) });
+    renderDialog('adjustCredits');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    expect(screen.queryByTestId('admin-users-bulk-grant-value')).not.toBeInTheDocument();
   });
 
   it('refuses a cohort over the cap', async () => {

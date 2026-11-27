@@ -110,6 +110,8 @@ vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
 
 const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
+// Every account counts as listed here; the senior granter list is covered by seniorGranters.test.ts and selfGrant.test.ts.
+vi.mock('@server/admin/creditGrants/seniorGranters', () => ({ fenceExplicitOnlyPermissions: <T>(actor: T) => actor }));
 
 import '@pages/api/organizations/[id]/index';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AdminApproval } from '@bike4mind/common';
+
+// Fake id only: the senior granter list (seniorGranters.ts) fences credits:self_grant.
+const LISTED = vi.hoisted(() => 'a00000000000000000000001');
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ADMIN_SENIOR_GRANTER_IDS: LISTED } }));
+
 import { SELF_GRANT_APPROVAL, isApprovedSelfGrant, isHeldSelfGrant } from './selfGrant';
 
 describe('isHeldSelfGrant', () => {
@@ -7,9 +12,15 @@ describe('isHeldSelfGrant', () => {
     expect(isHeldSelfGrant({ id: 'a', isAdmin: true }, true)).toBe(true);
   });
 
-  it('lets an admin holding credits:self_grant, directly or by role, grant to themselves', () => {
-    expect(isHeldSelfGrant({ id: 'a', isAdmin: true, adminPermissions: ['credits:self_grant'] }, true)).toBe(false);
-    expect(isHeldSelfGrant({ id: 'a', isAdmin: true, roleAdminPermissions: ['credits:self_grant'] }, true)).toBe(false);
+  it('lets a listed admin holding credits:self_grant, directly or by role, grant to themselves', () => {
+    expect(isHeldSelfGrant({ id: LISTED, isAdmin: true, adminPermissions: ['credits:self_grant'] }, true)).toBe(false);
+    expect(isHeldSelfGrant({ id: LISTED, isAdmin: true, roleAdminPermissions: ['credits:self_grant'] }, true)).toBe(
+      false
+    );
+  });
+
+  it('holds an unlisted admin even when they hold credits:self_grant', () => {
+    expect(isHeldSelfGrant({ id: 'a', isAdmin: true, adminPermissions: ['credits:self_grant'] }, true)).toBe(true);
   });
 
   it('never holds a grant to someone else', () => {
@@ -17,7 +28,7 @@ describe('isHeldSelfGrant', () => {
   });
 
   it('holds an impersonated actor granting to themselves even when the account holds credits:self_grant', () => {
-    const actor = { id: 'a', isAdmin: true, adminPermissions: ['credits:self_grant'], impersonatedBy: 'b' };
+    const actor = { id: LISTED, isAdmin: true, adminPermissions: ['credits:self_grant'], impersonatedBy: 'b' };
     expect(isHeldSelfGrant(actor, true)).toBe(true);
   });
 

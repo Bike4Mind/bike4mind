@@ -51,6 +51,7 @@ const ACTION_LABELS: Record<AdminApprovalAction, string> = {
   'org.credits.top_up': 'Organization credit top-up',
   'user.subscription.grant': 'User subscription grant',
   'user.credits.self_grant': 'Credit grant to own account',
+  'user.credits.grant': 'Large credit grant',
   'user.impersonate_admin': 'Impersonate an admin',
   'user.delete_admin': 'Delete an admin',
   'user.schedule_admin_deletion': 'Schedule deletion for an admin',

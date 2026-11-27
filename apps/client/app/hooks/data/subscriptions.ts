@@ -250,6 +250,7 @@ export const useGrantSubscription = () => {
       durationMonths = 1,
       billingOwnerId,
       reason,
+      confirmLargeGrant,
     }: {
       userId: string;
       subscriptionType: 'individual' | 'team';
@@ -260,6 +261,8 @@ export const useGrantSubscription = () => {
       durationMonths?: number;
       billingOwnerId?: string;
       reason: string;
+      /** Sent after the typed large-grant confirmation; see server/admin/creditGrants/tierCap.ts. */
+      confirmLargeGrant?: boolean;
     }) => {
       const { data } = await api.post<
         | {
@@ -279,6 +282,7 @@ export const useGrantSubscription = () => {
         durationMonths,
         billingOwnerId,
         reason,
+        confirmLargeGrant,
       });
       return data;
     },

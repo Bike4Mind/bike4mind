@@ -19,6 +19,7 @@ import { adminApprovalRepository, adminSettingsRepository, withTransaction } fro
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Request } from 'express';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
+import { fenceExplicitOnlyPermissions } from '@server/admin/creditGrants/seniorGranters';
 import {
   denySelfAdminAction,
   isSameUserId,
@@ -89,8 +90,10 @@ const isExpired = (approval: AdminApproval, now: Date) => approval.expiresAt.get
 const isOwnRequest = (user: ApprovalUser, approval: AdminApproval) =>
   [approval.requestedBy.id, ...approval.requestedBy.selfIds].some(id => isSelfOrImpersonator(user, id));
 
+/** An explicit-only required permission counts only for an account on the senior granter list (seniorGranters.ts). */
 const canDecideAs = (user: ApprovalUser, approval: AdminApproval) =>
-  hasAdminPermission(user, approval.requiredPermission) && (!approval.requiresFullAdmin || isFullAdmin(user));
+  hasAdminPermission(fenceExplicitOnlyPermissions(user), approval.requiredPermission) &&
+  (!approval.requiresFullAdmin || isFullAdmin(user));
 
 const loadApproval = async (id: string): Promise<AdminApproval> => {
   const approval = /^[a-f0-9]{24}$/i.test(id) ? await adminApprovalRepository.findById(id) : null;

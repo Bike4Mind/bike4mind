@@ -218,6 +218,11 @@ export const secrets = {
   // incoming-webhook URL: {"<product>": "https://hooks..."}. A product without an entry logs only.
   // Set per stage: sst secret set QA_ALARM_SLACK_WEBHOOKS '<json>' --stage <stage>
   QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
+  // Senior admin credit granters (apps/client/server/admin/creditGrants/seniorGranters.ts): comma-separated
+  // user ids. Only listed accounts can hold the explicit-only credit permissions. Kept out of the app so no
+  // admin can make themselves an approver. Unset = nobody is senior.
+  // Set per stage: sst secret set ADMIN_SENIOR_GRANTER_IDS '<id>,<id>' --stage <stage>
+  ADMIN_SENIOR_GRANTER_IDS: new sst.Secret('ADMIN_SENIOR_GRANTER_IDS', 'not-configured'),
 };
 
 // Without core names, nothing stops a contribution from shadowing a core resource or env var.

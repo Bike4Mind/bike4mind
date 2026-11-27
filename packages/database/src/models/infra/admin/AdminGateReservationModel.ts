@@ -1,10 +1,14 @@
 import mongoose, { Model, model, Schema, Types } from 'mongoose';
 
-export const ADMIN_GATE_RESERVATION_KINDS = ['users', 'credits'] as const;
+export const ADMIN_GATE_RESERVATION_KINDS = ['users', 'credits', 'recipientCredits', 'organizationCredits'] as const;
 export type AdminGateReservationKind = (typeof ADMIN_GATE_RESERVATION_KINDS)[number];
 
 type AdminGateReservationDocumentShape = {
   _id: Types.ObjectId;
+  /**
+   * The admin, except for the grant cap kinds (creditGrants/tierCap.ts): the user receiving the grant for
+   * `recipientCredits`, the organization it funds for `organizationCredits`.
+   */
   actorUserId: string;
   kind: AdminGateReservationKind;
   amount: number;

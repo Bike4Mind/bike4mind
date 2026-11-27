@@ -104,6 +104,8 @@ export type AdminUsersBulkPreview = {
   apiKeysToRevoke: number;
   /** Net credits the batch would remove (positive) or add (negative). */
   creditsDelta: number;
+  /** Credits added to the users it raises, not offset by removals elsewhere; the dialog's dollar figure. */
+  creditsGranted: number;
   /** True when the batch would add more than ADMIN_USERS_BULK_MAX_CREDIT_TOTAL net; execute refuses it. */
   creditsOverCap: boolean;
   /** sha256 of the sorted eligible ids; execute must echo it, so it acts on exactly these users. */

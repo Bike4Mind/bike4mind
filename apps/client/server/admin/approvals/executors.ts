@@ -5,6 +5,7 @@ import { GrantSubscriptionParamsSchema, grantSubscription } from '@server/admin/
 import { TopUpParamsSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 import {
   SelfCreditAdjustmentParamsSchema,
+  applyApprovedCreditGrant,
   applyApprovedSelfCreditAdjustment,
 } from '@server/admin/creditGrants/selfCreditAdjustment';
 import { executeApprovedUsersBulk } from '@server/admin/usersBulk/approvalExecutor';
@@ -30,6 +31,8 @@ export const approvalExecutors: Record<AdminApprovalAction, ApprovalExecutor> = 
     grantSubscription(req, GrantSubscriptionParamsSchema.parse(params), approval),
   'user.credits.self_grant': (params, { req, approval }) =>
     applyApprovedSelfCreditAdjustment(req, SelfCreditAdjustmentParamsSchema.parse(params), approval),
+  'user.credits.grant': (params, { req, approval }) =>
+    applyApprovedCreditGrant(req, SelfCreditAdjustmentParamsSchema.parse(params), approval),
   // Approving only unlocks it: the requester redeems it in loginAs, so the session is never the approver's.
   'user.impersonate_admin': notExecutableOnApprove('user.impersonate_admin'),
   'user.schedule_admin_deletion': (params, { req, approval }) =>

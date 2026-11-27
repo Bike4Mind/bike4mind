@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdminApproval } from '@bike4mind/common';
 import type { Request } from 'express';
 
-const mocks = vi.hoisted(() => ({ adminUpdateUser: vi.fn(), findById: vi.fn(), audit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ adminUpdateUser: vi.fn(), findById: vi.fn(), audit: vi.fn(), received: vi.fn() }));
+const reservations = vi.hoisted(() => new Map<string, number>());
 
 vi.mock('@bike4mind/database', () => ({
   Organization: {},
@@ -11,21 +12,47 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   userRepository: { findById: mocks.findById },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  // The real grant cap (tierCap.ts) runs over these.
+  adminAuditLogRepository: { sumCreditsGrantedTo: mocks.received },
+  adminGateReservationRepository: {
+    reserve: async (_subjectId: string, _kind: string, amount: number) => {
+      const id = String(reservations.size + 1);
+      reservations.set(id, amount);
+      return id;
+    },
+    sumReserved: async () => [...reservations.values()].reduce((total, amount) => total + amount, 0),
+    release: async (id: string) => void reservations.delete(id),
+  },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ userService: { adminUpdateUser: mocks.adminUpdateUser } }));
 vi.mock('@bike4mind/server-utils/auth/adminRoles', () => ({ resolveRoleAdminPermissions: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest: mocks.audit,
+}));
+// Every account counts as listed here; the senior granter list is covered by seniorGranters.test.ts.
+vi.mock('./seniorGranters', () => ({ fenceExplicitOnlyPermissions: <T>(actor: T) => actor }));
 vi.mock('@server/admin/approvals/auditWriter', () => ({
   approvalAuditDetails: (approval: AdminApproval) => ({ id: approval.id }),
 }));
 
-const { SelfCreditAdjustmentParamsSchema, applyApprovedSelfCreditAdjustment } = await import('./selfCreditAdjustment');
+const { SelfCreditAdjustmentParamsSchema, applyApprovedCreditGrant, applyApprovedSelfCreditAdjustment } =
+  await import('./selfCreditAdjustment');
 
 const REQUESTER = 'requester1';
-const approval = { id: 'approval1', requestedBy: { id: REQUESTER, selfIds: [REQUESTER] } } as unknown as AdminApproval;
+const approval = {
+  id: 'approval1',
+  requiredPermission: 'credits:approve_self_grant',
+  requestedBy: { id: REQUESTER, selfIds: [REQUESTER] },
+} as unknown as AdminApproval;
 const req = { user: { id: 'approver1', isAdmin: true } } as unknown as Request;
 const params = { userId: REQUESTER, creditDelta: 50, creditReason: 'Testing credits' };
+
+beforeEach(() => {
+  reservations.clear();
+  mocks.received.mockReset().mockResolvedValue(0);
+});
 
 describe('applyApprovedSelfCreditAdjustment', () => {
   beforeEach(() => {
@@ -72,5 +99,68 @@ describe('applyApprovedSelfCreditAdjustment', () => {
     expect(SelfCreditAdjustmentParamsSchema.safeParse({ ...params, creditDelta: -5 }).success).toBe(false);
     expect(SelfCreditAdjustmentParamsSchema.safeParse({ ...params, creditDelta: 1.5 }).success).toBe(false);
     expect(SelfCreditAdjustmentParamsSchema.safeParse({ ...params, extra: 1 }).success).toBe(false);
+  });
+});
+
+describe('applyApprovedCreditGrant', () => {
+  const RECIPIENT = 'recipient1';
+  const grantParams = { userId: RECIPIENT, creditDelta: 300_000, creditReason: 'Enterprise pilot onboarding' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findById.mockResolvedValue({ id: RECIPIENT, name: 'Grace' });
+  });
+
+  it('runs the whole grant past the immediate limit on the approval, held until written', async () => {
+    let heldDuringWrite = 0;
+    mocks.adminUpdateUser.mockImplementation(async () => {
+      heldDuringWrite = reservations.size;
+      return {
+        creditAdjustment: {
+          credits: 300_000,
+          previousBalance: 0,
+          resultingBalance: 300_000,
+          note: grantParams.creditReason,
+          creditTransactionId: 'ctx2',
+        },
+      };
+    });
+
+    const result = await applyApprovedCreditGrant(req, grantParams, approval);
+
+    expect(result).toEqual({ userId: RECIPIENT, appliedCreditDelta: 300_000, currentCredits: 300_000 });
+    expect(heldDuringWrite).toBe(1);
+    expect(reservations.size).toBe(0);
+    expect(mocks.audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.credits.adjusted',
+        details: { credits: 300_000, approval: { id: 'approval1' } },
+      })
+    );
+  });
+
+  it('refuses an approved grant past the 500,000 hard limit and writes nothing', async () => {
+    mocks.received.mockResolvedValue(250_000);
+
+    await expect(applyApprovedCreditGrant(req, grantParams, approval)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: expect.objectContaining({ reason: 'hard_limit' }),
+    });
+    expect(mocks.adminUpdateUser).not.toHaveBeenCalled();
+    expect(mocks.audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.credits.denied',
+        details: expect.objectContaining({ approval: { id: 'approval1' } }),
+      })
+    );
+  });
+
+  it('refuses an approver crediting their own account', async () => {
+    await expect(applyApprovedCreditGrant(req, { ...grantParams, userId: 'approver1' }, approval)).rejects.toThrow(
+      'You cannot approve a credit grant to your own account'
+    );
+    expect(mocks.adminUpdateUser).not.toHaveBeenCalled();
   });
 });

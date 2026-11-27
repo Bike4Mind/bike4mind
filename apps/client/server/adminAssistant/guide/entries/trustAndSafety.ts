@@ -386,7 +386,9 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.users'],
     settings: [],
     howTo: [
-      'Permissions: support:read, credits:adjust, users:moderate, users:impersonate, keys:revoke, users:delete, settings:manage and models:curate.',
+      'Permissions: support:read, credits:adjust, users:moderate, users:impersonate, keys:revoke, users:delete, users:export, settings:manage and models:curate.',
+      'An admin with credits:adjust can grant any user, their own account included, up to 100,000 credits in 24 hours at once. Above that the whole grant becomes one approval request for another senior granter, with I UNDERSTAND and a reason. No grant goes above 500,000, except subscription grants.',
+      'Senior granters are a fixed list set in the deployment configuration, not in the console. Only listed accounts can hold credits:self_grant or credits:approve_self_grant.',
       'support:read is read-only and opens Audit log, Approvals, Stripe disputes, Shadow detections, API key scopes and the Retrieval, Webhook logs, Help analytics and Integration demand tabs.',
       'Tools, Gears and Stuck executions open with support:read (read-only) or settings:manage. Only Modals needs settings:manage.',
       'Disabled buttons name the missing permission, for example "Missing permission: users:moderate". Delegated admins cannot act on accounts that themselves have admin access.',

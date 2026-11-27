@@ -4,7 +4,19 @@ import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/uti
 import type { AdminRolesDeps } from './adminRoles';
 import { createAdminRole, deleteAdminRole, getAdminRole, listAdminRoles, updateAdminRole } from './adminRoles';
 
+// The real list check (seniorGranters.ts) runs over `seniorList`; every other Config value stays real.
+const seniorList = vi.hoisted(() => ({ value: '' }));
+vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>();
+  return {
+    ...actual,
+    Config: Object.create(actual.Config, { ADMIN_SENIOR_GRANTER_IDS: { get: () => seniorList.value } }),
+  };
+});
+
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const LISTED_MEMBER = 'b'.repeat(24);
+const UNLISTED_MEMBER = 'c'.repeat(24);
 const DELEGATE = { id: 'd'.repeat(24), isAdmin: false, adminPermissions: ['settings:manage'] };
 const ROLE_ID = 'e'.repeat(24);
 
@@ -24,6 +36,7 @@ const duplicateKey = () => Object.assign(new Error('E11000 duplicate key'), { co
 let deps: AdminRolesDeps & {
   roles: { [K in keyof AdminRolesDeps['roles']]: ReturnType<typeof vi.fn> };
   memberCounts: ReturnType<typeof vi.fn>;
+  memberIds: ReturnType<typeof vi.fn>;
   removeFromMembers: ReturnType<typeof vi.fn>;
   audit: ReturnType<typeof vi.fn>;
   requireStepUp: ReturnType<typeof vi.fn>;
@@ -31,6 +44,7 @@ let deps: AdminRolesDeps & {
 };
 
 beforeEach(() => {
+  seniorList.value = `${ADMIN.id},${LISTED_MEMBER}`;
   deps = {
     roles: {
       list: vi.fn().mockResolvedValue([role()]),
@@ -41,6 +55,7 @@ beforeEach(() => {
       delete: vi.fn().mockResolvedValue(true),
     },
     memberCounts: vi.fn().mockResolvedValue(new Map([[ROLE_ID, 3]])),
+    memberIds: vi.fn().mockResolvedValue([LISTED_MEMBER]),
     removeFromMembers: vi.fn().mockResolvedValue(0),
     audit: vi.fn().mockResolvedValue(null),
     requireStepUp: vi.fn().mockResolvedValue(undefined),
@@ -151,6 +166,34 @@ describe('updateAdminRole', () => {
       deps
     );
     expect(deps.roles.update).toHaveBeenCalled();
+  });
+
+  describe('the senior granter list', () => {
+    const holder = { ...ADMIN, adminPermissions: ['credits:self_grant'] };
+    const addSelfGrant = { permissions: ['support:read', 'credits:self_grant'], reason: REASON };
+
+    it('refuses adding an explicit-only permission while a member is not on the list, before any write', async () => {
+      deps.memberIds.mockResolvedValue([LISTED_MEMBER, UNLISTED_MEMBER]);
+      await expect(updateAdminRole(holder, ROLE_ID, addSelfGrant, deps)).rejects.toThrow(
+        "credits:self_grant can only be held by an account on the deployment's senior granter list"
+      );
+      expect(deps.roles.update).not.toHaveBeenCalled();
+    });
+
+    it('ignores the holdings of an actor who is not on the list', async () => {
+      seniorList.value = LISTED_MEMBER;
+      await expect(updateAdminRole(holder, ROLE_ID, addSelfGrant, deps)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(
+        createAdminRole(holder, { name: 'Granters', description: '', permissions: ['credits:self_grant'] }, deps)
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(deps.roles.update).not.toHaveBeenCalled();
+      expect(deps.roles.create).not.toHaveBeenCalled();
+    });
+
+    it('never reads the members for a change that adds no explicit-only permission', async () => {
+      await updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'], reason: REASON }, deps);
+      expect(deps.memberIds).not.toHaveBeenCalled();
+    });
   });
 
   it('needs no step-up to revoke or rename, and still audits', async () => {

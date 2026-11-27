@@ -11,11 +11,13 @@ import {
 import { ReasonPicker } from './ReasonPicker';
 import { Kbd } from './Kbd';
 
-type TypedConfirm = {
+export type TypedConfirm = {
   /** The exact text the admin must type, e.g. the account email. */
   expected: string;
   /** What `expected` is, for the label: "Type the email address to confirm". */
   noun: string;
+  /** The sentence before "Type ... to confirm."; defaults to "This cannot be undone." */
+  lead?: string;
 };
 
 export type ActionDialogProps = {
@@ -59,6 +61,8 @@ export type ActionDialogProps = {
     onConfirm: (reason: string) => void | Promise<void>;
     /** For a commit that does not use the caller's inputs, so `blockedReason` must not disable it. */
     ignoreBlockedReason?: boolean;
+    /** For a commit the typed confirmation does not cover, e.g. a smaller grant beside a large one. */
+    skipTypedConfirm?: boolean;
   };
   /**
    * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
@@ -115,11 +119,13 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const submittingRef = useRef(false);
 
   const typedMatches = !typedConfirm || collapseWhitespace(typedValue) === collapseWhitespace(typedConfirm.expected);
+  const reasonHint =
+    reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null;
   const baseHint =
-    (reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
-    (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
+    reasonHint ?? (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const hint = blockedReason ?? baseHint;
-  const secondaryHint = secondaryAction?.ignoreBlockedReason ? baseHint : hint;
+  const secondaryBase = secondaryAction?.skipTypedConfirm ? reasonHint : baseHint;
+  const secondaryHint = secondaryAction?.ignoreBlockedReason ? secondaryBase : (blockedReason ?? secondaryBase);
   const busy = pending || submitting;
 
   const handleConfirm = async (
@@ -198,7 +204,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
                 block, so the code is forced inline, and the star is drawn here on a non-breaking space. */}
               <FormLabel htmlFor={typedInputId} slotProps={{ asterisk: { sx: { display: 'none' } } }}>
                 <span>
-                  This cannot be undone. Type{' '}
+                  {typedConfirm.lead ?? 'This cannot be undone.'} Type{' '}
                   <Typography
                     component="code"
                     fontFamily="code"

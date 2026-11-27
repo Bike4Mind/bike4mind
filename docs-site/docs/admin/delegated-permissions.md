@@ -26,8 +26,8 @@ The table gives examples of current route coverage. A permission does not automa
 | `users:export` | Request and download a data subject export of a user's account (step-up verification required) |
 | `settings:manage` | Edit admin settings, manage tags and modals, configure Slack workspaces and start a Slack app install, manage partner signup rules, and recalculate a user's storage usage |
 | `models:curate` | Publish curated model catalog versions |
-| `credits:self_grant` | Add credits to your own account, or an organization you belong to, without a second admin approving (see [Credit grants to your own account](#credit-grants-to-your-own-account)). Super Admin does not include it |
-| `credits:approve_self_grant` | Approve credits another admin adds to their own account, or an organization they belong to. Super Admin does not include it |
+| `credits:self_grant` | Add credits to your own account, or an organization you belong to, without a second admin approving, up to 500,000 in 24 hours (see [Credit grants to your own account](#credit-grants-to-your-own-account)). Only an account on the senior granter list can hold it. Super Admin does not include it |
+| `credits:approve_self_grant` | Approve credits another admin adds to their own account, or an organization they belong to, and any grant above 100,000 credits in 24 hours; grant other users up to 500,000 directly (see [Grant limits](#grant-limits)). Only an account on the senior granter list can hold it. Super Admin does not include it |
 
 Permissions are enforced per route. `users:delete`, `users:export`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are enforced the same way. Listing a user's API keys needs `support:read`.
 
@@ -59,16 +59,21 @@ As a credit delegate, you cannot change your own account, an account with admin 
 
 ### Credit grants to your own account
 
-When a full administrator adds credits to their own account, or to an organization they own, administer, bill for, or have joined, the grant waits for another admin to approve it under **Approvals**. This applies to credit adjustments, subscription grants, organization grants, and top-ups, whether or not approvals are turned on and whatever the approval threshold. You see "Submitted for approval" instead of a new balance.
+A full administrator's grant to their own account, or to an organization they own, administer, bill for, or have joined, is flagged as a self-grant. How it runs depends on the operation:
 
-- Only an admin who holds `credits:approve_self_grant` can approve it. They do not need to be a Super Admin, and a Super Admin without the permission cannot approve. To see the **Approvals** tab they also need `support:read`. You cannot approve your own request.
+- A credit adjustment on your own profile, or a subscription grant to yourself or an organization you belong to, follows the [grant limits](#grant-limits) like a grant to anyone else: up to 100,000 credits in 24 hours runs at once. Above that, the whole grant waits for another admin to approve it under **Approvals**, and needs the typed confirmation `I UNDERSTAND` and a reason.
+- An organization grant or top-up for an organization you belong to always waits for approval, whether or not approvals are turned on and whatever the approval threshold.
+
+A grant held for approval shows "Submitted for approval" instead of a new balance.
+
+- Only a senior granter, an admin on the senior granter list who holds `credits:approve_self_grant`, can approve it. They do not need to be a Super Admin, and a Super Admin without the permission cannot approve. To see the **Approvals** tab they also need `support:read`. You cannot approve your own request.
 - Super Admins do not hold `credits:approve_self_grant` by default, so they see held self-grant requests redacted and cannot approve or reject them. If no admin holds it, a request waits until it expires.
 - An adjustment held for approval must be sent on its own. Make any other profile change separately.
 - On an organization profile, editing the balance up for an organization you belong to is refused. Use **Top up** instead, so the grant can be approved.
 - On a subscription of an organization you belong to, raising or clearing the per-cycle credit override is refused. Only lowering an existing override is allowed.
 - Removing credits from your own account does not need approval.
-- An admin who holds `credits:self_grant` skips the approval. Super Admin does not include this permission: it must be granted to each admin who needs it.
-- Only an admin who holds `credits:self_grant` or `credits:approve_self_grant` can grant or revoke that permission, directly or through a role. A Super Admin who does not hold it cannot hand it out.
+- An admin on the senior granter list who holds `credits:self_grant` skips the approval up to 500,000 credits in 24 hours, never above, with `I UNDERSTAND` and a reason above 100,000. Super Admin does not include this permission: it must be granted to each admin who needs it.
+- Only an admin on the senior granter list who holds `credits:self_grant` or `credits:approve_self_grant` can grant or revoke that permission, directly or through a role, and only an account on the list can receive it. A Super Admin who does not hold it cannot hand it out.
 
 To give a deployment its first holder of either permission, an operator with database access runs:
 
@@ -76,13 +81,29 @@ To give a deployment its first holder of either permission, an operator with dat
 pnpm db:grant-explicit-admin-permission <email> credits:approve_self_grant
 ```
 
-The script writes no audit entry, so use it only for the first holders and grant the rest from the admin console.
+The account must also be on the senior granter list, or the permission has no effect. The script writes no audit entry, so use it only for the first holders and grant the rest from the admin console.
 
-A holder can grant `credits:approve_self_grant` to another account they control, which could then approve their requests, so grant it only to people you trust as a second check.
+Because only listed accounts can hold either permission, a holder cannot give it to another account they control unless the deployment's operator has put that account on the list.
 
 Every grant to your own account, approved or exempt, is recorded in the audit log and flagged as a self-grant.
 
 Organization and user-profile tabs still require full admin access. Their delegated credit operations are available through their permission-gated APIs, while the Subscriptions and Held signup grants tabs provide the supported console entry points.
+
+### Grant limits
+
+Grant limits count the admin-granted credits a user received in any rolling 24 hours, summed across every admin. They apply to the credit adjustment on a user's profile, the Users list bulk credit adjustment, and subscription grants. A team grant to an existing organization counts against that organization instead of the member, so granting to each of its members cannot raise its total past the limit. Deductions are never limited.
+
+- An admin with `credits:adjust` can grant a user up to 100,000 credits in 24 hours at once, including their own account.
+- A grant that takes the user above 100,000 becomes one approval request for the whole amount, and nothing is granted until it is approved. It needs the typed confirmation `I UNDERSTAND` and a reason. The dialog says so before you submit and offers to grant now the credits still left under 100,000.
+- Only a senior granter can approve it: an admin on the senior granter list who holds `credits:approve_self_grant`. You cannot approve your own request, or a grant to your own account or an organization you belong to.
+- A senior granter can grant other users up to 500,000 credits in 24 hours at once, with `I UNDERSTAND` and a reason above 100,000. A grant to their own account above 100,000 still needs another senior granter, unless they also hold `credits:self_grant`.
+- No grant takes a user or organization above 500,000 credits in 24 hours, approved or not. Subscription grants are the exception: above 100,000, approval is their control.
+- The senior granter list is kept in the deployment's configuration (`ADMIN_SENIOR_GRANTER_IDS`), outside the app: no admin, full or delegated, can add anyone to it from the console. Only a listed account can hold `credits:self_grant` or `credits:approve_self_grant`; either permission has no effect on an unlisted account, including during Login as User.
+- A bulk adjustment cannot ask for approval or the typed confirmation, so it refuses the users it would take above 100,000 and grants the rest.
+- A refused grant states how many credits the user or organization received in the last 24 hours and how many more you can grant.
+- An approved grant is checked again against the 500,000 limit when it runs, and is refused if it would go over.
+- The credit adjustment and subscription grant dialogs list the user's last three admin grants in the last 24 hours, with the date, the amount and its value, and the granting admin.
+- The three grant dialogs show the grant's value at a fixed $6 per 10,000 credits.
 
 ## Console tabs
 
@@ -119,7 +140,7 @@ To grant or revoke delegated permissions or [admin roles](./admin-roles.md), ope
 - Only a full administrator can change delegated permissions. Holding `settings:manage` does not let a delegate grant permissions.
 - You cannot change your own permissions.
 - A Super Admin already holds every permission except `credits:self_grant` and `credits:approve_self_grant`, so those are the only permissions you can grant or revoke for one. Change their role to limit their access.
-- You can grant or revoke `credits:self_grant` or `credits:approve_self_grant`, directly or through a role, only if you hold it yourself.
+- You can grant or revoke `credits:self_grant` or `credits:approve_self_grant`, directly or through a role, only if you hold it yourself, and grant it only to an account on the senior granter list (see [Grant limits](#grant-limits)).
 - Every grant and revocation is recorded in the audit log with the reason, and the permissions before and after.
 - If someone else changed the user's permissions while your editor was open, saving fails and asks you to reload the profile. Reload, review the current permissions, and try again.
 
