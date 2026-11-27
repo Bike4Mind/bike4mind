@@ -754,6 +754,22 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     );
   });
 
+  it("refuses a curator's prefix-arm join of the lake owner's file", async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'curator', isAdmin: false });
+    (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {
+      listActiveByLakes: vi
+        .fn()
+        .mockResolvedValue([{ dataLakeId: 'lake1', principalType: 'user', principalId: 'curator', role: 'curator' }]),
+    };
+
+    await expect(toggleTags('curator', { ids: ['f1'], tags: ['lk:invoices'] }, adapters as never)).rejects.toThrow(
+      'You do not have permission to add files to this data lake'
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
   it('recomputes a shared lake once for a batch where every file leaves it', async () => {
     const adapters = makeAdapters([
       file('f1', [{ name: 'lk:invoices', strength: 1 }]),

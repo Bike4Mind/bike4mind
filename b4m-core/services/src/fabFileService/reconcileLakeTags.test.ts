@@ -564,6 +564,21 @@ describe('reconcileLakeTags', () => {
       expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     });
 
+    it("refuses a curator's prefix-arm join of the lake owner's file", async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+      adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
+      (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'lake1', principalType: 'user', principalId: 'curator', role: 'curator' }]),
+      };
+
+      await expect(
+        reconcileLakeTags({ userId: 'curator', isAdmin: false }, 'f1', [], [tag('lk:invoices', 1)], adapters as never)
+      ).rejects.toThrow('You do not have permission to add files to this data lake');
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
+
     it('refuses a prefix-arm join by the creator once ownership has moved to someone else', async () => {
       const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
       (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {

@@ -295,14 +295,15 @@ export const reconcileLakeTags = async (
   // assertWriteScope's own doc comment.
   if (prefixArmJoins.length > 0) assertWriteScope?.();
   // The mirror case: a write that newly satisfies a lake's prefix arm is membership, gated on
-  // current manage rights as in toggleTags.
+  // current manage rights and the cold-add ownership rule, as in toggleTags.
   // Prime grants for the prefix-arm lakes (the unmanaged-dropped-prefix check further down
   // consults them), reusing the cached meta-tag lakes.
   await grantResolver.prime([...prefixArmJoins.map(j => j.lake), ...prefixArmCandidateLakes]);
   // Always empty now that every prefix-arm join is manage-gated; kept until its readers fold into `joins`.
   const statsOnlyJoins: MembershipLake[] = [];
   for (const j of prefixArmJoins) {
-    if (!canManage(j.lake)) throw new BadRequestError('You do not have permission to add files to this data lake');
+    const mayJoin = canManage(j.lake) && canColdAddFileToLake(j.lake, actor, grantResolver.get(j.lake.id), owner);
+    if (!mayJoin) throw new BadRequestError('You do not have permission to add files to this data lake');
     joins.push(j.lake);
   }
 

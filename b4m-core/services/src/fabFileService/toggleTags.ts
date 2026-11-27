@@ -251,10 +251,12 @@ export const toggleTags = async (
         assertLakeWritable(lake);
       }
     }
-    // A prefix-arm join is membership, so it needs the same current manage rights as a leave.
-    for (const joins of prefixJoinsByFile.values()) {
-      for (const { lake } of joins) {
-        if (!canManageLake(lake, actor, grantResolver.get(lake.id))) {
+    // A prefix-arm join is membership, so it needs the same current manage rights as a leave, plus
+    // the cold-add ownership rule the meta-tag join below applies.
+    for (const file of fabFiles) {
+      for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
+        const grants = grantResolver.get(lake.id);
+        if (!canManageLake(lake, actor, grants) || !canColdAddFileToLake(lake, actor, grants, file.userId)) {
           throw new BadRequestError('You do not have permission to add files to this data lake');
         }
       }
