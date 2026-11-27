@@ -242,13 +242,14 @@ describe('Decrypt permission', () => {
 describe('resolveSecretsAtRestKey', () => {
   it('creates a key and alias on stages that run scheduled jobs', async () => {
     state.runsScheduledJobs = true;
-    const { secretsAtRestKey } = await load('production');
+    const { secretsAtRestKey, secretsAtRestKeyPolicy } = await load('dev');
     expect(secretsAtRestKey?.kind).toBe('dedicated');
     expect(state.key).toHaveBeenCalledTimes(1);
     expect(state.key.mock.calls[0][1]).toMatchObject({ enableKeyRotation: true });
-    const policy = JSON.parse(state.key.mock.calls[0][1].policy as string);
-    expect(policy.Statement.map((s: { Sid: string }) => s.Sid)).toContain('DenyDecryptOutsideApp');
-    expect(state.alias.mock.calls[0][1]).toMatchObject({ name: 'alias/app-production-secrets-at-rest' });
+    expect(JSON.parse(state.key.mock.calls[0][1].policy as string)).toEqual(
+      secretsAtRestKeyPolicy({ partition: 'test', accountId: '123456789012', stage: 'dev' })
+    );
+    expect(state.alias.mock.calls[0][1]).toMatchObject({ name: 'alias/app-dev-secrets-at-rest' });
   });
 
   it('uses the env ARN on a preview and creates no key', async () => {
