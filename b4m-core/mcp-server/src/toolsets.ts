@@ -24,9 +24,12 @@ export class UnknownToolsetError extends Error {
 
 /**
  * Parses `?toolsets=` and `--toolsets`: comma or space separated, case-insensitive, deduped. `all` enables every
- * toolset and `default` the default set; an empty value means `default`. Unknown ids throw UnknownToolsetError.
+ * toolset and `default` the default set; an empty value means `default`. `defaults` is injectable so tests can tell the two apart. Unknown ids throw UnknownToolsetError.
  */
-export function parseToolsets(raw: string | readonly string[] | undefined): ReadonlySet<ToolsetId> {
+export function parseToolsets(
+  raw: string | readonly string[] | undefined,
+  defaults: readonly ToolsetId[] = DEFAULT_TOOLSETS
+): ReadonlySet<ToolsetId> {
   const text = typeof raw === 'string' ? raw : (raw ?? []).join(',');
   const tokens = [
     ...new Set(
@@ -44,7 +47,7 @@ export function parseToolsets(raw: string | readonly string[] | undefined): Read
   if (tokens.length === 0) tokens.push('default');
   for (const token of tokens) {
     if (token === 'all') TOOLSET_IDS.forEach(id => out.add(id));
-    else if (token === 'default') DEFAULT_TOOLSETS.forEach(id => out.add(id));
+    else if (token === 'default') defaults.forEach(id => out.add(id));
     else out.add(token as ToolsetId);
   }
   return out;

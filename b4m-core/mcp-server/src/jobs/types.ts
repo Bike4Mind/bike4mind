@@ -13,7 +13,11 @@ export interface JobStatus {
 export interface JobKind {
   kind: string;
   idSchema: z.ZodType<string>;
-  poll(id: string, ctx: ToolContext): Promise<JobStatus>;
-  /** Cancels the work. Must be idempotent: stopping a finished or missing job is not an error. */
-  stop(id: string, ctx: ToolContext): Promise<void>;
+  /**
+   * Reads the job's state. Return `failed` only for a definitive answer; throw for a transient one (transport error,
+   * 429, 5xx) and the wait loop keeps the job pending. `signal` aborts at the wait deadline: forward it to the transport.
+   */
+  poll(id: string, ctx: ToolContext, signal: AbortSignal): Promise<JobStatus>;
+  /** Cancels the work and returns whether anything was cancelled. Idempotent: a finished or missing job is not an error. */
+  stop(id: string, ctx: ToolContext, signal: AbortSignal): Promise<boolean>;
 }

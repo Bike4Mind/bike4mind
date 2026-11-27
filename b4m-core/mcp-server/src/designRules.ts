@@ -6,7 +6,7 @@ export const MAX_DESCRIPTION_LENGTH = 600;
 export const DEFAULT_PAGE_SIZE = 20;
 const NAME_RE = /^[a-z]+(_[a-z0-9]+)+$/;
 
-/** Every property name reachable in a zod schema, through objects, arrays and optional/nullable/default wrappers. */
+/** Every property name reachable in a zod schema, through objects, arrays, unions, records, intersections and optional/nullable/default wrappers. */
 function collectKeys(schema: z.ZodTypeAny, out: Set<string> = new Set(), depth = 0): Set<string> {
   if (depth > 8) return out;
   const def = ((schema as unknown as { def?: Record<string, unknown> }).def ?? {}) as Record<string, unknown>;
@@ -16,7 +16,10 @@ function collectKeys(schema: z.ZodTypeAny, out: Set<string> = new Set(), depth =
       collectKeys(child as z.ZodTypeAny, out, depth + 1);
     }
   }
-  for (const next of [def.element, def.innerType]) {
+  const nested = [def.element, def.innerType, def.valueType, def.left, def.right];
+  if (Array.isArray(def.options)) nested.push(...def.options);
+  if (Array.isArray(def.items)) nested.push(...def.items);
+  for (const next of nested) {
     if (next) collectKeys(next as z.ZodTypeAny, out, depth + 1);
   }
   return out;
@@ -36,7 +39,7 @@ export function checkToolDesign(tool: Tool): string[] {
   if (tool.description.length > MAX_DESCRIPTION_LENGTH) at(`description is over ${MAX_DESCRIPTION_LENGTH} characters`);
 
   const inputs = tool.inputSchema ?? {};
-  if (Object.keys(inputs).some(key => /^confirm/i.test(key))) {
+  if ([...collectKeys(z.object(inputs))].some(key => /^confirm/i.test(key))) {
     at('no confirm input: confirmation is a needs_confirmation result, never a flag the model can set');
   }
 

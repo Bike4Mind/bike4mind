@@ -36,9 +36,11 @@ function mapApiError(error: B4mApiError): TransportResponse {
   const location = error.headers.get('location');
   if (error.status >= 300 && error.status < 400 && location)
     return { status: error.status, headers, redirect: location };
-  return typeof error.body === 'object' && error.body !== null
-    ? { status: error.status, headers, json: error.body }
-    : { status: error.status, headers };
+  if (typeof error.body === 'object' && error.body !== null) return { status: error.status, headers, json: error.body };
+  if (typeof error.body === 'string' && error.body) {
+    return { status: error.status, headers, bytes: new TextEncoder().encode(error.body) };
+  }
+  return { status: error.status, headers };
 }
 
 /** Calls a deployment over HTTP with an API key. Contract routes go through the SDK, the rest through the guarded builder. */

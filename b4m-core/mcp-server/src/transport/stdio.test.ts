@@ -23,6 +23,13 @@ describe('createStdioTransport', () => {
     expect(res).toMatchObject({ status: 401, json: { error: 'nope' } });
   });
 
+  it('keeps a non-JSON error body as bytes on the SDK path', async () => {
+    const fetch = vi.fn(reply('<html>bad gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }));
+    const res = await createStdioTransport({ baseUrl: BASE, fetch }).call('listModels');
+    expect(res.status).toBe(502);
+    expect(new TextDecoder().decode(res.bytes)).toBe('<html>bad gateway</html>');
+  });
+
   it('reports a 3xx as a redirect and does not follow it', async () => {
     const fetch = vi.fn(reply(null, { status: 302, headers: { location: 'https://cdn.example.com/x' } }));
     const res = await createStdioTransport({ baseUrl: BASE, fetch }).call('listWhatsNew');

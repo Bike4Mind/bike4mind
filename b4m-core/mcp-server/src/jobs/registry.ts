@@ -12,7 +12,8 @@ export interface ParsedJob {
 /** Splits `<kind>:<id>` and validates both before anything reaches a transport. Returns an error string on failure. */
 export function parseJob(job: string): ParsedJob | string {
   const sep = job.indexOf(':');
-  const kind = sep > 0 ? JOB_KINDS[job.slice(0, sep)] : undefined;
+  const name = sep > 0 ? job.slice(0, sep) : '';
+  const kind = Object.hasOwn(JOB_KINDS, name) ? JOB_KINDS[name] : undefined;
   if (!kind)
     return `Unknown job ${JSON.stringify(job.slice(0, 80))}. Job ids look like <kind>:<id>; kinds: ${Object.keys(JOB_KINDS).join(', ')}.`;
   const id = kind.idSchema.safeParse(job.slice(sep + 1));

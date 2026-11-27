@@ -29,6 +29,10 @@ export const whatsNew = defineTool({
   outputSchema: envelope(z.object({ notes: z.array(noteSchema), next_cursor: z.string().nullable() })),
   async handler({ limit, cursor }, ctx) {
     const res = await ctx.transport.call('listWhatsNew', { query: { limit, cursor } });
+    if (res.status === 422)
+      return fail(
+        'The cursor is not valid for this tool. Omit cursor, or pass the exact next_cursor this tool returned.'
+      );
     if (res.status !== 200) return fail(`Listing release notes failed with HTTP ${res.status}. Try again shortly.`);
     const body = (res.json ?? {}) as { data?: UpstreamNote[]; next_cursor?: unknown };
     const notes = (body.data ?? []).map(n => ({

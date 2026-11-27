@@ -27,7 +27,7 @@ export const aboutBike4mind = defineTool({
         'Bike4Mind is an AI workspace: chat with models from several providers, keep notebooks and files, run ' +
         'agents, and publish pages. Everything is also reachable through an API and through this MCP server.',
       app_url: base,
-      get_a_key: `Sign in at ${base}, open Profile > API Keys and create a key. Keys carry scopes; tools you cannot use are hidden.`,
+      get_a_key: `Sign in at ${base}, open Profile > API Keys and create a key. Some tools need a key with specific scopes and will say what is missing when called.`,
       install: {
         claude_code_http: `claude mcp add --transport http bike4mind ${base}/mcp --header "Authorization: Bearer <your key>"`,
         stdio: 'b4m mcp serve',

@@ -14,10 +14,13 @@ export const confirmationJob: JobKind = {
   kind: 'confirmation',
   idSchema: objectIdSchema,
 
-  async poll(id, ctx) {
-    const res = await ctx.transport.call('getMcpConfirmation', { params: { id } });
+  async poll(id, ctx, signal) {
+    const res = await ctx.transport.call('getMcpConfirmation', { params: { id }, signal });
     if (res.status === 404) return { state: 'failed', error: 'Confirmation not found or already expired.' };
-    if (res.status < 200 || res.status >= 300) throw new Error(`confirmation lookup returned HTTP ${res.status}`);
+    if (res.status === 429 || res.status >= 500) throw new Error(`confirmation lookup returned HTTP ${res.status}`);
+    if (res.status < 200 || res.status >= 300) {
+      return { state: 'failed', error: `Confirmation lookup was refused with HTTP ${res.status}.` };
+    }
     const body = (res.json ?? {}) as { status?: unknown };
     const state = typeof body.status === 'string' ? (STATE[body.status] ?? 'pending') : 'pending';
     return {
@@ -27,10 +30,11 @@ export const confirmationJob: JobKind = {
     };
   },
 
-  async stop(id, ctx) {
-    const res = await ctx.transport.call('withdrawMcpConfirmation', { params: { id } });
-    if (res.status !== 404 && (res.status < 200 || res.status >= 300)) {
+  async stop(id, ctx, signal) {
+    const res = await ctx.transport.call('withdrawMcpConfirmation', { params: { id }, signal });
+    if (res.status === 404) return false;
+    if (res.status < 200 || res.status >= 300)
       throw new Error(`withdrawing the confirmation returned HTTP ${res.status}`);
-    }
+    return true;
   },
 };

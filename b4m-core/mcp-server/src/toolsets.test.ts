@@ -15,6 +15,9 @@ describe('parseToolsets', () => {
   it('handles all, default, empty and undefined', () => {
     expect(ids('all')).toEqual(['about', 'jobs']);
     expect(ids('default')).toEqual(['about', 'jobs']);
+    expect([...parseToolsets('all', [])].sort()).toEqual(['about', 'jobs']);
+    expect([...parseToolsets('default', [])]).toEqual(['jobs']);
+    expect([...parseToolsets('', [])]).toEqual(['jobs']);
     expect(ids('')).toEqual(['about', 'jobs']);
     expect(ids(undefined)).toEqual(['about', 'jobs']);
   });

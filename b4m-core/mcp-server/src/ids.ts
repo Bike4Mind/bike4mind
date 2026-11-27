@@ -1,13 +1,10 @@
 import { SlugSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
-// Mirrors publishGateToken's PUBLIC_ID_RE in packages/server-utils; keep in sync.
+// Mirrors publishGateToken's SAFE_PUBLIC_ID in packages/server-utils; keep in sync.
 const PUBLIC_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// `/p/r/{publicId}` and `/p/f/{publicId}` (published artifact short URLs), or `/p/{slug}`.
-const LIVE_ARTIFACT_PATH_RE = /^\/p\/(?:([rf])\/)?([^/]+)\/?$/;
-
 export const isPublicId = (value: unknown): value is string => typeof value === 'string' && PUBLIC_ID_RE.test(value);
 export const isObjectId = (value: unknown): value is string => typeof value === 'string' && OBJECT_ID_RE.test(value);
 export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value);
@@ -18,39 +15,51 @@ export const objectIdSchema = z.string().regex(OBJECT_ID_RE, 'not a valid 24-cha
 export const uuidSchema = z.string().regex(UUID_RE, 'not a valid UUID');
 export const slugSchema = SlugSchema;
 
-export interface LiveArtifactRef {
-  kind: 'publicId' | 'slug';
-  value: string;
-  /** `r` (rendered) or `f` (file) when the input was a `/p/r/` or `/p/f/` URL. */
-  tierPath?: 'r' | 'f';
-}
+export type PublishTier = 'user' | 'project' | 'organization';
+
+// Mirrors TIER_BY_PREFIX in apps/client/server/services/publish/parsePublishPath.ts; keep in sync.
+const TIER_BY_PREFIX: Record<string, PublishTier> = { u: 'user', pj: 'project', o: 'organization' };
+
+export type LiveArtifactRef =
+  | {
+      kind: 'publicId';
+      value: string;
+      /** `r` (published reply) or `f` (fabfile) when the input was a `/p/r/` or `/p/f/` URL. */
+      tierPath?: 'r' | 'f';
+    }
+  | { kind: 'bundle'; tier: PublishTier; scopeId: string; slug: string };
 
 /**
- * Accepts a `/p/...` URL (absolute or path-only, any host), a slug or a publicId. Only the path is read: the host is
- * never contacted. A bare value that is a valid slug is a slug, otherwise a publicId. Anything else returns null.
+ * Accepts the viewer URLs a user pastes (absolute or path-only, any host; only the path is read, the host is never
+ * contacted) or a bare publicId. Forms, as in parsePublishPath: `/p/r/{publicId}`, `/p/f/{publicId}` and
+ * `/p/u|pj|o/{scopeId}/{slug}[/asset]`. A bare slug is not accepted: slugs are unique only per tier and scope, and
+ * every minted publicId is also slug-shaped, so a bare value is always read as a publicId. `/a/{shareToken}` links
+ * are refused: a share token grants no-sign-in access and is not a Live Artifact reference. Anything else is null.
  */
 export function parseLiveArtifactRef(input: string): LiveArtifactRef | null {
   const text = input.trim();
-  if (/^https?:\/\//i.test(text) || text.startsWith('/')) {
-    let pathname: string;
-    try {
-      pathname = new URL(text, 'http://placeholder.invalid').pathname;
-    } catch {
-      return null;
-    }
-    const match = LIVE_ARTIFACT_PATH_RE.exec(pathname);
-    if (!match) return null;
-    const [, tier, id] = match;
-    if (tier) return isPublicId(id) ? { kind: 'publicId', value: id, tierPath: tier as 'r' | 'f' } : null;
-    return isSlug(id) ? { kind: 'slug', value: id } : null;
+  if (!/^https?:\/\//i.test(text) && !text.startsWith('/'))
+    return isPublicId(text) ? { kind: 'publicId', value: text } : null;
+
+  let pathname: string;
+  try {
+    pathname = new URL(text, 'http://placeholder.invalid').pathname;
+  } catch {
+    return null;
   }
-  if (isSlug(text)) return { kind: 'slug', value: text };
-  if (isPublicId(text)) return { kind: 'publicId', value: text };
-  return null;
+  const [root, head, ...rest] = pathname.split('/').slice(1);
+  if (root !== 'p' || !head) return null;
+  if (head === 'r' || head === 'f') {
+    const [id, ...extra] = rest;
+    return isPublicId(id) && extra.every(s => s === '') ? { kind: 'publicId', value: id, tierPath: head } : null;
+  }
+  const tier = TIER_BY_PREFIX[head];
+  const [scopeId, slug] = rest;
+  return tier && isPublicId(scopeId) && isSlug(slug) ? { kind: 'bundle', tier, scopeId, slug } : null;
 }
 
 /** Zod form of {@link parseLiveArtifactRef}, so a tool rejects a bad ref before any transport call. */
 export const liveArtifactRefSchema = z
   .string()
   .max(2048)
-  .refine(value => parseLiveArtifactRef(value) !== null, 'not a /p/ URL, slug or public id');
+  .refine(value => parseLiveArtifactRef(value) !== null, 'not a /p/ URL or public id');

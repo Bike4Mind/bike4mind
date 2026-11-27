@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { isObjectId, isPublicId, isSlug, isUuid, liveArtifactRefSchema, parseLiveArtifactRef } from './ids';
 
@@ -21,24 +22,57 @@ describe('id validators', () => {
   });
 });
 
+const mintPublicId = () => randomUUID().replace(/-/g, '').slice(0, 12);
+
 describe('parseLiveArtifactRef', () => {
+  const id = mintPublicId();
+  const scope = '507f1f77bcf86cd799439011';
+
+  it('reads a freshly minted bare publicId as a publicId', () => {
+    for (let i = 0; i < 200; i++) {
+      const minted = mintPublicId();
+      expect(parseLiveArtifactRef(minted)).toEqual({ kind: 'publicId', value: minted });
+    }
+  });
+
+  it('never returns a slug kind for a bare value', () => {
+    expect(parseLiveArtifactRef('my-page')).toEqual({ kind: 'publicId', value: 'my-page' });
+  });
+
   it.each([
-    ['/p/r/Abc123', { kind: 'publicId', value: 'Abc123', tierPath: 'r' }],
-    ['/p/f/Abc123/', { kind: 'publicId', value: 'Abc123', tierPath: 'f' }],
-    ['https://other.example.org/p/r/Abc123?x=1#y', { kind: 'publicId', value: 'Abc123', tierPath: 'r' }],
-    ['/p/my-page', { kind: 'slug', value: 'my-page' }],
-    ['my-page', { kind: 'slug', value: 'my-page' }],
-    ['Abc_123', { kind: 'publicId', value: 'Abc_123' }],
-    ['  my-page  ', { kind: 'slug', value: 'my-page' }],
+    [`/p/r/${id}`, { kind: 'publicId', value: id, tierPath: 'r' }],
+    [`/p/f/${id}/`, { kind: 'publicId', value: id, tierPath: 'f' }],
+    [`https://other.example.org/p/r/${id}?x=1#y`, { kind: 'publicId', value: id, tierPath: 'r' }],
+    [`/p/u/${scope}/my-page`, { kind: 'bundle', tier: 'user', scopeId: scope, slug: 'my-page' }],
+    [`https://x.example/p/pj/${scope}/my-page/`, { kind: 'bundle', tier: 'project', scopeId: scope, slug: 'my-page' }],
+    [
+      `https://x.example/p/o/${scope}/my-page/assets/app.js?v=1`,
+      { kind: 'bundle', tier: 'organization', scopeId: scope, slug: 'my-page' },
+    ],
+    [`  ${id}  `, { kind: 'publicId', value: id }],
   ])('resolves %s', (input, expected) => {
     expect(parseLiveArtifactRef(input)).toEqual(expected);
   });
 
-  it.each(['', '/p/', '/p/r/', '/p/r/a/b', '/u/Abc123', 'https://x.test/other', '/p/r/a b', 'a/b', '../x', '/p/r/..'])(
-    'refuses %j',
-    input => {
-      expect(parseLiveArtifactRef(input)).toBeNull();
-      expect(liveArtifactRefSchema.safeParse(input).success).toBe(false);
-    }
-  );
+  it.each([
+    '',
+    '/p/',
+    '/p/r/',
+    '/p/r/a/b',
+    '/p/my-page',
+    '/p/u/my-page',
+    `/p/u/${scope}`,
+    `/p/x/${scope}/my-page`,
+    `/p/u/${scope}/Bad_Slug`,
+    '/a/abcDEF123_-token',
+    '/u/Abc123',
+    'https://x.test/other',
+    '/p/r/a b',
+    'a/b',
+    '../x',
+    '/p/r/..',
+  ])('refuses %j', input => {
+    expect(parseLiveArtifactRef(input)).toBeNull();
+    expect(liveArtifactRefSchema.safeParse(input).success).toBe(false);
+  });
 });

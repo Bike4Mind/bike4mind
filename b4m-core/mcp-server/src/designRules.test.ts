@@ -34,6 +34,29 @@ describe('checkToolDesign', () => {
     ['long description', { description: 'x'.repeat(601) }, /600/],
     ['confirm input', { inputSchema: { confirm: z.boolean() } }, /confirm/],
     ['confirm_delete input', { inputSchema: { confirm_delete: z.boolean() } }, /confirm/],
+    ['nested confirm input', { inputSchema: { opts: z.object({ confirm: z.boolean() }) } }, /confirm/],
+    [
+      'untrusted output in a union',
+      { outputSchema: envelope(z.union([z.object({ untrusted_x: z.string() }), z.object({ y: z.string() })])) },
+      /untrusted_/,
+    ],
+    [
+      'untrusted output in a discriminated union',
+      {
+        outputSchema: envelope(
+          z.discriminatedUnion('t', [
+            z.object({ t: z.literal('a'), untrusted_x: z.string() }),
+            z.object({ t: z.literal('b') }),
+          ])
+        ),
+      },
+      /untrusted_/,
+    ],
+    [
+      'untrusted output in a record',
+      { outputSchema: envelope(z.record(z.string(), z.object({ untrusted_x: z.string() }))) },
+      /untrusted_/,
+    ],
     [
       'untrusted output without note',
       { outputSchema: envelope(z.object({ items: z.array(z.object({ untrusted_body: z.string() })) })) },
