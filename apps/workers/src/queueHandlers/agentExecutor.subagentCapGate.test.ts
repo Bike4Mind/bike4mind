@@ -76,6 +76,10 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentExecutionRepository, 'claimExecution').mockResolvedValue(true as never);
   vi.spyOn(actual.agentExecutionRepository, 'updateConnectionId').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'markFailed').mockImplementation((...args) => mockMarkFailed(...args));
+  vi.spyOn(actual.agentExecutionRepository, 'markFailedIfActive').mockImplementation(async (...args) => {
+    await mockMarkFailed(...args);
+    return true;
+  });
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({ id: 'session-1', userId: 'user-1' } as never);
   vi.spyOn(actual.organizationRepository, 'findById').mockResolvedValue(capOrg as never);
