@@ -337,8 +337,8 @@ const handler = baseApi({
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
-    // keep serving an indexable copy for up to an hour; (d) the title or description
-    // changed, so the page does not show the old ones while the owner's list shows the new;
+    // keep serving an indexable copy for up to an hour; (d) the title, description or card
+    // image changed, so the page does not show the old ones while the owner's list shows the new;
     // (e) the comment policy changed - the comment widget is part of the cached markup.
     // Best-effort; awaited because a Lambda can freeze before a dangling promise sends,
     // and this is the revoke the owner is waiting on.
