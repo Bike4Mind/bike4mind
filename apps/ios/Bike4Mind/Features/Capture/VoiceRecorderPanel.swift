@@ -75,7 +75,7 @@ struct VoiceRecorderPanel: View {
   }
 
   private func recordButton(
-    symbol: String, label: String, tint: Color = .accentColor, action: @escaping () async -> Void
+    symbol: String, label: String, tint: Color = Tokens.Palette.brand, action: @escaping () async -> Void
   ) -> some View {
     Button {
       Task { await action() }

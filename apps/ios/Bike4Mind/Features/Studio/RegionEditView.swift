@@ -21,6 +21,7 @@ struct RegionEditView: View {
       VStack(spacing: 0) {
         canvas
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          // Media canvas: black in both appearances so frames and region outlines keep their contrast.
           .background(Color.black)
         regionList
       }

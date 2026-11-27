@@ -190,7 +190,7 @@ struct SceneComposerView: View {
       .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
-          .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 3)
+          .strokeBorder(selected ? Tokens.Palette.brand : .clear, lineWidth: 3)
       }
     }
     .buttonStyle(.plain)
