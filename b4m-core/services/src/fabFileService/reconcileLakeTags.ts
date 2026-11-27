@@ -16,6 +16,7 @@ import {
   isStaticRegistryDatalakeTag,
 } from '../dataLakeService/authorizeLakeWrite';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
+import { canColdAddFileToLake } from '../dataLakeService/manageRule';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
@@ -178,6 +179,9 @@ export const reconcileLakeTags = async (
   // `wanted`). The subset this actor cannot manage (`unmanagedPreservedLakes`, below) is derived
   // after the grants are primed - its content tags are then force-carried, see far below.
   const preservedMemberLakes: MembershipLake[] = [];
+  // Joins whose key the file already holds in a non-canonical casing: a client resending the stale
+  // tag unchanged. Not membership, so normalizing it would be a real join (see the gate below).
+  const resentNonCanonicalLakes = new Set<MembershipLake>();
 
   for (const key of new Set([...desiredKeys, ...currentKeys])) {
     const wanted = desiredKeys.has(key);
@@ -212,6 +216,7 @@ export const reconcileLakeTags = async (
     } else if (wanted) {
       metaTagsToPersist.push(lake.datalakeTag);
       joins.push(lake);
+      if (currentKeys.has(key)) resentNonCanonicalLakes.add(lake);
     }
   }
 
@@ -220,10 +225,31 @@ export const reconcileLakeTags = async (
   await grantResolver.prime([...preservedMemberLakes, ...joins]);
   const unmanagedPreservedLakes: MembershipLake[] = preservedMemberLakes.filter(lake => !canManage(lake));
 
-  for (const lake of joins) {
-    if (!canManage(lake)) {
-      throw new BadRequestError('You do not have permission to add files to this data lake');
+  const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
+  const owner = fileOwnerUserId ?? cachedFile?.userId;
+  if (owner === undefined) {
+    // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
+    // first) - both always supply one of the two owner signals. A hypothetical future caller
+    // missing both has any meta-tag join refused below, and nothing can join through the
+    // owner-scoped prefix arm either, so the admission contract has nothing to grade. Logged
+    // rather than thrown so a write that joins nothing still goes through.
+    logger?.warn?.(
+      'reconcileLakeTags: could not resolve file owner; prefix-arm preservation and admission skipped',
+      fabFileId
+    );
+  }
+
+  for (const lake of [...joins]) {
+    // Managing the lake is not enough: its meta-tag is read access, so the cold-add ownership rule applies.
+    const mayJoin = canManage(lake) && canColdAddFileToLake(lake, actor, grantResolver.get(lake.id), owner);
+    if (!mayJoin && resentNonCanonicalLakes.has(lake)) {
+      // A stale miscased tag the actor may not turn into membership: drop it rather than refuse,
+      // so an unrelated edit (rename, content) still saves.
+      joins.splice(joins.indexOf(lake), 1);
+      metaTagsToPersist.splice(metaTagsToPersist.indexOf(lake.datalakeTag), 1);
+      continue;
     }
+    if (!mayJoin) throw new BadRequestError('You do not have permission to add files to this data lake');
     assertLakeWritable(lake);
   }
 
@@ -246,15 +272,6 @@ export const reconcileLakeTags = async (
   // Evaluated against `reconciledTags` (post-tagger), not the raw array: the fallback tagger can
   // mint a nested stamp that re-satisfies a would-be-departing lake's prefix, and judging against
   // the pre-tagger array could force-carry a tag the persisted array already keeps.
-  const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
-  const owner = fileOwnerUserId ?? cachedFile?.userId;
-  if (owner === undefined) {
-    // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
-    // first) - both always supply one of the two owner signals. Logged, not thrown: a
-    // hypothetical future caller missing both should degrade to skipping prefix-arm
-    // preservation, not fail the whole write.
-    logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
-  }
   const resultingTagNames = reconciledTags.map(t => t.name);
   // Resolved once and reused for the unmanaged-prefix-drop check below - both need the same
   // owner-scoped candidate set, and querying it twice per write was pure I/O waste (a dropped,
@@ -295,17 +312,8 @@ export const reconcileLakeTags = async (
   // so a refusal happens before any join is applied. Leaves and preserved memberships are
   // deliberately absent: the contract governs admission, never eviction.
   //
-  // An unresolvable owner is the one case this cannot grade - the chunk policy it predicts against
-  // is owner-altitude, so there is no scope to resolve. That is a FAILED READ, not a clean pass, so
-  // it is logged rather than waved through silently: unreachable from `updateFabFile` and the PUT
-  // route (both always supply an owner signal), and a future caller that trips it should see why
-  // its contract never fired instead of concluding the content was admissible.
-  if (owner === undefined) {
-    logger?.warn?.(
-      'reconcileLakeTags: could not resolve file owner; admission contract NOT evaluated for this write',
-      fabFileId
-    );
-  } else {
+  // An unresolvable owner joins nothing (see the owner warning above), so there is nothing to grade.
+  if (owner !== undefined) {
     await assertLakeAdmission(
       [...joins, ...statsOnlyJoins],
       [

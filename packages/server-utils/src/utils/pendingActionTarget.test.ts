@@ -5,17 +5,21 @@ import type { Logger } from '@bike4mind/observability';
 
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
+  mcpServerRepository: { findOne: vi.fn() },
 }));
+
+vi.mock('./mcpEnv', () => ({ buildMcpEnvVariables: vi.fn() }));
 
 vi.mock('./storage/index', () => {
   const storage = { download: vi.fn() };
   return { getFilesStorage: () => storage };
 });
 
-import { fabFileRepository } from '@bike4mind/database';
+import { fabFileRepository, mcpServerRepository } from '@bike4mind/database';
+import { buildMcpEnvVariables } from './mcpEnv';
 import { getFilesStorage } from './storage/index';
 import { ConfluenceResource, GitHubResource, JiraResource } from '@bike4mind/slack';
-import { loadFabFileAttachment, resolvePendingActionTarget } from './pendingActionTarget';
+import { loadFabFileAttachment, NotionMcpCredentials, resolvePendingActionTarget } from './pendingActionTarget';
 
 const FAB_FILE_ID = 'cccccccccccccccccccccccc';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -112,7 +116,43 @@ describe('resolvePendingActionTarget', () => {
     expect(target?.resource).not.toBeInstanceOf(JiraResource);
   });
 
-  it.each(['get_issue', 'image_generation', 'unknown_tool'])('refuses the non-confirmable tool %s', tool => {
-    expect(resolvePendingActionTarget(tool, user, logger)).toBeNull();
+  it.each(['notion_create_page', 'notion_append_blocks'])(
+    'routes the Notion write tool %s to the Notion server',
+    tool => {
+      const target = resolvePendingActionTarget(tool, user, logger);
+
+      expect(target?.mcpName).toBe('notion');
+      expect(target?.resource).toBeInstanceOf(NotionMcpCredentials);
+    }
+  );
+
+  it.each(['get_issue', 'image_generation', 'unknown_tool', 'notion_read_page', 'notion_search'])(
+    'refuses the non-confirmable tool %s',
+    tool => {
+      expect(resolvePendingActionTarget(tool, user, logger)).toBeNull();
+    }
+  );
+});
+
+describe('NotionMcpCredentials', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("builds the env from the confirming user's enabled Notion server", async () => {
+    const server = { name: 'notion', enabled: true };
+    vi.mocked(mcpServerRepository.findOne).mockResolvedValue(server as never);
+    vi.mocked(buildMcpEnvVariables).mockResolvedValue([{ key: 'NOTION_ACCESS_TOKEN', value: 't' }]);
+
+    await expect(new NotionMcpCredentials('user-1').getMcpEnvVariables()).resolves.toEqual([
+      { key: 'NOTION_ACCESS_TOKEN', value: 't' },
+    ]);
+    expect(mcpServerRepository.findOne).toHaveBeenCalledWith({ userId: 'user-1', name: 'notion' });
+    expect(buildMcpEnvVariables).toHaveBeenCalledWith(server);
+  });
+
+  it.each([null, { name: 'notion', enabled: false }])('refuses when the server is %o', async server => {
+    vi.mocked(mcpServerRepository.findOne).mockResolvedValue(server as never);
+
+    await expect(new NotionMcpCredentials('user-1').getMcpEnvVariables()).rejects.toThrow('Notion is not connected');
+    expect(buildMcpEnvVariables).not.toHaveBeenCalled();
   });
 });

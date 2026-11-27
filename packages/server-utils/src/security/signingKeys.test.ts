@@ -49,12 +49,23 @@ describe('signing keys', () => {
   });
 
   describe('without HMAC_SIGNING_SECRET', () => {
-    it('signs every purpose with the raw encryption key', () => {
+    it('derives a distinct key per purpose from the encryption key and still verifies the raw one', () => {
       const encryptionKey = hex();
       configure({ SECRET_ENCRYPTION_KEY: encryptionKey });
-      for (const purpose of PURPOSES) {
-        expect(signingKey(purpose)).toBe(encryptionKey);
-        expect(verificationKeys(purpose)).toEqual([encryptionKey]);
+      const keys = PURPOSES.map(purpose => signingKey(purpose));
+      expect(new Set(keys).size).toBe(PURPOSES.length);
+      PURPOSES.forEach((purpose, i) => {
+        expect(keys[i]).toBe(derived(encryptionKey, purpose));
+        expect(keys[i]).not.toBe(encryptionKey);
+        expect(verificationKeys(purpose)).toEqual([keys[i], encryptionKey]);
+      });
+    });
+
+    it('never signs one purpose with a key another purpose signs with', () => {
+      configure({ SECRET_ENCRYPTION_KEY: hex() });
+      const receiptKey = signingKey('purge-receipt');
+      for (const purpose of PURPOSES.filter(p => p !== 'purge-receipt')) {
+        expect(verificationKeys(purpose)).not.toContain(receiptKey);
       }
     });
 
@@ -62,8 +73,8 @@ describe('signing keys', () => {
       const encryptionKey = hex();
       configure({ SECRET_ENCRYPTION_KEY: encryptionKey, HMAC_SIGNING_SECRET_PREVIOUS: hex() });
       for (const purpose of PURPOSES) {
-        expect(signingKey(purpose)).toBe(encryptionKey);
-        expect(verificationKeys(purpose)).toEqual([encryptionKey]);
+        expect(signingKey(purpose)).toBe(derived(encryptionKey, purpose));
+        expect(verificationKeys(purpose)).toEqual([derived(encryptionKey, purpose), encryptionKey]);
       }
     });
 
@@ -72,8 +83,11 @@ describe('signing keys', () => {
       placeholder => {
         const encryptionKey = hex();
         configure({ HMAC_SIGNING_SECRET: placeholder, SECRET_ENCRYPTION_KEY: encryptionKey });
-        expect(signingKey('search-image-url')).toBe(encryptionKey);
-        expect(verificationKeys('search-image-url')).toEqual([encryptionKey]);
+        expect(signingKey('search-image-url')).toBe(derived(encryptionKey, 'search-image-url'));
+        expect(verificationKeys('search-image-url')).toEqual([
+          derived(encryptionKey, 'search-image-url'),
+          encryptionKey,
+        ]);
       }
     );
 
@@ -83,14 +97,20 @@ describe('signing keys', () => {
       expect(verificationKeys('search-image-url')).toEqual([]);
     });
 
-    it.each(['my-secret-placeholder-value', 'not-configured', '', 'change-me-openssl-rand-hex-32'])(
-      'signs with a %j encryption key as before but does not accept it for verification',
+    it.each(['my-secret-placeholder-value', 'not-configured', 'change-me-openssl-rand-hex-32'])(
+      'signs with a key derived from a %j encryption key but does not accept it for verification',
       placeholder => {
         configure({ SECRET_ENCRYPTION_KEY: placeholder });
-        expect(signingKey('telemetry-salt')).toBe(placeholder);
+        expect(signingKey('telemetry-salt')).toBe(derived(placeholder, 'telemetry-salt'));
         expect(verificationKeys('telemetry-salt')).toEqual([]);
       }
     );
+
+    it('returns an empty key for an empty encryption key', () => {
+      configure({ SECRET_ENCRYPTION_KEY: '' });
+      expect(signingKey('telemetry-salt')).toBe('');
+      expect(verificationKeys('telemetry-salt')).toEqual([]);
+    });
   });
 
   describe('with HMAC_SIGNING_SECRET', () => {
@@ -144,8 +164,8 @@ describe('signing keys', () => {
         HMAC_SIGNING_SECRET_PREVIOUS: hex(),
         SECRET_ENCRYPTION_KEY: encryptionKey,
       });
-      expect(signingKey('telemetry-salt')).toBe(encryptionKey);
-      expect(verificationKeys('telemetry-salt')).toEqual([encryptionKey]);
+      expect(signingKey('telemetry-salt')).toBe(derived(encryptionKey, 'telemetry-salt'));
+      expect(verificationKeys('telemetry-salt')).toEqual([derived(encryptionKey, 'telemetry-salt'), encryptionKey]);
     });
   });
 
@@ -158,8 +178,8 @@ describe('signing keys', () => {
       configure({ SECRET_ENCRYPTION_KEY: encryptionKey });
       throwing.add('HMAC_SIGNING_SECRET');
       throwing.add('HMAC_SIGNING_SECRET_PREVIOUS');
-      expect(signingKey('search-image-url')).toBe(encryptionKey);
-      expect(verificationKeys('search-image-url')).toEqual([encryptionKey]);
+      expect(signingKey('search-image-url')).toBe(derived(encryptionKey, 'search-image-url'));
+      expect(verificationKeys('search-image-url')).toEqual([derived(encryptionKey, 'search-image-url'), encryptionKey]);
     });
 
     it.each([
@@ -184,7 +204,7 @@ describe('signing keys', () => {
   it('reads the secrets on each call, so a later change is picked up', () => {
     const first = hex();
     configure({ SECRET_ENCRYPTION_KEY: first });
-    expect(signingKey('purge-receipt')).toBe(first);
+    expect(signingKey('purge-receipt')).toBe(derived(first, 'purge-receipt'));
     const root = hex();
     configure({ HMAC_SIGNING_SECRET: root });
     expect(signingKey('purge-receipt')).toBe(derived(root, 'purge-receipt'));

@@ -1,9 +1,9 @@
 import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
+import { withTransactionThenEmail } from '@server/utils/withTransactionThenEmail';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   generateVerificationLink,
@@ -46,7 +46,7 @@ const handler = baseApi({ auth: true })
         }
       }
 
-      await withTransaction(async () => {
+      await withTransactionThenEmail(async queueEmail => {
         await userService.resendEmailVerification(
           { userId: req.user.id },
           {
@@ -105,7 +105,7 @@ const handler = baseApi({ auth: true })
           </body>
         </html>
       `;
-                await EmailEvents.Send.publish({
+                queueEmail({
                   to: user.email!,
                   subject: 'Verify Your Email Address',
                   body: emailBody,
@@ -125,9 +125,9 @@ const handler = baseApi({ auth: true })
           },
           req.logger
         );
-
-        return res.json({ message: 'Verification email resent successfully' });
       });
+
+      return res.json({ message: 'Verification email resent successfully' });
     })
   );
 

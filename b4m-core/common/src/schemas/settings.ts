@@ -1835,6 +1835,16 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  linkRules: z
+    .object({
+      enabled: z.boolean().prefault(true).meta({
+        title: 'Enabled',
+        description:
+          'When the model does not act, deterministic link rules (shared owned domain, admin-held signup domain, banned same device) may decide Limit or Hold signup grant, under the settings of those tiers.',
+      }),
+    })
+    .prefault({})
+    .meta({ title: 'Link rules' }),
   tiers: z
     .object({
       limit: z

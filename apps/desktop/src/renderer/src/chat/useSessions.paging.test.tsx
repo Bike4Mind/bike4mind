@@ -12,6 +12,7 @@ import {
   type SessionPageRequest,
 } from '@shared/sessionPage';
 import { useSessions, type SessionsController } from './useChat';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 const summary = (index: number): ChatSessionSummary =>
   ({
@@ -44,7 +45,7 @@ function pagingHost(count: number) {
     onNotification: () => () => undefined,
   };
   vi.stubGlobal('b4m', {
-    host,
+    host: { ...localHostConnections(), ...host },
     chat: { onStreamEvent: () => () => undefined },
     claudeImport: { onSessionsChanged: () => () => undefined },
   });

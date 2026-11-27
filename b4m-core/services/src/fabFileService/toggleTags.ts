@@ -16,7 +16,7 @@ import {
 import { BadRequestError, checkStorageLimitForOwner, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
-import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
+import { canColdAddFileToLake, canManageLake } from '../dataLakeService/manageRule';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
@@ -350,11 +350,7 @@ export const toggleTags = async (
       if (!joiningLakes) continue;
       for (const lake of joiningLakes) {
         const grants = grantResolver.get(lake.id);
-        const isOwner =
-          file.userId === actor.userId ||
-          ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
-            resolveEffectiveOwnerIds(lake, grants).includes(file.userId));
-        if (!isOwner) {
+        if (!canColdAddFileToLake(lake, actor, grants, file.userId)) {
           throw new BadRequestError('You do not have permission to add files to this data lake');
         }
       }

@@ -63,7 +63,7 @@ dispatch calls are rejected until each secret holds a generated value.
 > - **Evaluation only:** set `B4M_ALLOW_PLAINTEXT_SECRETS=true` in `.env.selfhost` and leave the template `SECRET_ENCRYPTION_KEY` value in place (do not blank it: the services exit when the variable is empty). The stack starts keyless, stored secrets stay in plaintext, every process logs a warning at boot, and admin System Health shows a warning.
 > - **Move to a key (recommended):**
 >   1. Generate one: `openssl rand -hex 32`. Back it up somewhere other than this host; losing it makes everything encrypted under it unreadable.
->   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has no non-empty value for it, generate one with `openssl rand -hex 32`, set it as `MEMORY_KEY_SECRET=...` (fill in an existing empty `MEMORY_KEY_SECRET=` line rather than adding a second one), and back it up next to the encryption key. Never change it afterwards. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`. If you normally start optional services with `--profile` flags (for example `agent-executor` or `render`) or `COMPOSE_PROFILES`, add the same ones here and in the restart below.
+>   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has no non-empty value for it, generate one with `openssl rand -hex 32`, set it as `MEMORY_KEY_SECRET=...` (fill in an existing empty `MEMORY_KEY_SECRET=` line rather than adding a second one), and back it up next to the encryption key. Do not change it except by the rotation procedure in `docs/security/credential-storage.md`. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`. If you normally start optional services with `--profile` flags (for example `agent-executor` or `render`) or `COMPOSE_PROFILES`, add the same ones here and in the restart below.
 >   3. Encrypt the rows already stored in plaintext. Stop the writers (skip any that are not running):
 >
 >      ```bash
@@ -1179,10 +1179,10 @@ Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (th
 docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 ```
 
-**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint and the session turns endpoint `/api/v1/turns` (both served by the `chatcompletion` container) stay internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
 
 ```caddyfile
-@completions path /api/ai/v1/completions
+@completions path /api/ai/v1/completions /api/v1/turns
 handle @completions {
 	reverse_proxy chatcompletion:8080
 }

@@ -246,6 +246,9 @@ class PyodideManager {
   private callRejecter: ((error: Error) => void) | null = null;
   private callNonce: string | null = null;
   private network: PyodideSandboxNetwork = 'data';
+  // Whose code has run in the current frame; null while no guest code has run in it. Code from two owners never
+  // shares an interpreter or a Worker, so a different owner gets a fresh frame.
+  private owner: string | null = null;
   // The pending run's time limit, armed once when the worker reports Running and never re-armed, so guest code that
   // posts the same status cannot extend it.
   private runLimitMs: number | null = null;
@@ -488,18 +491,24 @@ class PyodideManager {
    * Load Pyodide in a frame with `network` reach, replacing a frame with the other reach. Refuses while a run is
    * pending, since replacing the frame would end it.
    */
-  private async prepareSandbox(network: PyodideSandboxNetwork): Promise<void> {
+  private async prepareSandbox(network: PyodideSandboxNetwork, owner: string): Promise<void> {
     this.refuseIfBusy();
     if (this.network !== network) {
       this.network = network;
       if (this.frame || this.initPromise) this.dropSandbox();
     }
+    this.releaseForeignSandbox(owner);
+    this.owner = owner;
     if (this.state.isReady && this.frame) return;
     await this.initialize();
     // An interrupt landed after the load settled; its replacement frame is not ready yet.
     if (!this.frame || !this.state.isReady) throw new Error('Execution interrupted');
     // Another caller switched the frame while this one waited for it to load.
-    if (this.network !== network) throw new Error(PYTHON_SCRIPT_BUSY);
+    if (this.network !== network || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
+  }
+
+  private releaseForeignSandbox(owner: string): void {
+    if (this.owner !== null && this.owner !== owner && (this.frame || this.initPromise)) this.dropSandbox();
   }
 
   // Called again after every await: a second caller would replace the first one's resolver and leave its promise
@@ -518,9 +527,14 @@ class PyodideManager {
   }
 
   /**
-   * Initialize Pyodide (lazy-loaded singleton)
+   * Load Pyodide. With `owner`, a frame another owner's code has run in is replaced first, so that owner's first run
+   * finds a clean frame already loaded. Refuses while a run is pending rather than ending it.
    */
-  async initialize(): Promise<void> {
+  async initialize(owner?: string): Promise<void> {
+    if (owner !== undefined && this.owner !== null && this.owner !== owner) {
+      this.refuseIfBusy();
+      this.releaseForeignSandbox(owner);
+    }
     if (this.state.isReady && this.frame) {
       return;
     }
@@ -562,13 +576,20 @@ class PyodideManager {
    * Runs in a Worker inside the opaque-origin sandbox frame, so it won't freeze the UI and
    * cannot reach the app origin. Use interrupt() to stop execution (e.g., for infinite loops).
    *
+   * @param owner - Whose code this is, such as the artifact id; a different owner than the last run gets a new sandbox
    * @param code - Python code to execute
    * @param packages - Optional list of packages to load before execution
    * @param timeoutMs - Execution timeout in milliseconds (default: 30s)
    */
-  async execute(code: string, packages: string[] = [], timeoutMs = EXECUTION_TIMEOUT_MS): Promise<ExecutionResult> {
-    await this.prepareSandbox('data');
+  async execute(
+    owner: string,
+    code: string,
+    packages: string[] = [],
+    timeoutMs = EXECUTION_TIMEOUT_MS
+  ): Promise<ExecutionResult> {
+    await this.prepareSandbox('data', owner);
     this.refuseIfBusy();
+    if (this.network !== 'data' || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
 
     return new Promise<ExecutionResult>((resolve, reject) => {
       this.executeResolver = resolve;
@@ -586,19 +607,20 @@ class PyodideManager {
   /**
    * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`, in the network-free
    * frame. Shares execute()'s single-run guard and is stopped the same way, by interrupt(). Reading the contract
-   * alone is held to `FUNCTION_READ_TIMEOUT_MS` unless a limit is given.
+   * alone is held to `FUNCTION_READ_TIMEOUT_MS` unless a limit is given. `owner` is as for execute().
    */
   async callFunction(
+    owner: string,
     code: string,
     packages: string[] = [],
     params: Record<string, unknown> | null = null,
     timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS,
     files: { name: string; bytes: ArrayBuffer }[] = []
   ): Promise<PythonFunctionCall> {
-    await this.prepareSandbox('none');
+    await this.prepareSandbox('none', owner);
     this.refuseIfBusy();
     // An execute started while this await settled has already switched to the frame with data origins.
-    if (this.network !== 'none') throw new Error(PYTHON_SCRIPT_BUSY);
+    if (this.network !== 'none' || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
 
     const paramsJson = params === null ? null : toPythonJson(params);
     const nonce = randomUuid();
@@ -624,6 +646,7 @@ class PyodideManager {
   private dropSandbox(): void {
     const rejectInit = this.initRejecter;
     this.teardownSandbox();
+    this.owner = null;
     this.initPromise = null;
     this.initResolver = null;
     this.initRejecter = null;

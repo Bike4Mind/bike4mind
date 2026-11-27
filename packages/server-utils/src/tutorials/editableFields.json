@@ -88,5 +88,47 @@
       "title",
       "body"
     ]
+  },
+  "projects": {
+    "projects-open": [
+      "title",
+      "body"
+    ],
+    "projects-create": [
+      "title",
+      "body"
+    ],
+    "projects-name": [
+      "title",
+      "body"
+    ],
+    "projects-files-tab": [
+      "title",
+      "body"
+    ],
+    "projects-pick-file": [
+      "title",
+      "body"
+    ],
+    "projects-notebooks-tab": [
+      "title",
+      "body"
+    ],
+    "projects-pick-notebook": [
+      "title",
+      "body"
+    ],
+    "projects-open-notebook": [
+      "title",
+      "body"
+    ],
+    "projects-ask": [
+      "title",
+      "body"
+    ],
+    "projects-done": [
+      "title",
+      "body"
+    ]
   }
 }

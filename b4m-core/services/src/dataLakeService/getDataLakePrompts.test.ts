@@ -715,8 +715,8 @@ describe('getAccessibleDataLakePrompts', () => {
     });
 
     it('a registry id shadowed by a real DB lake at the same slug is excluded from registry candidates', async () => {
-      // disambiguateSlug refuses to mint a NEW lake at a registry-owned slug, so this shape is rare -
-      // but if a DB lake already exists there (predating the registry entry), the DB lake wins.
+      // disambiguateSlug refuses to mint a NEW lake at a registry key, so this shape is rare - but an
+      // org-scoped DB lake already there (predating that reservation) wins for its org.
       const shadowingDbLake = makeLake({
         id: 'db-doc-id',
         slug: ORG_LAKE.id,
@@ -734,6 +734,23 @@ describe('getAccessibleDataLakePrompts', () => {
       // Excluded before the overlay fetch (GATELESS_LAKE has no org, ORG_LAKE is shadowed), so with
       // no candidates left the batch read is never even attempted.
       expect(fallbackLakeSettings.findByLakeIds).not.toHaveBeenCalled();
+    });
+
+    it('an org-less DB lake at a registry id does not displace the registry prompt', async () => {
+      const orglessDbLake = makeLake({
+        id: 'orgless-doc-id',
+        slug: ORG_LAKE.id,
+        isPublic: true,
+        createdByUserId: 'someone-else',
+        systemPrompt: 'Org-less text.',
+      });
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Cite sources.' }]),
+      };
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([orglessDbLake], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts).toContainEqual({ id: ORG_LAKE.id, name: ORG_LAKE.name, systemPrompt: 'Cite sources.' });
     });
   });
 

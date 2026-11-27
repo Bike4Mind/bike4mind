@@ -17,6 +17,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 vi.mock('@bike4mind/database', () => ({ FabFile: { findOne } }));
 vi.mock('@bike4mind/common', () => ({
   isImageServeable: (f: { ok: boolean }) => f.ok,
+  MODAL_MEDIA_PREFIX: 'modals',
   BadRequestError: class extends Error {
     status = 400;
   },
@@ -29,16 +30,18 @@ vi.mock('./modalImageUrls', () => ({
 import { ModalImageHandler, bucketObjectKey } from './modalImageHandler';
 
 const SIGNED = 'https://test-bucket.s3.amazonaws.com/uploads/abc.png?X-Amz-Algorithm=AWS4&X-Amz-Signature=sig';
+const ACTOR = 'actor-1';
+const ownImage = { ok: true, userId: ACTOR, mimeType: 'image/png' };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  findOne.mockResolvedValue(null);
+  findOne.mockResolvedValue(ownImage);
   send.mockResolvedValue({});
 });
 
 describe('ModalImageHandler.processModalImageUrl', () => {
   it('copies the object and returns the bare key with no signature parameters', async () => {
-    const result = await ModalImageHandler.processModalImageUrl(SIGNED);
+    const result = await ModalImageHandler.processModalImageUrl(SIGNED, ACTOR);
 
     expect(result).toMatch(/^modal-images\/[0-9a-f-]+\.png$/);
     expect(result).not.toContain('X-Amz');
@@ -46,23 +49,46 @@ describe('ModalImageHandler.processModalImageUrl', () => {
   });
 
   it('leaves external URLs unchanged', async () => {
-    expect(await ModalImageHandler.processModalImageUrl('https://cdn.example.com/a.png')).toBe(
+    expect(await ModalImageHandler.processModalImageUrl('https://cdn.example.com/a.png', ACTOR)).toBe(
       'https://cdn.example.com/a.png'
     );
     expect(send).not.toHaveBeenCalled();
   });
 
   it('refuses an image that is not serveable with a 400', async () => {
-    findOne.mockResolvedValue({ ok: false });
-    await expect(ModalImageHandler.processModalImageUrl(SIGNED)).rejects.toMatchObject({
+    findOne.mockResolvedValue({ ...ownImage, ok: false });
+    await expect(ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).rejects.toMatchObject({
       message: expect.stringMatching(/not available/),
       status: 400,
     });
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('copies an upload made for banner use whoever uploaded it', async () => {
+    findOne.mockResolvedValue({ ...ownImage, userId: 'someone-else' });
+    const bannerUpload = 'https://test-bucket.s3.amazonaws.com/modals/abc.png';
+    expect(await ModalImageHandler.processModalImageUrl(bannerUpload, ACTOR)).toMatch(/^modal-images\//);
+  });
+
+  it('refuses another user upload outside the banner folder even with a banner purpose', async () => {
+    findOne.mockResolvedValue({ ...ownImage, userId: 'someone-else', purpose: 'modal-media' });
+    await expect(ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).rejects.toMatchObject({ status: 400 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['has no upload record', null],
+    ['belongs to another user', { ...ownImage, userId: 'someone-else' }],
+    ['is not an image', { ...ownImage, mimeType: 'application/pdf' }],
+    ['has no mime type', { ok: true, userId: ACTOR }],
+  ])('refuses a source object that %s', async (_label, file) => {
+    findOne.mockResolvedValue(file);
+    await expect(ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).rejects.toMatchObject({ status: 400 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('copies from the full object key and checks moderation on it', async () => {
-    await ModalImageHandler.processModalImageUrl(SIGNED);
+    await ModalImageHandler.processModalImageUrl(SIGNED, ACTOR);
 
     expect(findOne).toHaveBeenCalledWith({ filePath: 'uploads/abc.png' });
     expect(send.mock.calls[0][0].input).toMatchObject({
@@ -73,7 +99,8 @@ describe('ModalImageHandler.processModalImageUrl', () => {
 
   it('copies an unsigned object URL from the bucket too', async () => {
     const result = await ModalImageHandler.processModalImageUrl(
-      'https://test-bucket.s3.us-east-2.amazonaws.com/modals/x%20y.png'
+      'https://test-bucket.s3.us-east-2.amazonaws.com/modals/x%20y.png',
+      ACTOR
     );
 
     expect(result).toMatch(/^modal-images\/[0-9a-f-]+\.png$/);
@@ -84,14 +111,15 @@ describe('ModalImageHandler.processModalImageUrl', () => {
     send.mockRejectedValue(new Error('NoSuchKey'));
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
-    expect(await ModalImageHandler.processModalImageUrl(SIGNED)).toBe(
+    expect(await ModalImageHandler.processModalImageUrl(SIGNED, ACTOR)).toBe(
       'https://test-bucket.s3.amazonaws.com/uploads/abc.png'
     );
   });
 
   it('strips the signature from a signed URL for another bucket without copying it', async () => {
     const result = await ModalImageHandler.processModalImageUrl(
-      'https://other-bucket.s3.amazonaws.com/a.png?X-Amz-Algorithm=AWS4&X-Amz-Signature=sig'
+      'https://other-bucket.s3.amazonaws.com/a.png?X-Amz-Algorithm=AWS4&X-Amz-Signature=sig',
+      ACTOR
     );
 
     expect(result).toBe('https://other-bucket.s3.amazonaws.com/a.png');

@@ -14,8 +14,8 @@ can instead share one load balancer and add only a target group and host-based l
 - The stage creates its own target group and attaches the ECS service to it.
 - It adds two rules to the shared HTTPS listener, both matching the host
   `chat-origin-<SERVER_DOMAIN>`:
-  - the stage's CloudFront origin-verify header, for `/api/ai/v1/completions` and
-    `/api/embed/chat`;
+  - the stage's CloudFront origin-verify header, for `/api/ai/v1/completions`,
+    `/api/embed/chat` and `/api/v1/turns`;
   - `/process` and `/health` from the VPC NAT egress IPs, for the frontend's quest dispatch and
     the status probe.
 

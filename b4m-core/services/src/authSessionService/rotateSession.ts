@@ -40,6 +40,9 @@ export interface RotateSessionAdapters {
     realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   signAccessToken: (id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>) => string;
+  /** Whether the admin behind an impersonation session may still drive it. Without it an
+   *  impersonation session is refused, so only a caller that checks the admin can refresh one. */
+  isImpersonatorAuthorized?: (adminId: string) => Promise<boolean>;
   /** Replay tolerance for the just-superseded secret; defaults to REFRESH_REPLAY_WINDOW_MS. */
   replayWindowMs?: number;
   /** How many replays of the superseded secret are served per generation; defaults to
@@ -197,6 +200,7 @@ export const rotateSession = async (
   {
     db,
     signAccessToken,
+    isImpersonatorAuthorized,
     replayWindowMs = REFRESH_REPLAY_WINDOW_MS,
     maxReplayUses = MAX_REFRESH_REPLAY_USES,
     maxRecoveries = MAX_SESSION_RECOVERIES,
@@ -245,7 +249,10 @@ export const rotateSession = async (
   const finish = async (rotatedSecret: string | null): Promise<RotateSessionResult> => {
     const user = await db.users.findById(session.userId);
     if (!user) throw invalid();
-    if (session.impersonatedBy && !isLive(session, new Date())) throw invalid();
+    if (session.impersonatedBy) {
+      if (!isLive(session, new Date())) throw invalid();
+      if (!isImpersonatorAuthorized || !(await isImpersonatorAuthorized(session.impersonatedBy))) throw invalid();
+    }
 
     const accessToken = signAccessToken(user.id, user.tokenVersion ?? 0, {
       sid,

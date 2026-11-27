@@ -26,12 +26,13 @@ const derive = (root: string, purpose: SigningPurpose): string =>
 
 /**
  * Key for new signatures of this purpose: derived from HMAC_SIGNING_SECRET when it is set,
- * otherwise the raw SECRET_ENCRYPTION_KEY. '' when neither is available.
+ * otherwise derived from SECRET_ENCRYPTION_KEY. '' when neither is available.
  */
 export function signingKey(purpose: SigningPurpose): string {
   const root = readSecret('HMAC_SIGNING_SECRET');
   if (isConfigured(root)) return derive(root, purpose);
-  return readSecret('SECRET_ENCRYPTION_KEY') ?? '';
+  const encryptionKey = readSecret('SECRET_ENCRYPTION_KEY');
+  return encryptionKey ? derive(encryptionKey, purpose) : '';
 }
 
 /**
@@ -55,6 +56,7 @@ export function verificationKeys(purpose: SigningPurpose): string[] {
     if (isConfigured(previous)) keys.push(derive(previous, purpose), previous);
     return keys;
   }
+  // The raw key stays accepted for values signed before the fallback was derived per purpose.
   const encryptionKey = readSecret('SECRET_ENCRYPTION_KEY');
-  return isConfigured(encryptionKey) ? [encryptionKey] : [];
+  return isConfigured(encryptionKey) ? [derive(encryptionKey, purpose), encryptionKey] : [];
 }

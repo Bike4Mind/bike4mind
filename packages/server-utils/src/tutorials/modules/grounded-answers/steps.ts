@@ -23,7 +23,7 @@ export const GROUNDED_ANSWERS_STEPS: TutorialStep[] = [
     anchor: 'session-bottom-container',
     placement: 'above',
     title: 'Ask about it',
-    body: 'Press Paste the message to put a question about the file in the message box, then press Send.',
+    body: 'A question about the file is waiting in the message box. Press Send.',
   },
   {
     id: 'grounded-answers-check',

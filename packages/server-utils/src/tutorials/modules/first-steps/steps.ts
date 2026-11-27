@@ -54,6 +54,8 @@ export const FIRST_STEPS_STEPS: TutorialStep[] = [
     type: 'point',
     anchor: 'notebook-list-item',
     placement: 'right',
+    // Keeps the card off the answer it is pointing away from; with the chat taken, it settles in the side menu.
+    avoid: '[data-testid="virtuoso-item-list"] > :last-child [data-testid="ai-response"]',
     title: 'Your conversations are saved',
     body: 'This conversation is saved as a notebook in the side menu. Open it any time to pick up where you left off.',
   },
