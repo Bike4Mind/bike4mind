@@ -3895,11 +3895,21 @@ export class ChatService {
       );
     };
 
+    // Stop never cancels the POST once it is sent: the route creates the quest before it answers,
+    // so a cancelled POST would leave a turn running with no id to stop it by. Until the `turn`
+    // frame names the quest, a Stop only waits for it; then the stream drops and stop-reply ends it.
+    const stream = new AbortController();
+    let posted = false;
+    controller.signal.addEventListener('abort', () => {
+      if (!posted || questId !== null) stream.abort();
+    });
+
     try {
       if (!sourceId) throw new Error('This chat is not linked to a web session.');
       const { endpoint } = await this.resolveServerConfig(api);
       const { organization_id: organizationId } = await currentBillingPayer();
-      const { opened } = await streamSessionTurn(
+      posted = true;
+      await streamSessionTurn(
         api.getAxiosInstance(),
         sessionTurnsEndpoint(endpoint),
         {
@@ -3920,6 +3930,7 @@ export class ChatService {
                 createdAt: promptAt,
               });
               begin(webQuestMessageId(questId, 'r'));
+              if (controller.signal.aborted) stream.abort();
               return;
             }
             if ((event.type === 'delta' || event.type === 'replace') && event.quest_id === questId && replyId) {
@@ -3933,14 +3944,12 @@ export class ChatService {
             }
           });
         },
-        controller.signal
+        stream.signal
       );
       await applying;
       if (!replyId) {
         if (controller.signal.aborted) {
-          // Once the server answered, it may have created the quest and keeps running it with no
-          // id to stop it by: the chat stays busy until a sync shows it settled or the mark lapses.
-          if (opened) await this.deps.store.setLinkedRunning(sessionId);
+          // Stopped before the POST went out, or the server ended it without a quest: nothing runs.
           const messageId = begin(randomUUID());
           this.emit({ type: 'done', sessionId, messageId, content: '', stopReason: 'aborted' });
           return 'aborted';

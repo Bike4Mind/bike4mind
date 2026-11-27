@@ -84,8 +84,8 @@ export class SessionTurnDroppedError extends Error {
  * Rejects with SessionTurnRequestError on a pre-stream refusal, with an Error for an `error`
  * frame, and with SessionTurnDroppedError when the connection drops or the stream ends without
  * `settled` or `[DONE]`, both of which the route always sends. Never retried: a resend would add
- * a second turn. `opened` is whether the server answered the POST, after which an aborted turn
- * may exist on the server even if no event named it.
+ * a second turn. The server creates the quest before it answers the POST, so a caller that wants
+ * to stop a turn should wait for its `turn` frame rather than abort the POST.
  */
 export async function streamSessionTurn(
   axios: AxiosInstance,
@@ -93,8 +93,8 @@ export async function streamSessionTurn(
   body: SessionTurnRequest,
   onEvent: (event: SessionTurnStreamEvent) => void,
   signal?: AbortSignal
-): Promise<{ opened: boolean }> {
-  if (signal?.aborted) return { opened: false };
+): Promise<void> {
+  if (signal?.aborted) return;
   let response: AxiosResponse;
   try {
     response = await axios.post(endpoint, body, {
@@ -104,7 +104,7 @@ export async function streamSessionTurn(
       headers: { 'X-Request-ID': randomUUID() },
     });
   } catch (err) {
-    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return { opened: false };
+    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
     throw await toSessionTurnRequestError(err);
   }
   releaseRequestTimeout(response);
@@ -127,11 +127,10 @@ export async function streamSessionTurn(
     });
   } catch (err) {
     if (!isConnectionDrop(err)) throw err;
-    if (signal?.aborted) return { opened: true };
+    if (signal?.aborted) return;
     throw new SessionTurnDroppedError(err.message);
   }
   if (!ended && !signal?.aborted) throw new SessionTurnDroppedError('the stream ended early');
-  return { opened: true };
 }
 
 async function toSessionTurnRequestError(err: unknown): Promise<Error> {

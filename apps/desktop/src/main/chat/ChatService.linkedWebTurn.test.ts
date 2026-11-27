@@ -245,17 +245,20 @@ describe('ChatService linked web turns', () => {
     expect(stored?.importOrigin?.runningSince).toBeDefined();
   });
 
-  it('marks the chat busy when Stop lands after the server answered but before it named the turn', async () => {
+  it('keeps the POST open on a Stop before the turn is named, then stops that quest', async () => {
     const sent = service.send(SESSION_ID, 'new question');
     await waitForPost();
     service.stop(SESSION_ID);
+    // The route creates the quest before it answers, so cancelling the POST would orphan it.
+    expect((turnPosts()[0]?.[2] as { signal: AbortSignal }).signal.aborted).toBe(false);
+    streamFor(0).write(frame({ type: 'turn', quest_id: 'q1', session_id: 'nb1' }));
     await waitForEvent('done');
 
     expect(await sent).toMatchObject({ ok: true });
-    expect(events.find(event => event.type === 'done')).toMatchObject({ stopReason: 'aborted' });
+    expect(stopPosts()).toEqual([['/api/sessions/nb1/chat/stop-reply', { questId: 'q1' }]]);
     const stored = await store.get(SESSION_ID);
-    expect(stored?.messages).toHaveLength(2);
-    expect(stored?.importOrigin?.runningSince).toBeDefined();
+    expect(stored?.messages.at(-1)).toMatchObject({ id: 'bw-q1-r', stopReason: 'aborted' });
+    expect(stored?.importOrigin?.runningSince).toBeUndefined();
   });
 
   it('sends a message queued during the turn once the turn completes', async () => {

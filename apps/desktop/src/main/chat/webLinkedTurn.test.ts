@@ -117,7 +117,7 @@ describe('streamSessionTurn', () => {
       frame({ type: 'turn', quest_id: 'q1', session_id: 'nb1' }),
       frame({ type: 'settled', quest_id: 'q1', status: 'done', failed: false }),
     ]);
-    await expect(streamSessionTurn(axios, '/api/v1/turns', body, () => undefined)).resolves.toEqual({ opened: true });
+    await expect(streamSessionTurn(axios, '/api/v1/turns', body, () => undefined)).resolves.toBeUndefined();
   });
 
   it('rejects with the server message on an error frame', async () => {
