@@ -16,6 +16,7 @@ import {
 } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
+import { shellHome } from './shellScan';
 import { recordSessionWrite } from './sessionScripts';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
 
@@ -39,8 +40,14 @@ export const MAX_WRITE_BYTES = 1_000_000;
  * Called at approval time AND again at execution time. The second call is the one that counts:
  * a root can be revoked, or a path replaced with a symlink, while the prompt is on screen.
  */
-export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
-  const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
+export async function resolveWritablePath(
+  requested: string,
+  context: ToolContext,
+  options: { temp?: boolean } = {}
+): Promise<string> {
+  // With `temp`, the temp folders the shell may already write freely (shellHome) are writable too.
+  const { temp } = options.temp ? await shellHome(context.workingDirectory ?? context.roots[0] ?? '/') : { temp: [] };
+  const target = await resolveWithinRoots(requested, [...context.roots, ...temp], context.workingDirectory);
   const unresolved = context.unresolvedProtectedPaths?.[0];
   if (unresolved !== undefined) {
     throw new PathAccessDenied(
@@ -173,7 +180,7 @@ async function planAndApply(
   context: ToolContext,
   plan: (input: Record<string, unknown>, context: ToolContext) => Promise<WritePlan>
 ): Promise<string> {
-  const target = await resolveWritablePath(requireString(input, 'path'), context);
+  const target = await resolveWritablePath(requireString(input, 'path'), context, { temp: true });
   // The real path, so two spellings of one file (a symlinked folder) share a lock.
   return withPathLock(await realpathNearest(target), async () => applyPlan(await plan(input, context), context));
 }
@@ -259,7 +266,7 @@ async function planWrite(input: Record<string, unknown>, context: ToolContext): 
 
   assertNoControlCharacters(after, '"content"');
 
-  const target = await resolveWritablePath(requested, context);
+  const target = await resolveWritablePath(requested, context, { temp: true });
   // A whole-file replacement discards the old bytes, so a file already corrupted with NULs can
   // be repaired this way; only an in-place edit has to refuse it.
   const state = await readTarget(target, { allowBinary: true });
@@ -739,7 +746,7 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
     assertNoControlCharacters(edit.newText, batch ? `edits[${index}].newText` : 'newText')
   );
 
-  const target = await resolveWritablePath(requested, context);
+  const target = await resolveWritablePath(requested, context, { temp: true });
   const state = await readTarget(target);
 
   const emptyAt = edits.findIndex(edit => edit.oldText === '');

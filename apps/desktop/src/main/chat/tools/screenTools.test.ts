@@ -139,12 +139,19 @@ describe('screen_capture', () => {
   });
 
   describe('approval', () => {
-    it('names the resolved window and keys on its id, asking in auto mode too', async () => {
+    it('names the resolved window and keys on its id, leaving auto mode to run it', async () => {
       const { context } = setup();
       const prompt = await screenCapture.approval?.({ target: 'inbox' }, context);
-      expect(prompt).toMatchObject({ key: 'screen_capture\x00window:12:0', askInAuto: true });
+      expect(prompt).toMatchObject({ key: 'screen_capture\x00window:12:0' });
+      expect(prompt?.askInAuto).toBeUndefined();
       expect(prompt?.detail).toContain('Capture the window "Inbox - Mail"');
       expect(prompt?.detail).toContain('goes to the model');
+    });
+
+    it('asks about a whole screen in auto mode, since it can show other apps', async () => {
+      const { context } = setup();
+      const prompt = await screenCapture.approval?.({ target: 'screen' }, context);
+      expect(prompt).toMatchObject({ key: 'screen_capture\x00screen:1:0', askInAuto: true });
     });
 
     it('asks about listing under a key of its own', async () => {
