@@ -19,7 +19,7 @@ import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OPENAI_FEDERATED_KEY, OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
-import { federatedSharedKeyProviders, resolveProviderCredential } from './providerAuth';
+import { providerCredentialSpec } from './providerAuth';
 
 /**
  * A record named an adapter family this build has no constructor for. Thrown
@@ -82,10 +82,7 @@ export function backendForAdapterFamily(
       const key = keyOrThrow(apiKeyTable.openai, 'OpenAI');
       return key
         ? new OpenAIBackend(
-            resolveProviderCredential(
-              federatedSharedKeyProviders(apiKeyTable)?.openai ? OPENAI_FEDERATED_KEY : key,
-              OPENAI_FEDERATED_KEY
-            ),
+            providerCredentialSpec(apiKeyTable, 'openai', key, OPENAI_FEDERATED_KEY),
             logger,
             providerEndUserId
           )
@@ -95,10 +92,7 @@ export function backendForAdapterFamily(
       const key = keyOrThrow(apiKeyTable.anthropic, 'Anthropic');
       return key
         ? new AnthropicBackend(
-            resolveProviderCredential(
-              federatedSharedKeyProviders(apiKeyTable)?.anthropic ? ANTHROPIC_FEDERATED_KEY : key,
-              ANTHROPIC_FEDERATED_KEY
-            ),
+            providerCredentialSpec(apiKeyTable, 'anthropic', key, ANTHROPIC_FEDERATED_KEY),
             logger,
             providerEndUserId,
             tenantKey

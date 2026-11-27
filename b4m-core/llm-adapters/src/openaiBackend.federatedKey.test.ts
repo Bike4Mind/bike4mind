@@ -26,7 +26,7 @@ const ENV_NAMES = [
 const clientKey = (backend: OpenAIBackend) => (backend as unknown as { _api: { apiKey: string | null } })._api.apiKey;
 
 type WorkloadIdentityClient = {
-  _options: { workloadIdentity: { provider: { getToken: () => Promise<string> } } };
+  _options: { apiKey: () => Promise<string> };
 };
 const apiOf = (backend: OpenAIBackend) => (backend as unknown as { _api: WorkloadIdentityClient })._api;
 
@@ -79,17 +79,27 @@ describe('OpenAIBackend federated key', () => {
     expect(apiOf(new OpenAIBackend('sk-a'))).not.toBe(apiOf(new OpenAIBackend('sk-a')));
   });
 
-  it('takes the subject token from STS under PROVIDER_WIF_TOKEN_SOURCE=aws-sts', async () => {
+  it('exchanges an STS subject token under PROVIDER_WIF_TOKEN_SOURCE=aws-sts', async () => {
     process.env.PROVIDER_WIF_TOKEN_SOURCE = 'aws-sts';
     process.env.OPENAI_IDENTITY_PROVIDER_ID = 'idp_sts';
     process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_sts';
     process.env.OPENAI_WIF_AUDIENCE = 'aud-sts';
     stsSend.mockResolvedValue({ WebIdentityToken: 'sts-jwt' });
+    const tokenExchange = vi.fn(
+      async (_url: string, _init: { body: string }) =>
+        new Response(JSON.stringify({ access_token: 'openai-access-token', expires_in: 3600 }), { status: 200 })
+    );
+    vi.stubGlobal('fetch', tokenExchange);
 
     const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
     expect(clientKey(backend)).toBeNull();
-    await expect(apiOf(backend)._options.workloadIdentity.provider.getToken()).resolves.toBe('sts-jwt');
+    await expect(apiOf(backend)._options.apiKey()).resolves.toBe('openai-access-token');
     expect(stsSend).toHaveBeenCalledWith({ input: { Audience: ['aud-sts'], SigningAlgorithm: 'RS256' } });
+    expect(JSON.parse(tokenExchange.mock.calls[0][1].body)).toMatchObject({
+      subject_token: 'sts-jwt',
+      identity_provider_id: 'idp_sts',
+      service_account_id: 'sa_sts',
+    });
   });
 
   it('names the missing variables instead of failing later', () => {

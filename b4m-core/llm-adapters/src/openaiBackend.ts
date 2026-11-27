@@ -40,7 +40,9 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { recordProviderCredentialUse } from './providerCredentialMetrics';
+import { WorkloadIdentityAuth } from 'openai/auth/workload-identity-auth';
+import { normalizeProviderCredential, type ProviderCredentialSpec } from './providerAuth';
+import { resolveCredentialBeforeSend, type ResolvedProviderCredential } from './providerCredentialResolution';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -138,10 +140,19 @@ const effortMap_GPT5_1_2 = {
  */
 export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
-// One client per config so its exchanged-token cache outlives the per-request backend.
-const federatedOpenAIClients = new Map<string, OpenAI>();
+type FederatedOpenAI = { client: OpenAI; auth: WorkloadIdentityAuth };
 
-function federatedOpenAIClient(): OpenAI {
+// One client per config so its exchanged-token cache outlives the per-request backend.
+const federatedOpenAIClients = new Map<string, FederatedOpenAI>();
+
+/**
+ * The client authenticates through `apiKey: () => auth.getToken()` rather than the SDK's
+ * `workloadIdentity` option, whose exchange runs lazily inside the request and is not reachable
+ * from outside. Holding the WorkloadIdentityAuth lets the backend run the exchange before a
+ * request is sent (see OpenAIBackend.useCredentialForNextRequest); the request then reads the
+ * cached token. Unlike `workloadIdentity`, a 401 does not trigger one re-exchange and retry.
+ */
+function federatedOpenAIClient(): FederatedOpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
   const serviceAccountId = process.env.OPENAI_SERVICE_ACCOUNT_ID;
   const audience = process.env.OPENAI_WIF_AUDIENCE;
@@ -152,22 +163,20 @@ function federatedOpenAIClient(): OpenAI {
   }
   const source = selectedWifTokenSource();
   const cacheKey = JSON.stringify([identityProviderId, serviceAccountId, audience, source]);
-  let client = federatedOpenAIClients.get(cacheKey);
-  if (!client) {
+  let federated = federatedOpenAIClients.get(cacheKey);
+  if (!federated) {
     const getSubjectToken = subjectTokenSource(source);
-    // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
-    client = new OpenAI({
-      apiKey: null,
-      workloadIdentity: {
-        identityProviderId,
-        serviceAccountId,
-        provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
-      },
-      fetchOptions: providerFetchOptions(),
+    const auth = new WorkloadIdentityAuth({
+      identityProviderId,
+      serviceAccountId,
+      provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
     });
-    federatedOpenAIClients.set(cacheKey, client);
+    // A function apiKey never falls back to an OPENAI_API_KEY in the environment.
+    const client = new OpenAI({ apiKey: () => auth.getToken(), fetchOptions: providerFetchOptions() });
+    federated = { client, auth };
+    federatedOpenAIClients.set(cacheKey, federated);
   }
-  return client;
+  return federated;
 }
 
 /** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
@@ -242,18 +251,68 @@ export class OpenAIBackend implements ICompletionBackend {
   // OpenAI can attribute abuse to an individual user and scope enforcement to
   // them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
-  private readonly usesFederatedCredentials: boolean;
+  private readonly credential: ProviderCredentialSpec;
+  // The federated client, or why it could not be built (then each request falls back).
+  private federated?: FederatedOpenAI;
+  private federationSetupError: unknown;
+  private staticApi?: OpenAI;
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
-  constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
-    this.usesFederatedCredentials = apiKey === OPENAI_FEDERATED_KEY;
-    this._api =
-      apiKey === OPENAI_FEDERATED_KEY
-        ? federatedOpenAIClient()
-        : new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
+  constructor(
+    apiKey: string | typeof OPENAI_FEDERATED_KEY | ProviderCredentialSpec,
+    logger?: Logger,
+    endUserId?: string
+  ) {
+    this.credential = normalizeProviderCredential(apiKey, OPENAI_FEDERATED_KEY);
+    this._api = this.initialClient(this.credential);
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
+  }
+
+  private initialClient(credential: ProviderCredentialSpec): OpenAI {
+    if (credential.kind !== 'federated') return this.staticClient(credential.key);
+    try {
+      this.federated = federatedOpenAIClient();
+      return this.federated.client;
+    } catch (err) {
+      // Without a fallback key a misconfigured federation is a hard error, as before.
+      if (credential.fallbackKey === null) throw err;
+      this.federationSetupError = err;
+      return this.staticClient(credential.fallbackKey);
+    }
+  }
+
+  private staticClient(apiKey: string): OpenAI {
+    this.staticApi ??= new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
+    return this.staticApi;
+  }
+
+  /** True when this backend was told to authenticate through workload identity federation. */
+  private get usesFederatedCredentials(): boolean {
+    return this.credential.kind === 'federated';
+  }
+
+  /**
+   * Fix the credential for the next request and point `_api` at the matching client. Runs
+   * before anything is sent; see ResolvedProviderCredential for why a later failure never
+   * falls back. The exchange itself is forced here via the shared WorkloadIdentityAuth.
+   */
+  private async useCredentialForNextRequest(): Promise<ResolvedProviderCredential> {
+    const federated = this.federated;
+    const resolved = await resolveCredentialBeforeSend({
+      provider: 'openai',
+      spec: this.credential,
+      setupError: this.federationSetupError,
+      exchange: async () => {
+        await federated?.auth.getToken();
+      },
+      logger: this.logger,
+    });
+    if (resolved.kind !== 'federated') this._api = this.staticClient(resolved.key);
+    else if (federated) this._api = federated.client;
+    else throw new Error('Federated OpenAI credential resolved without a federated client');
+    return resolved;
   }
 
   setDispatchModel(info: ModelInfo): void {
@@ -1124,7 +1183,7 @@ export class OpenAIBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    recordProviderCredentialUse('openai', this.usesFederatedCredentials ? 'federated' : 'static');
+    await this.useCredentialForNextRequest();
     this.currentModel = model;
     options = {
       temperature: 0.9,

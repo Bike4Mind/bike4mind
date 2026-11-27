@@ -305,6 +305,8 @@ export const FORMAT_PROMPT_TEMPLATE = `Formatting only - nothing here decides wh
 export const SettingKeySchema = z.enum([
   'openaiDemoKey',
   'anthropicDemoKey',
+  'openaiCredentialMode',
+  'anthropicCredentialMode',
   'geminiDemoKey',
   'xaiApiKey',
   'moonshotApiKey',
@@ -1337,6 +1339,14 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/**
+ * How the platform authenticates to a provider. `federated` takes effect only where the deploy
+ * grants the workload identity federation capability (infra/providerFederation.ts); read by
+ * ChatCompletionProcess through withProviderCredentialPlan in @bike4mind/llm-adapters.
+ */
+export const PROVIDER_CREDENTIAL_MODES = ['static', 'federated'] as const;
+export type ProviderCredentialMode = (typeof PROVIDER_CREDENTIAL_MODES)[number];
 
 /** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
 export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
@@ -2477,6 +2487,7 @@ export const API_SERVICE_GROUPS = {
     icon: 'SmartToy',
     settings: [
       { key: 'openaiDemoKey', order: 1 },
+      { key: 'openaiCredentialMode', order: 1.5 },
       { key: 'DefaultContext', order: 2 },
       { key: 'DefaultChunkSize', order: 3 },
       { key: 'FormatPromptTemplate', order: 4 },
@@ -2593,7 +2604,10 @@ export const API_SERVICE_GROUPS = {
     name: 'Anthropic Service',
     description: 'Anthropic API integration settings',
     icon: 'Psychology',
-    settings: [{ key: 'anthropicDemoKey', order: 1 }],
+    settings: [
+      { key: 'anthropicDemoKey', order: 1 },
+      { key: 'anthropicCredentialMode', order: 2 },
+    ],
   },
   GEMINI: {
     id: 'geminiAPIService',
@@ -3239,6 +3253,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 1,
   }),
+  openaiCredentialMode: makeStringSetting({
+    key: 'openaiCredentialMode',
+    name: 'OpenAI Credential Mode',
+    defaultValue: 'static',
+    options: [...PROVIDER_CREDENTIAL_MODES],
+    description:
+      '"static" (default): the platform authenticates to OpenAI with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key if the token exchange fails. Without the capability it keeps using the API key.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.OPENAI.id,
+    order: 1.5,
+  }),
   xaiApiKey: makeStringSetting({
     key: 'xaiApiKey',
     name: 'xAI API Key',
@@ -3298,6 +3323,17 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.ANTHROPIC.id,
     order: 1,
+  }),
+  anthropicCredentialMode: makeStringSetting({
+    key: 'anthropicCredentialMode',
+    name: 'Anthropic Credential Mode',
+    defaultValue: 'static',
+    options: [...PROVIDER_CREDENTIAL_MODES],
+    description:
+      '"static" (default): the platform authenticates to Anthropic with the API key above. "federated": it uses a short-lived token from workload identity federation instead, where the deploy grants that capability, and falls back to the API key if the token exchange fails. Without the capability it keeps using the API key.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.ANTHROPIC.id,
+    order: 2,
   }),
   geminiDemoKey: makeStringSetting({
     key: 'geminiDemoKey',

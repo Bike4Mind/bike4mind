@@ -6,10 +6,11 @@
  * retries sit under one datapoint, and the max-tool-call wrap-up branch adds one without
  * its own request.
  *
- * `static` covers every plain key string, including a user's own key: the backend
- * cannot tell a platform key from a user key, only a key from the federated sentinel.
- * Because user keys stay `static`, that series will not reach zero after a cutover; verify
- * a rollout by `federated` rising, not `static` disappearing.
+ * Recorded once per request where the credential is resolved (providerCredentialResolution.ts),
+ * so a request that falls back counts as `static_fallback` only, never also as `federated`.
+ * `static` is the platform admin-setting key, `user_key` a user's own key. A key table nobody
+ * marked (callers other than chat completions) counts every key as `static`, so a platform key
+ * can never hide under `user_key`.
  *
  * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`); the
  * tests pin the literals.
@@ -19,7 +20,7 @@ export const PROVIDER_CREDENTIAL_USE_METRIC = 'ProviderCredentialUse';
 export const PROVIDER_CREDENTIAL_FALLBACK_METRIC = 'ProviderCredentialFallback';
 
 export type CredentialProvider = 'anthropic' | 'openai';
-export type ProviderCredentialKind = 'static' | 'federated' | 'static_fallback';
+export type ProviderCredentialKind = 'static' | 'user_key' | 'federated' | 'static_fallback';
 
 /**
  * Writes one CloudWatch EMF line to stdout. Synchronous, so it is never lost when a Lambda

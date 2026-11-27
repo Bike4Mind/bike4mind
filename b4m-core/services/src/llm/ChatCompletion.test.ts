@@ -207,6 +207,7 @@ vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   sharedAdminKeyProviders: vi.fn(),
+  userKeyProviders: vi.fn(() => new Set()),
   // Consumed by resolveToolAvailability (toolAvailability.ts), threaded through
   // ChatCompletionProcess into ToolBuilder.buildTools - default to "not configured" so
   // resolveToolAvailability computes real (all-false) values instead of hitting its
@@ -230,6 +231,16 @@ const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedGetSettingsMap = vi.mocked(getSettingsMap);
+// Sets string admin settings read through getSettingsValue, keeping other keys' wiring; restored after the test.
+const setAdminSettingValues = (values: Record<string, string>) => {
+  const prev = mockedGetSettingsValue.getMockImplementation();
+  mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+    key in values ? values[key] : prev?.(key as never, settings)) as typeof getSettingsValue);
+  onTestFinished(() => {
+    if (prev) mockedGetSettingsValue.mockImplementation(prev);
+    else mockedGetSettingsValue.mockReset();
+  });
+};
 // Turns on boolean admin flags that ChatCompletionProcess reads through getSettingsValue, keeping
 // whatever the test already wired for other keys; restored when the test finishes.
 const enableAdminFlags = (...keys: string[]) => {
@@ -16070,6 +16081,7 @@ describe('prompt moderation', () => {
     mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
     vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'federated' });
     enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });
@@ -16082,12 +16094,28 @@ describe('prompt moderation', () => {
     expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: true, anthropic: false });
   });
 
+  it('keeps chat on the static key while openaiCredentialMode is static, even with the capability deployed', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'static' });
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(chatKeys).toEqual(effectiveKeys);
+    expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: false, anthropic: false });
+  });
+
   it('retains the primary chat federation provenance when attempting a fallback', async () => {
     wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
     const effectiveKeys = { openai: 'demo-key' };
     mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
     vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'federated' });
     mockedShouldTriggerFallback.mockReturnValue(true);
     mockedIsOverloadedError.mockReturnValue(false);
     const backend = mockedGetLlmByModel.getMockImplementation()?.(effectiveKeys, { logger: mockLogger });
