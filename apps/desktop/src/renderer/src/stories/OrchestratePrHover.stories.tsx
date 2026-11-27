@@ -91,8 +91,6 @@ function stubMonitor() {
     host: chatBackedHostBridge(),
     chat: {
       getSession: async () => null,
-      onStreamEvent: () => () => undefined,
-      onQueueChanged: () => () => undefined,
     },
   };
 }

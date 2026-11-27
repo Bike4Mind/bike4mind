@@ -15,7 +15,8 @@ import { SessionLink } from './SessionLink';
 
 /**
  * Every decision workers wait on the user for, per host: read on mount and after each resync of
- * that host, and replaced by each push of the whole list in between.
+ * that host, and replaced by each push of the whole list in between. taskDecision/list needs a
+ * 1.3 host, which the bundled one is; gate on the negotiated minor before a 1.2 host can be a peer.
  */
 export function useTaskDecisions(): PendingTaskDecision[] {
   const [byHost, setByHost] = useState<ReadonlyMap<string, PendingTaskDecision[]>>(() => new Map());

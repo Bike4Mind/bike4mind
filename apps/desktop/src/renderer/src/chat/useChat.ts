@@ -1192,7 +1192,8 @@ export function useConversation(
       if (event.type === 'done' || event.type === 'error') settledReplies.current.add(event.messageId);
       // Notices arrive only through session/contextNotice (the effect above), for the open
       // session too; the copy a host still sends here for 1.2 clients is ignored, so a notice is
-      // never applied twice.
+      // never applied twice. That assumes the bundled host: gate on the negotiated minor before
+      // this window can talk to a 1.2 host.
       if (event.type === 'context-notice' || event.type === 'context-notice-cleared') return;
       if (event.sessionId !== activeSessionId.current) return;
 
