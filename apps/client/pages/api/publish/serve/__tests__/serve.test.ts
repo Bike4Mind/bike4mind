@@ -1731,6 +1731,19 @@ describe('GET /api/publish/serve - comment pin bridge', () => {
     expect(data).not.toContain(WIDGET_MOUNT); // the trusted overlay never crosses into the isolated origin
   });
 
+  it('bridge posts the clicked element text, whitespace-collapsed and capped at 200', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ commentPolicy: 'open' }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('el.innerText||el.textContent');
+    expect(data).toContain(".replace(/\\s+/g,' ').trim().slice(0,200)");
+    expect(data).toContain('m.text=t');
+  });
+
   it('injects NO bridge or overlay when comments are disabled (default)', async () => {
     mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy -> 'none'
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));

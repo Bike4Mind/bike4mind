@@ -571,6 +571,9 @@ const WIDGET_JS = String.raw`(function () {
       if (!state.pinMode) return;
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || !isFinite(d.x) || !isFinite(d.y)) return;
       state.pendingAnchor = { x: Math.max(0, Math.min(1, d.x)), y: Math.max(0, Math.min(1, d.y)) };
+      // text is untrusted too: keep only a bounded string, and drop just the field if it is bad.
+      var t = typeof d.text === 'string' ? d.text.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+      if (t) state.pendingAnchor.elementText = t;
       state.pinMode = false;
       state.open = true;
       showHint(null);
