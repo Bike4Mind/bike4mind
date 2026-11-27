@@ -32,9 +32,13 @@ vi.mock('sst', () => ({
   }),
 }));
 
+const postedFrames: Array<{ Data: Buffer }> = [];
+const postedActions = () => postedFrames.map(frame => (JSON.parse(frame.Data.toString()) as { action: string }).action);
+
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: class {
-    send() {
+    send(command: { input: { Data: Buffer } }) {
+      postedFrames.push(command.input);
       return Promise.resolve({});
     }
   },
@@ -105,6 +109,7 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     onDagNodeTerminalMock.mockClear();
+    postedFrames.length = 0;
   });
 
   it('fires the hook on the per-member cap refusal so the parent is not left wedged', async () => {
@@ -166,6 +171,22 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
       expect.objectContaining({
         child: expect.objectContaining({ id: 'child-1', dagNodeId: 'node-b', status: 'failed' }),
       })
+    );
+    expect(postedActions()).toContain('subagent_failed');
+  });
+
+  it('skips the subagent_failed frame but still fires the hook when the child is already terminal', async () => {
+    const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(sessionRepository.findById).mockRejectedValueOnce(new Error('Mongo blip'));
+    vi.mocked(agentExecutionRepository.markFailedIfActive).mockResolvedValueOnce(false);
+
+    const { handler } = await import('./agentExecutor');
+    await handler(dagNodeDispatchEvent(), {} as never);
+
+    expect(postedActions()).not.toContain('subagent_failed');
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', dagNodeId: 'node-b' }) })
     );
   });
 });
