@@ -151,6 +151,20 @@ describe('OrgModelPolicySection', () => {
     expect(screen.queryByLabelText('contributed_tool (unrecognized; remove to save)')).toBeNull();
   });
 
+  it('renders a tool once when it is in both the built-in and contributed lists', () => {
+    mocks.view = {
+      policy: UNRESTRICTED,
+      invalidStored: false,
+      contributedTools: ['web_search'],
+    };
+    renderSection();
+    toggleSwitch('tools');
+    expect(screen.getAllByTestId('org-model-policy-tool-web_search')).toHaveLength(1);
+    tick('org-model-policy-tool-web_search');
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({ ...UNRESTRICTED, allowedTools: ['web_search'] });
+  });
+
   it('shows obsolete selections and requires their explicit removal before a strict save', () => {
     mocks.view = {
       policy: {

@@ -63,7 +63,7 @@ const toolRows = (contributedTools: readonly string[]): ReadonlyArray<{ tool: st
   const covered = new Set<string>();
   const rows: Array<{ tool: string; companions: string[] }> = [];
   for (const tool of [...b4mLLMTools.options, ...contributedTools]) {
-    if (covered.has(tool)) continue;
+    if (covered.has(tool) || rows.some(row => row.tool === tool)) continue;
     const companions = [...expandOrgAllowedTools([tool])].filter(name => name !== tool);
     companions.forEach(name => covered.add(name));
     rows.push({ tool, companions });
