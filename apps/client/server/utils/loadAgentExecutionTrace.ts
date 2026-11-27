@@ -63,8 +63,8 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
   if (!execution) return null;
 
   // Ownership via the session - mirrors the access check on /api/quests/[id], and lets
-  // a shared session's members read the run, minus the tool output of the owner's turns.
-  // The user who started the run counts as its owner too: the output is their own.
+  // a shared session's members read the run, minus the tool output, tool input and confidence
+  // text of the owner's turns. The user who started the run counts as its owner too: it is their own.
   let isOwner = execution.userId === userId;
   if (execution.sessionId) {
     const session = await sessionRepository.findById(execution.sessionId);
