@@ -134,6 +134,16 @@ describe('GET /api/files/tags/counts', () => {
     ]);
   });
 
+  it("keeps the folder count for a user's own bare tutorial tag", async () => {
+    mockRefs.extraTags = [{ tag: 'tutorial', count: 2 }];
+    mockRefs.extraNamespaces = [{ namespace: 'tutorial', fileCount: 2 }];
+    const { req, res } = invokeGet({ id: 'user-1', groups: [], tags: [] });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData().namespaceCounts).toEqual([{ namespace: 'tutorial', fileCount: 2 }]);
+  });
+
   it('calls countFilesByTagForUser exactly twice - once unnarrowed, once narrowed', async () => {
     expect(mockRefs.getHandler).toBeTypeOf('function');
     const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });

@@ -38,7 +38,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     const shown = <T extends { tag: string }>(rows: T[]) => rows.filter(row => !isCoreTutorialSheetTag(row.tag));
     const shownWorkspaceTags = shown(workspaceTagCounts);
     // A namespace the user also tags into keeps its folder; its count then still includes the sheet copies.
-    const holdsUserTags = (namespace: string) => shownWorkspaceTags.some(row => row.tag.startsWith(`${namespace}:`));
+    const holdsUserTags = (namespace: string) =>
+      shownWorkspaceTags.some(row => row.tag === namespace || row.tag.startsWith(`${namespace}:`));
     return res.json({
       tagCounts: shown(tagCounts),
       workspaceTagCounts: shownWorkspaceTags,
