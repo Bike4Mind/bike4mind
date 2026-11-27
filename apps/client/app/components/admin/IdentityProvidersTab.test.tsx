@@ -3,6 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const { api } = vi.hoisted(() => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -12,6 +13,10 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import IdentityProvidersTab from './IdentityProvidersTab';
+
+type CurrentUser = ReturnType<typeof useUser.getState>['currentUser'];
+const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
+  useUser.setState({ currentUser: user as CurrentUser });
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
@@ -77,6 +82,7 @@ describe('IdentityProvidersTab', () => {
     api.post.mockResolvedValue({ data: {} });
     api.put.mockResolvedValue({ data: {} });
     api.delete.mockResolvedValue({ data: {} });
+    signInAs({ isAdmin: true });
   });
 
   it('opens with the page header: sentence-case h1 with the count, description, help and the add action', async () => {
@@ -331,5 +337,39 @@ describe('IdentityProvidersTab', () => {
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(await screen.findByTestId('identity-provider-row-idp-saml')).toBeInTheDocument();
     expect(api.get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('IdentityProvidersTab for a delegated admin', () => {
+  beforeEach(() => {
+    api.get.mockResolvedValue({ data: [samlIdp, oktaIdp] });
+    signInAs({ isAdmin: false, adminPermissions: ['settings:manage'] });
+  });
+
+  const expectBlocked = (control: HTMLElement) => {
+    expect(control).toHaveProperty('disabled', true);
+    expect(control.closest('[data-testid="admin-missing-permission-action"]')?.getAttribute('aria-label')).toBe(
+      'Only full administrators can perform this action'
+    );
+  };
+
+  it('disables add and edit, which need a full admin, and keeps delete and SP metadata open', async () => {
+    renderTab();
+    expectBlocked(await screen.findByTestId('identity-provider-add-btn'));
+
+    fireEvent.click(await screen.findByTestId(`identity-provider-actions-${samlIdp.id}`));
+    const edit = await screen.findByTestId(`identity-provider-edit-${samlIdp.id}`);
+    expect(edit.getAttribute('aria-disabled')).toBe('true');
+    expect(edit.closest('[data-testid="admin-missing-permission-action"]')).not.toBeNull();
+    expect(screen.getByTestId(`identity-provider-delete-${samlIdp.id}`).getAttribute('aria-disabled')).not.toBe('true');
+    expect(screen.getByTestId(`identity-provider-sp-metadata-${samlIdp.id}`).getAttribute('aria-disabled')).not.toBe(
+      'true'
+    );
+  });
+
+  it('disables the empty-state add action', async () => {
+    api.get.mockResolvedValue({ data: [] });
+    renderTab();
+    expectBlocked(await screen.findByTestId('identity-provider-empty-add-btn'));
   });
 });

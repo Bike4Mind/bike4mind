@@ -8,6 +8,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab } from './adminSidebarConfig';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { useAdminModal } from './useAdminModal';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const { api, copy, adminSettings } = vi.hoisted(() => ({
   adminSettings: {
@@ -75,6 +76,9 @@ const client = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
 const SECRET = 'shown-once-secret';
+type CurrentUser = ReturnType<typeof useUser.getState>['currentUser'];
+const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
+  useUser.setState({ currentUser: user as CurrentUser });
 
 // Edit and rotate live in each row's "..." menu, which renders its items only while open.
 const openRowAction = async (action: 'edit' | 'rotate' | 'usage', clientId = client.clientId) => {
@@ -92,6 +96,7 @@ beforeEach(() => {
   api.fetchOAuthClients.mockResolvedValue([client]);
   adminSettings.loaded = true;
   adminSettings.trustGate = true;
+  signInAs({ isAdmin: true });
 });
 
 describe('OAuthClientsTab', () => {
@@ -1116,5 +1121,36 @@ describe('unpaid limits payload', () => {
         unpaidLimits: { ...fresh.unpaidLimits, enabled: true },
       })
     ).toEqual({ federatedIdp: null });
+  });
+});
+
+describe('OAuthClientsTab for a delegated admin', () => {
+  beforeEach(() => signInAs({ isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] }));
+
+  const expectBlocked = (control: HTMLElement) => {
+    expect(control).toHaveProperty('disabled', true);
+    expect(control.closest('[data-testid="admin-missing-permission-action"]')?.getAttribute('aria-label')).toBe(
+      'Only full administrators can perform this action'
+    );
+  };
+
+  it('disables register, edit, rotate and the active switch, which need a full admin', async () => {
+    renderTab();
+    expectBlocked(await screen.findByTestId('oauth-client-add-btn'));
+    expectBlocked(await screen.findByTestId(`oauth-client-toggle-${client.clientId}`));
+
+    fireEvent.click(screen.getByTestId(`oauth-client-actions-${client.clientId}`));
+    for (const action of ['edit', 'rotate']) {
+      const item = await screen.findByTestId(`oauth-client-${action}-${client.clientId}`);
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(item.closest('[data-testid="admin-missing-permission-action"]')).not.toBeNull();
+    }
+    expect(screen.getByTestId(`oauth-client-usage-${client.clientId}`).getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('disables the empty-state register action', async () => {
+    api.fetchOAuthClients.mockResolvedValue([]);
+    renderTab();
+    expectBlocked(await screen.findByTestId('oauth-clients-empty-add-btn'));
   });
 });
