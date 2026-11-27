@@ -17,8 +17,9 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
+import { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import { StreamingMarkdown } from './markdown/StreamingMarkdown';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
@@ -162,6 +163,7 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
 };
 
 const NO_CITABLES: readonly CitableSource[] = [];
+const REPLY_REHYPE_PLUGINS: ReactMarkdownOptions['rehypePlugins'] = [rehypeKatex];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -628,6 +630,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
       <ReplyContainer
         completed={messageData.status === 'done'}
         settled={messageData.status === 'done' || messageData.status === 'stopped'}
+        streaming={messageData.status === 'running'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={replies[0]}
@@ -1265,6 +1268,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   isExpandable = false,
   completed = false,
   settled = completed,
+  streaming = false,
   errorCode,
   legacyQuestMasterPlan,
   onSendMessage,
@@ -1380,11 +1384,36 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const currentReply = reply ?? '';
+  const [imageApproval, setImageApproval] = useState(() => ({
+    reply: currentReply,
+    sources: new Set<string>(),
+  }));
+  // A rewritten reply needs a new set identity so memoized image blocks also reset their approval.
+  const approvedImageSources = currentReply.startsWith(imageApproval.reply) ? imageApproval.sources : new Set<string>();
+  if (currentReply !== imageApproval.reply) {
+    setImageApproval({ reply: currentReply, sources: approvedImageSources });
+  }
+  // Callers may pass a fresh onSendMessage each render; a stable wrapper keeps markdownImage, and with it
+  // replyComponents, from changing every frame and re-rendering every settled block.
+  const onSendMessageRef = useRef(onSendMessage);
+  useEffect(() => {
+    onSendMessageRef.current = onSendMessage;
+  }, [onSendMessage]);
+  const sendFromImage = useCallback<typeof onSendMessage>(
+    (message, options) => onSendMessageRef.current(message, options),
+    []
+  );
   const markdownImage = useCallback(
     ({ alt, src }: ComponentProps<'img'>) => (
-      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+      <ReplyMarkdownImage
+        src={typeof src === 'string' ? src : ''}
+        alt={alt}
+        onSendMessage={sendFromImage}
+        approvedSources={approvedImageSources}
+      />
     ),
-    [onSendMessage]
+    [sendFromImage, approvedImageSources]
   );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
@@ -1397,6 +1426,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     ],
     [linksCitationMarkers]
   );
+  const replyComponents = useMemo(
+    () => ({
+      ...markdownComponents,
+      code: codeComponent,
+      img: markdownImage,
+      a: link,
+      [CITATION_MARKER_TAG]: CitationMarker,
+    }),
+    [markdownComponents, codeComponent, markdownImage]
+  );
+  const replyRemarkRehypeOptions = useMemo(() => ({ clobberPrefix: `fn-${messageId ?? 'reply'}-` }), [messageId]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1896,20 +1936,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
-                                  <ReactMarkdown
-                                    components={{
-                                      ...markdownComponents,
-                                      code: codeComponent,
-                                      img: markdownImage,
-                                      a: link,
-                                      [CITATION_MARKER_TAG]: CitationMarker,
-                                    }}
+                                  <StreamingMarkdown
+                                    text={mathReadyContent}
+                                    streaming={streaming}
+                                    components={replyComponents}
                                     remarkPlugins={replyRemarkPlugins}
-                                    rehypePlugins={[rehypeKatex]}
-                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                  >
-                                    {mathReadyContent}
-                                  </ReactMarkdown>
+                                    rehypePlugins={REPLY_REHYPE_PLUGINS}
+                                    remarkRehypeOptions={replyRemarkRehypeOptions}
+                                  />
                                 </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
