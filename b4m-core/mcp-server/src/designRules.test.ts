@@ -98,6 +98,7 @@ describe('checkToolDesign', () => {
     ['list without limit', { name: 'list_things', inputSchema: {} }, /limit/],
     ['list with wrong default', { name: 'list_things', inputSchema: { limit: z.number().default(50) } }, /limit/],
     ['cursor without limit', { inputSchema: { cursor: z.string().optional() } }, /limit/],
+    ['list without cursor', { name: 'list_things', inputSchema: { limit: paginationInput.limit } }, /cursor/],
   ])('flags %s', (_name, patch, re) => {
     expect(checkToolDesign(mutate(patch)).join('\n')).toMatch(re);
   });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { envelope, fail, ok, paginationInput, UNTRUSTED_NOTE } from '../../results';
+import { CURSOR_HINT, envelope, fail, ok, paginationInput, UNTRUSTED_NOTE } from '../../results';
 import { defineTool } from '../../tool';
 
 const modelSchema = z.object({
@@ -17,9 +17,6 @@ interface UpstreamModel {
   backend?: unknown;
   provider_label?: unknown;
 }
-
-const CURSOR_HINT =
-  'The cursor is not valid for this tool. Omit cursor, or pass the exact next_cursor this tool returned.';
 
 export const listPublicModels = defineTool({
   name: 'list_public_models',

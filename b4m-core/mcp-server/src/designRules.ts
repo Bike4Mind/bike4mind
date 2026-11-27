@@ -54,6 +54,7 @@ export function checkToolDesign(tool: Tool): string[] {
     const parsed = (inputs.limit as z.ZodTypeAny | undefined)?.safeParse(undefined);
     if (!parsed?.success || parsed.data !== DEFAULT_PAGE_SIZE)
       at(`list tools expose limit with default ${DEFAULT_PAGE_SIZE}`);
+    if (!('cursor' in inputs)) at('list tools expose cursor');
   }
   return v;
 }
