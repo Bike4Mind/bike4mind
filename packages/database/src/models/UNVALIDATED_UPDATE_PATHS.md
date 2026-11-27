@@ -135,6 +135,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `examples.tolerance.abs` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `examples.tolerance.rel` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `grants.visibility` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setGrants` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `platform.audience` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setPlatformAudience` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.version` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |

@@ -104,6 +104,7 @@ describe('restrictToolsToKeyScopes', () => {
     ['notebooks:write', ['list_notebooks', 'get_notebook', 'search_knowledge_base']],
     ['datalake:query', ['list_lakes']],
     ['ai:generate', ['get_file', 'send_message']],
+    ['bob:run', ['bob_read_site', 'get_bob_report', 'list_bob_reports', 'bob_runs_left']],
   ])('keeps the read tools listed for a key that holds only %s', async (scope, tools) => {
     expect(await listedTools([scope])).toEqual(expect.arrayContaining(tools));
   });
@@ -134,11 +135,35 @@ describe('restrictToolsToKeyScopes', () => {
     expect(await listedTools(['files:write'])).not.toContain('get_file');
   });
 
+  it('lists only list_notebooks and the Bob tools for a key that holds only admin:*', async () => {
+    expect((await listedTools(['admin:*'])).sort()).toEqual(
+      [
+        'bob_compare_sites',
+        'bob_read_site',
+        'bob_recheck',
+        'bob_runs_left',
+        'get_bob_comparison',
+        'get_bob_report',
+        'list_bob_reports',
+        'list_notebooks',
+      ].sort()
+    );
+  });
+
+  it('lists the file tools beside list_notebooks for an admin key that also holds files:read', async () => {
+    expect(await listedTools(['admin:*', 'files:read'])).toEqual(
+      expect.arrayContaining(['get_file', 'list_files', 'list_notebooks'])
+    );
+  });
+
+  it('lists publish_artifact for an admin key that also holds notebooks:read', async () => {
+    expect(await listedTools(['admin:*', 'notebooks:read'])).toContain('publish_artifact');
+  });
+
   it.each([
     ['scopes that cannot be read', undefined],
     ['an unidentified key', []],
     ['a failed lookup', new Error('offline')],
-    ['an admin key', ['admin:*']],
   ])('lists every tool for %s', async (_name, scopes) => {
     expect(await listedTools(scopes as string[] | undefined | Error)).toEqual(TOOL_NAMES);
   });

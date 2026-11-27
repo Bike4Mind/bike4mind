@@ -1,4 +1,5 @@
 import type {
+  ActiveContextNotice,
   ChatApprovalAnswer,
   ChatModelCatalog,
   ChatQueuedMessage,
@@ -42,6 +43,18 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
         ...(viewed ? { viewed } : {}),
       });
       return session;
+    },
+
+    /** The session with the held context notices in force for it (none from a 1.2 host). */
+    async readSession(
+      sessionId: string,
+      viewed?: boolean
+    ): Promise<{ session: ChatSession | null; notices: ActiveContextNotice[] }> {
+      const { session, notices } = await client.request(hostForSession(sessionId), 'session/get', {
+        sessionId,
+        ...(viewed ? { viewed } : {}),
+      });
+      return { session, notices: notices ?? [] };
     },
 
     /** Sidebar placement is Desktop's own, so a requested section is applied here after the host creates the session. */

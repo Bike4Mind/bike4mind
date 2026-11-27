@@ -89,6 +89,12 @@ function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
     sendQueuedNow: vi.fn(),
     forgetRecentFolder: vi.fn(async () => []),
     inspectProject: vi.fn(async (directory: string) => ({ directory, isRepository: false, branches: [] })),
+    contextNotices: vi.fn((sessionId: string) =>
+      sessionId === 's1' ? [{ kind: 'run-budget' as const, message: 'At 80%' }] : []
+    ),
+    listTaskDecisions: vi.fn(async () => [
+      { sessionId: 's1', rootId: 'r1', title: 'Fix it', decision: { kind: 'stopped' as const } },
+    ]),
     service: {
       eventsSince: (sessionId: string, after: { epoch: string; seq: number }) => eventLog.since(sessionId, after),
     },
@@ -166,6 +172,7 @@ describe('HostServer', () => {
     ['session/page', { limit: 'ten' }],
     ['session/statuses', 3],
     ['draft/defaults', []],
+    ['taskDecision/list', 'all'],
     ['project/forgetRecent', {}],
     ['project/inspect', { directory: 3 }],
     ['host/initialize', { clientId: 'c1' }],
@@ -223,6 +230,15 @@ describe('HostServer', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 
+  it('serves session/get with the held context notices in force, and none when there are none', async () => {
+    const { client } = serve();
+    const { call } = client();
+    expect(resultOf(await call('session/get', { sessionId: 's1' }))).toMatchObject({
+      notices: [{ kind: 'run-budget', message: 'At 80%' }],
+    });
+    expect(resultOf(await call('session/get', { sessionId: 's2' }))).not.toHaveProperty('notices');
+  });
+
   it('answers session/get for a missing session with a null session and the log cursor', async () => {
     const result = resultOf(await serve().client().call('session/get', { sessionId: 'missing' }));
     expect(result).toEqual({ session: null, cursor: { epoch: 'epoch-1', seq: 0 } });
@@ -249,6 +265,9 @@ describe('HostServer', () => {
     expect(resultOf(await call('model/list', {}))).toEqual({ models: { models: [] } });
     expect(runtime.listModels).toHaveBeenCalledWith(false);
     expect(resultOf(await call('draft/defaults'))).toEqual({ defaults: { model: 'model-a', approvalMode: 'ask' } });
+    expect(resultOf(await call('taskDecision/list'))).toEqual({
+      decisions: [{ sessionId: 's1', rootId: 'r1', title: 'Fix it', decision: { kind: 'stopped' } }],
+    });
   });
 
   describe('session lifecycle', () => {
@@ -416,7 +435,12 @@ describe('HostServer', () => {
         {
           jsonrpc: '2.0',
           method: 'session/event',
-          params: { sessionId: 's1', seq: 1, event: expect.objectContaining({ text: 'a', seq: 1 }) },
+          params: {
+            sessionId: 's1',
+            seq: 1,
+            epoch: 'epoch-1',
+            event: expect.objectContaining({ text: 'a', seq: 1 }),
+          },
         },
       ]);
       expect(other.received).toEqual([]);
@@ -510,6 +534,48 @@ describe('HostServer', () => {
     ];
     expect(first.received).toEqual(expected);
     expect(second.received).toEqual(expected);
+  });
+
+  it('announces a failed spawn to every connection, besides the event to the subscribers', async () => {
+    const { client, sink, runtime } = serve();
+    const subscribed = client();
+    const other = client();
+    await subscribed.call('session/subscribe', { sessionId: 'c1' });
+
+    sink.streamEvent(
+      runtime.eventLog.append({ type: 'spawn-failed', sessionId: 'c1', title: 'Fix it', message: 'No model' })
+    );
+
+    const announced = {
+      jsonrpc: '2.0',
+      method: 'session/spawnFailed',
+      params: { sessionId: 'c1', title: 'Fix it', message: 'No model' },
+    };
+    expect(other.received).toEqual([announced]);
+    expect(subscribed.received.map(message => message.method)).toEqual(['session/event', 'session/spawnFailed']);
+  });
+
+  it('broadcasts a context notice and its withdrawal to every connection', () => {
+    const { client, sink, runtime } = serve();
+    const first = client();
+
+    sink.streamEvent(
+      runtime.eventLog.append({ type: 'context-notice', sessionId: 's2', message: 'At 80%', kind: 'run-budget' })
+    );
+    sink.streamEvent(runtime.eventLog.append({ type: 'context-notice-cleared', sessionId: 's2', kind: 'run-budget' }));
+
+    expect(first.received).toEqual([
+      {
+        jsonrpc: '2.0',
+        method: 'session/contextNotice',
+        params: { event: { type: 'context-notice', sessionId: 's2', message: 'At 80%', kind: 'run-budget' } },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/contextNotice',
+        params: { event: { type: 'context-notice-cleared', sessionId: 's2', kind: 'run-budget' } },
+      },
+    ]);
   });
 
   it('stops watching the runtime once disposed', () => {

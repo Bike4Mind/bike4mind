@@ -4,9 +4,10 @@
  * and the setting are stubbed; the contract prelude and the callable function services run for real, so ownership is
  * proved by the same checks the app's routes rely on.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { calculateContentHash, isZodError, type FunctionContract } from '@bike4mind/common';
+import { callableFunctionRepository } from '@bike4mind/database';
 
 const h = vi.hoisted(() => ({
   enabled: { value: true },
@@ -313,6 +314,42 @@ describe("authoring the key owner's own function", () => {
     const res = await call(collectionRoute, { method: 'POST', body: { code: CODE, contract: CONTRACT } });
     expect(res.status).toBe(409);
     expect(h.artifactDelete).toHaveBeenCalledWith('u1', { id: 'artifact-new-2', hardDelete: false }, expect.anything());
+  });
+
+  describe('when only the read-back after a create fails', () => {
+    const NEW_BODY = { code: CODE, contract: { ...CONTRACT, name: 'plate_buckling' } };
+    // A delete marks the artifact gone, so a function whose artifact was removed reads as source_deleted.
+    const createWithFailingReadBack = async () => {
+      h.artifactDelete.mockImplementation(async (_userId: string, params: { id: string }) => {
+        h.artifacts.find(a => a.id === params.id)!.deletedAt = new Date();
+        return {};
+      });
+      const readBack = vi
+        .spyOn(callableFunctionRepository, 'findByIdForOwner')
+        .mockRejectedValueOnce(new Error('read-back failed'));
+      onTestFinished(() => readBack.mockRestore());
+      const res = await call(collectionRoute, { method: 'POST', body: NEW_BODY });
+      const created = h.functions.find(fn => fn.slug === 'plate_buckling');
+      expect(readBack).toHaveBeenCalledWith(created?.id, { ownerType: 'user', ownerKey: 'u1' });
+      return { res, created: created! };
+    };
+
+    it('keeps the artifact, so the created function does not read as source_deleted', async () => {
+      const { res, created } = await createWithFailingReadBack();
+      expect(res.status).toBe(500);
+      expect(h.artifactDelete).not.toHaveBeenCalled();
+      const read = await call(sourceRoute, { query: { id: created.id as string } });
+      expect(read.status).toBe(200);
+      expect(read.body.data).toMatchObject({ id: created.id, slug: 'plate_buckling', status: 'draft' });
+    });
+
+    it('answers a retry of the same create with 409 slug_taken instead of a second function', async () => {
+      const { created } = await createWithFailingReadBack();
+      const retry = await call(collectionRoute, { method: 'POST', body: NEW_BODY });
+      expect(retry.status).toBe(409);
+      expect(retry.body).toMatchObject({ code: 'slug_taken', functionId: created.id, sourceDeleted: false });
+      expect(h.functions.filter(fn => fn.slug === 'plate_buckling')).toHaveLength(1);
+    });
   });
 
   it('saves new code as an artifact version and returns the function to draft', async () => {

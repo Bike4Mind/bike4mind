@@ -32,9 +32,11 @@ const insights = (
   managedRuleGroups: { rateLimitUsage: { limitPerWindow: 10000, windowSecs: 300, topIps: [] } },
 });
 
+// Recharts renders a wrapped tick as one <tspan> per line, which textContent glues with no space.
+// Whether it wraps rests on measured text widths, which a reused worker can inherit from an earlier
+// file through Recharts' module-level size cache, so rejoin the lines rather than rely on jsdom's 0.
 const nameTicks = (chart: HTMLElement) =>
   [...chart.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')].map(tick =>
-    // Recharts wraps a long label into one tspan per line, and textContent drops the space between them.
     [...tick.querySelectorAll('tspan')].map(line => line.textContent).join(' ')
   );
 
