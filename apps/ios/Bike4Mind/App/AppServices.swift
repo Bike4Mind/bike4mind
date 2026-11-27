@@ -317,10 +317,15 @@ final class AppServices {
     let environment = auth.environment
     if let sessionsState, sessionsState.environment == environment { return sessionsState.model }
     let widgets = widgets
-    let model = SessionsViewModel(api: api, cache: sessionListCache) { [weak self] sessionID in
-      self?.transcriptCache.remove(sessionID: sessionID)
-      await widgets.recordTurns(sessionID: sessionID, sessionTitle: "", turns: [])
-    }
+    let model = SessionsViewModel(
+      api: api, cache: sessionListCache,
+      onDeleted: { [weak self] sessionID in
+        self?.transcriptCache.remove(sessionID: sessionID)
+        await widgets.recordTurns(sessionID: sessionID, sessionTitle: "", turns: [])
+      },
+      onRenamed: { sessionID, name in
+        await widgets.recordRename(sessionID: sessionID, title: name)
+      })
     sessionsState = (environment, model)
     return model
   }

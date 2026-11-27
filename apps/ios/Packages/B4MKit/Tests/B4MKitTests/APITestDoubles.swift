@@ -93,8 +93,22 @@ actor FakeAPI: B4MAPI {
   func setFailure(_ failure: APIError?) { self.failure = failure }
   func setBalance(_ balance: CreditBalance) { self.balance = balance }
 
+  private var holdingSessionLists = false
+  private var heldSessionLists: [CheckedContinuation<Void, Never>] = []
+
+  /// Parks every `listSessions` after it records its cursor until `releaseSessionLists()`; the scripted page
+  /// or failure is read on release.
+  func holdSessionLists() { holdingSessionLists = true }
+
+  func releaseSessionLists() {
+    holdingSessionLists = false
+    for request in heldSessionLists { request.resume() }
+    heldSessionLists.removeAll()
+  }
+
   func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
     sessionCursors.append(cursor)
+    if holdingSessionLists { await withCheckedContinuation { heldSessionLists.append($0) } }
     if let failure { throw failure }
     return sessionPages[cursor] ?? Page(items: [], nextCursor: nil)
   }

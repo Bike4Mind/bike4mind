@@ -23,16 +23,22 @@ public final class SessionsViewModel {
   @ObservationIgnored private var isRefreshing = false
   @ObservationIgnored private var mutatingIDs: Set<String> = []
   @ObservationIgnored private let onDeleted: @MainActor (String) async -> Void
+  @ObservationIgnored private let onRenamed: @MainActor (String, String) async -> Void
+  /// Bumped by `reset()`. Work that awaited across a reset belongs to the previous account and must not write.
+  @ObservationIgnored private var generation = 0
 
-  /// `onDeleted` runs once the server confirms a delete, to drop what other stores keep for that session.
+  /// `onDeleted` runs once the server confirms a delete, to drop what other stores keep for that session;
+  /// `onRenamed` runs with the id and the server's name once it confirms a rename.
   public init(
     api: any B4MAPI, cache: any SessionListCache, pageSize: Int = 25,
-    onDeleted: @escaping @MainActor (String) async -> Void = { _ in }
+    onDeleted: @escaping @MainActor (String) async -> Void = { _ in },
+    onRenamed: @escaping @MainActor (String, String) async -> Void = { _, _ in }
   ) {
     self.api = api
     self.cache = cache
     self.pageSize = pageSize
     self.onDeleted = onDeleted
+    self.onRenamed = onRenamed
   }
 
   public var hasMore: Bool { pages.hasMore }
@@ -43,7 +49,9 @@ public final class SessionsViewModel {
 
   /// First appearance: paint cached rows immediately, then refresh.
   public func load() async {
+    let generation = self.generation
     if sessions.isEmpty, let cached = await cache.load(), !cached.isEmpty {
+      guard generation == self.generation else { return }
       sessions = cached
       isShowingCachedRows = true
     }
@@ -52,12 +60,14 @@ public final class SessionsViewModel {
 
   public func refresh() async {
     guard !isRefreshing else { return }
+    let generation = self.generation
     isRefreshing = true
-    defer { isRefreshing = false }
+    defer { if generation == self.generation { isRefreshing = false } }
 
     if sessions.isEmpty { state = .loading }
     do {
       let page = try await api.listSessions(cursor: nil, limit: pageSize)
+      guard generation == self.generation else { return }
       pages.replace(with: page)
       sessions = pages.items
       isShowingCachedRows = false
@@ -65,6 +75,11 @@ public final class SessionsViewModel {
       state = .loaded
       await cache.save(pages.items)
     } catch {
+      guard generation == self.generation else { return }
+      if Self.isCancellation(error) {
+        if state == .loading { state = .idle }
+        return
+      }
       state = .failed(Self.apiError(from: error))
     }
   }
@@ -79,14 +94,17 @@ public final class SessionsViewModel {
 
   public func loadMore() async {
     guard let cursor = pages.nextCursor, !isLoadingMore, !isRefreshing, !isShowingCachedRows else { return }
+    let generation = self.generation
     isLoadingMore = true
-    defer { isLoadingMore = false }
+    defer { if generation == self.generation { isLoadingMore = false } }
     do {
       let page = try await api.listSessions(cursor: cursor, limit: pageSize)
+      guard generation == self.generation else { return }
       pages.append(page)
       sessions = pages.items
       loadMoreError = nil
     } catch {
+      guard generation == self.generation, !Self.isCancellation(error) else { return }
       loadMoreError = Self.apiError(from: error)
     }
   }
@@ -98,8 +116,9 @@ public final class SessionsViewModel {
     guard !name.isEmpty, !mutatingIDs.contains(id),
       let original = sessions.first(where: { $0.id == id }), original.name != name
     else { return }
+    let generation = self.generation
     mutatingIDs.insert(id)
-    defer { mutatingIDs.remove(id) }
+    defer { if generation == self.generation { mutatingIDs.remove(id) } }
     mutationError = nil
 
     let optimistic = SessionSummary(
@@ -108,8 +127,11 @@ public final class SessionsViewModel {
     replace(id, with: optimistic)
     do {
       let saved = try await api.renameSession(id: id, name: name)
+      guard generation == self.generation else { return }
       replace(id, with: saved)
+      await onRenamed(id, saved.name)
     } catch {
+      guard generation == self.generation else { return }
       let apiError = Self.apiError(from: error)
       if apiError == .notFound {
         remove(id)
@@ -119,6 +141,7 @@ public final class SessionsViewModel {
       }
       mutationError = apiError
     }
+    guard generation == self.generation else { return }
     await cache.save(sessions)
   }
 
@@ -126,8 +149,9 @@ public final class SessionsViewModel {
   /// longer has counts as deleted.
   public func delete(_ id: String) async {
     guard !mutatingIDs.contains(id), let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+    let generation = self.generation
     mutatingIDs.insert(id)
-    defer { mutatingIDs.remove(id) }
+    defer { if generation == self.generation { mutatingIDs.remove(id) } }
     mutationError = nil
 
     let original = sessions[index]
@@ -137,16 +161,19 @@ public final class SessionsViewModel {
       do {
         try await api.deleteSession(id: id)
       } catch APIError.notFound {}
+      guard generation == self.generation else { return }
       // A refresh or next page fetched before the server committed may have brought the row back.
       remove(id)
       await onDeleted(id)
     } catch {
+      guard generation == self.generation else { return }
       if !sessions.contains(where: { $0.id == id }) {
         if let pageIndex { pages.insertItem(original, at: pageIndex) }
         sessions.insert(original, at: min(index, sessions.count))
       }
       mutationError = Self.apiError(from: error)
     }
+    guard generation == self.generation else { return }
     await cache.save(sessions)
   }
 
@@ -154,10 +181,13 @@ public final class SessionsViewModel {
 
   /// Sign-out: rows belong to the account that fetched them.
   public func reset() {
+    generation += 1
     pages = PageAccumulator()
     sessions = []
     state = .idle
     isLoadingMore = false
+    isRefreshing = false
+    mutatingIDs = []
     loadMoreError = nil
     isShowingCachedRows = false
     mutationError = nil
@@ -177,5 +207,11 @@ public final class SessionsViewModel {
 
   private static func apiError(from error: any Error) -> APIError {
     (error as? APIError) ?? .malformedResponse
+  }
+
+  // A cancelled URLSession request surfaces as `APIError.offline` (AuthorizedRequester maps every URLError),
+  // so the task's own cancellation flag is the reliable signal that a view went away, not a real failure.
+  private static func isCancellation(_ error: any Error) -> Bool {
+    Task.isCancelled || error is CancellationError
   }
 }

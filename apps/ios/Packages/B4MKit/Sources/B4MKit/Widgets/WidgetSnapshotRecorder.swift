@@ -66,6 +66,14 @@ public actor WidgetSnapshotRecorder {
     publishRunning()
   }
 
+  /// Retitles a session the widget already lists as running, without touching when it was last seen.
+  public func recordRename(sessionID: String, title: String) {
+    guard let session = activeSessions[sessionID], session.title != title else { return }
+    activeSessions[sessionID] = ActiveSession(
+      title: title, status: session.status, count: session.count, touchedAt: session.touchedAt)
+    publishRunning()
+  }
+
   /// The app only observes agents while it is open, so a fresh process knows of none.
   public func clearRunning() {
     activeSessions.removeAll()

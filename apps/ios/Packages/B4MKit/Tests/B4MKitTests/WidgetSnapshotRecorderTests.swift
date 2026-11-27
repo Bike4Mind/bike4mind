@@ -24,6 +24,18 @@ final class WidgetSnapshotRecorderTests: XCTestCase {
     XCTAssertEqual(reloader.reloads, [[WidgetKind.credits], [WidgetKind.credits]])
   }
 
+  func testRenamingARunningSessionRetitlesTheWidgetAndIgnoresOthers() async {
+    let (recorder, store, _) = makeRecorder()
+    await recorder.recordTurns(sessionID: "a", sessionTitle: "Alpha", turns: [turn("1", status: .running)])
+
+    await recorder.recordRename(sessionID: "a", title: "Trip notes")
+    await recorder.recordRename(sessionID: "idle", title: "Not running")
+
+    let running = store.load()?.runningAgents
+    XCTAssertEqual(running?.count, 1)
+    XCTAssertEqual(running?.top, .init(sessionID: "a", title: "Trip notes", status: "running"))
+  }
+
   func testRunningTurnsAggregateAcrossSessionsAndLeadWithTheMostRecentlyTouched() async {
     let clock = Clock()
     let store = InMemoryWidgetSnapshotStore()

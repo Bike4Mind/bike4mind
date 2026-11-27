@@ -13,7 +13,8 @@ final class SessionMutationTests: XCTestCase {
     await api.setSessionPages([nil: Page(items: sessions, nextCursor: nextCursor)])
     let cache = InMemorySessionListCache()
     let log = DeletedLog()
-    let model = SessionsViewModel(api: api, cache: cache, onDeleted: { log.ids.append($0) })
+    let model = SessionsViewModel(
+      api: api, cache: cache, onDeleted: { log.ids.append($0) }, onRenamed: { log.renames.append("\($0)=\($1)") })
     await model.refresh()
     return (model, api, cache, log)
   }
@@ -27,7 +28,7 @@ final class SessionMutationTests: XCTestCase {
   }
 
   func testRenameUpdatesTheListTheDrawerAndTheCache() async {
-    let (model, api, cache, _) = await makeModel()
+    let (model, api, cache, log) = await makeModel()
 
     await model.rename("b", to: "  Trip notes  ")
 
@@ -38,6 +39,7 @@ final class SessionMutationTests: XCTestCase {
     let cached = await cache.load()
     XCTAssertEqual(cached?.map(\.name), ["Session a", "Trip notes", "Session c"])
     XCTAssertNil(model.mutationError)
+    XCTAssertEqual(log.renames, ["b=Trip notes"])
   }
 
   func testFailedRenamePutsTheOldNameBack() async {
@@ -184,9 +186,161 @@ final class SessionMutationTests: XCTestCase {
     XCTAssertEqual(model.state, .idle)
     XCTAssertFalse(model.hasMore)
   }
+
+  // Bounded, so a request the model wrongly skipped fails the assertions instead of hanging the suite.
+  private func waitForSessionList(_ api: FakeAPI, count: Int) async {
+    for _ in 0..<10_000 where await api.sessionCursors.count < count { await Task.yield() }
+  }
+
+  func testDeleteFailingAfterSignOutDoesNotBringTheOldAccountsRowBack() async {
+    let (model, api, cache, log) = await makeModel()
+    await api.setDeleteFailure(.conflict)
+    await api.holdMutations()
+
+    let delete = Task { await model.delete("b") }
+    await waitForMutation(api)
+    model.reset()
+    await cache.clear()
+    await api.releaseMutations()
+    await delete.value
+
+    XCTAssertTrue(model.sessions.isEmpty)
+    XCTAssertNil(model.mutationError)
+    XCTAssertTrue(log.ids.isEmpty)
+    let cached = await cache.load()
+    XCTAssertNil(cached)
+  }
+
+  func testRenameFailingAfterSignOutDoesNotWriteTheOldAccountsRows() async {
+    let (model, api, cache, _) = await makeModel()
+    await api.setRenameFailure(.offline)
+    await api.holdMutations()
+
+    let rename = Task { await model.rename("b", to: "Trip notes") }
+    await waitForMutation(api)
+    model.reset()
+    await cache.clear()
+    await api.releaseMutations()
+    await rename.value
+
+    XCTAssertTrue(model.sessions.isEmpty)
+    XCTAssertNil(model.mutationError)
+    let cached = await cache.load()
+    XCTAssertNil(cached)
+  }
+
+  func testAMutationInFlightAtSignOutDoesNotBlockTheSameIDAfterwards() async {
+    let (model, api, _, _) = await makeModel()
+    await api.holdMutations()
+    let stale = Task { await model.delete("b") }
+    await waitForMutation(api)
+
+    model.reset()
+    await api.setSessionPages([nil: Page(items: [Samples.session("b")], nextCursor: nil)])
+    await model.refresh()
+    let rename = Task { await model.rename("b", to: "Next account") }
+    for _ in 0..<10_000 where await api.renames.isEmpty { await Task.yield() }
+    await api.releaseMutations()
+    await stale.value
+    await rename.value
+
+    let renames = await api.renames
+    XCTAssertEqual(renames.map(\.name), ["Next account"])
+    XCTAssertEqual(model.sessions.map(\.name), ["Next account"])
+  }
+
+  func testRefreshInFlightAtSignOutDoesNotLeakRowsOrBlockTheNextRefresh() async {
+    let (model, api, cache, _) = await makeModel()
+    await api.holdSessionLists()
+
+    let stale = Task { await model.refresh() }
+    await waitForSessionList(api, count: 2)
+    model.reset()
+    await cache.clear()
+    await api.releaseSessionLists()
+    await stale.value
+
+    XCTAssertTrue(model.sessions.isEmpty)
+    XCTAssertEqual(model.state, .idle)
+    let cached = await cache.load()
+    XCTAssertNil(cached)
+
+    await api.setSessionPages([nil: Page(items: [Samples.session("z")], nextCursor: nil)])
+    await model.refresh()
+    XCTAssertEqual(model.sessions.map(\.id), ["z"])
+  }
+
+  func testNextAccountsRefreshIsNotDroppedWhileTheOldOneIsStillInFlight() async {
+    let (model, api, _, _) = await makeModel()
+    await api.holdSessionLists()
+    let stale = Task { await model.refresh() }
+    await waitForSessionList(api, count: 2)
+
+    model.reset()
+    let next = Task { await model.refresh() }
+    await waitForSessionList(api, count: 3)
+    await api.setSessionPages([nil: Page(items: [Samples.session("z")], nextCursor: nil)])
+    await api.releaseSessionLists()
+    await stale.value
+    await next.value
+
+    XCTAssertEqual(model.sessions.map(\.id), ["z"])
+    XCTAssertEqual(model.state, .loaded)
+  }
+
+  func testLoadMoreInFlightAtSignOutDoesNotAppendTheOldPage() async {
+    let (model, api, _, _) = await makeModel(nextCursor: "p2")
+    await api.setSessionPages([
+      nil: Page(items: ["a", "b", "c"].map { Samples.session($0) }, nextCursor: "p2"),
+      "p2": Page(items: [Samples.session("d")], nextCursor: nil),
+    ])
+    await api.holdSessionLists()
+    let stale = Task { await model.loadMore() }
+    await waitForSessionList(api, count: 2)
+
+    model.reset()
+    await api.releaseSessionLists()
+    await stale.value
+
+    XCTAssertTrue(model.sessions.isEmpty)
+    XCTAssertFalse(model.isLoadingMore)
+  }
+
+  func testCancelledRefreshDoesNotReportAFailure() async {
+    let api = FakeAPI()
+    let model = SessionsViewModel(api: api, cache: InMemorySessionListCache())
+    await api.holdSessionLists()
+    // A cancelled URLSession request reaches the model as `.offline`.
+    await api.setFailure(.offline)
+
+    let refresh = Task { await model.refresh() }
+    await waitForSessionList(api, count: 1)
+    XCTAssertEqual(model.state, .loading)
+    refresh.cancel()
+    await api.releaseSessionLists()
+    await refresh.value
+
+    XCTAssertEqual(model.state, .idle)
+  }
+
+  func testCancelledLoadMoreDoesNotReportAFailure() async {
+    let (model, api, _, _) = await makeModel(nextCursor: "p2")
+    await api.holdSessionLists()
+    await api.setFailure(.offline)
+
+    let loadMore = Task { await model.loadMore() }
+    await waitForSessionList(api, count: 2)
+    loadMore.cancel()
+    await api.releaseSessionLists()
+    await loadMore.value
+
+    XCTAssertNil(model.loadMoreError)
+    XCTAssertEqual(model.state, .loaded)
+  }
 }
 
 @MainActor
 private final class DeletedLog {
   var ids: [String] = []
+  var renames: [String] = []
 }
