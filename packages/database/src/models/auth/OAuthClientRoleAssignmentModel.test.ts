@@ -159,3 +159,71 @@ describe('listRolesForUserAndClient', () => {
     expect(await repo.listRolesForUserAndClient(new mongoose.Types.ObjectId().toString(), 'c1')).toEqual([]);
   });
 });
+
+describe('stored ObjectId spelling aliases', () => {
+  const canonicalId = 'abcdef1234567890abcdef12';
+  const alias = canonicalId.toUpperCase();
+  const rawAssignment = (userId: string, clientId = 'c1', role = 'viewer') => ({
+    userId,
+    clientId,
+    role,
+    assignedBy: 'original',
+    assignedAt: new Date('2026-01-01'),
+  });
+
+  it('reuses a stored alias without creating a second logical grant', async () => {
+    await OAuthClientRoleAssignmentModel.collection.insertOne(rawAssignment(alias));
+    const result = await repo.assign({ userId: canonicalId, clientId: 'c1', role: 'viewer', assignedBy: 'later' });
+    expect(result.created).toBe(false);
+    expect(result.assignment.assignedBy).toBe('original');
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(1);
+    expect(await repo.listByUser(canonicalId)).toHaveLength(1);
+  });
+
+  it('returns each defined claim once for existing aliases of a usable account', async () => {
+    await User.create({ _id: new mongoose.Types.ObjectId(canonicalId), username: 'claim-user', name: 'Claim' });
+    await makeClient('c1', ['viewer']);
+    await OAuthClientRoleAssignmentModel.collection.insertMany([
+      rawAssignment(alias),
+      rawAssignment(canonicalId),
+      rawAssignment(alias, 'c1', 'removed'),
+      rawAssignment(alias, 'c2', 'admin'),
+    ]);
+    expect(await repo.listRolesForUserAndClient(canonicalId, 'c1')).toEqual(['viewer']);
+    expect(await repo.listRolesForUserAndClient(alias, 'c1')).toEqual(['viewer']);
+  });
+
+  it('unassigns every alias of one grant while retaining other clients, roles and users', async () => {
+    await OAuthClientRoleAssignmentModel.collection.insertMany([
+      rawAssignment(canonicalId),
+      rawAssignment(alias),
+      rawAssignment(alias, 'c2'),
+      rawAssignment(alias, 'c1', 'admin'),
+      rawAssignment('abcdef1234567890abcdef13'),
+    ]);
+    expect(await repo.unassign(canonicalId, 'c1', 'viewer')).toBe(true);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(3);
+    expect(
+      await OAuthClientRoleAssignmentModel.countDocuments({
+        clientId: 'c1',
+        role: 'viewer',
+        userId: { $in: [canonicalId, alias] },
+      })
+    ).toBe(0);
+  });
+
+  it('purges all stored spellings after the actual user row is deleted', async () => {
+    await User.create({ _id: new mongoose.Types.ObjectId(canonicalId), username: 'purged-user', name: 'Purged' });
+    await OAuthClientRoleAssignmentModel.collection.insertMany([
+      rawAssignment(canonicalId),
+      rawAssignment(alias),
+      rawAssignment(alias, 'c2'),
+      rawAssignment('abcdef1234567890abcdef13'),
+    ]);
+    await User.deleteOne({ _id: canonicalId });
+    expect(await repo.deleteAllForUser(canonicalId)).toBe(3);
+    expect(await repo.deleteAllForUser(alias)).toBe(0);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(1);
+    expect((await OAuthClientRoleAssignmentModel.findOne())?.userId).toBe('abcdef1234567890abcdef13');
+  });
+});

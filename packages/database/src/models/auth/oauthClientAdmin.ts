@@ -341,7 +341,7 @@ async function findUserOrThrow(userId: string): Promise<RoleUser> {
         .exec()
     : null;
   if (!user) throw new NotFoundError('User not found');
-  return { id: userId, email: user.email || null, name: user.name || null };
+  return { id: String(user._id), email: user.email || null, name: user.name || null };
 }
 
 // Every role writer locks the client before validating roles or changing assignments.
@@ -443,14 +443,17 @@ export async function listOAuthClientRoles(id: string): Promise<OAuthClientRoles
   const byId = new Map(users.map(u => [u._id.toString(), u]));
   return {
     roles: toOAuthClientView(client).roles,
-    holders: rows.map(row => ({
-      userId: row.userId,
-      role: row.role,
-      email: byId.get(row.userId)?.email || null,
-      name: byId.get(row.userId)?.name || null,
-      assignedBy: row.assignedBy,
-      assignedAt: new Date(row.assignedAt).toISOString(),
-    })),
+    holders: rows.map(row => {
+      const user = byId.get(row.userId.toLowerCase());
+      return {
+        userId: user?._id.toString() ?? row.userId,
+        role: row.role,
+        email: user?.email || null,
+        name: user?.name || null,
+        assignedBy: row.assignedBy,
+        assignedAt: new Date(row.assignedAt).toISOString(),
+      };
+    }),
     holderCounts: Object.fromEntries(byRole.map(r => [r.role, r.count])),
   };
 }
@@ -461,8 +464,8 @@ export async function listOAuthClientRoles(id: string): Promise<OAuthClientRoles
  * (listRolesForUserAndClient in OAuthClientRoleAssignmentModel.ts).
  */
 export async function listUserOAuthClientRoles(userId: string): Promise<UserOAuthClientRolesView[]> {
-  await findUserOrThrow(userId);
-  const rows = await oauthClientRoleAssignmentRepository.listByUser(userId);
+  const user = await findUserOrThrow(userId);
+  const rows = await oauthClientRoleAssignmentRepository.listByUser(user.id);
   const clients = await OAuthClientModel.find({
     $or: [{ 'roles.0': { $exists: true } }, { clientId: { $in: rows.map(r => r.clientId) } }],
   })

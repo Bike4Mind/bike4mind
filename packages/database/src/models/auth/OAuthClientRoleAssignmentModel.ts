@@ -67,6 +67,13 @@ OAuthClientRoleAssignmentSchema.index({ clientId: 1, role: 1, assignedAt: 1 });
 const isDuplicateKey = (error: unknown) =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;
 
+// Match existing hex spellings, while new assignments store the canonical account ID.
+const roleUserIdentity = (userId: string) => {
+  if (!mongoose.isObjectIdOrHexString(userId)) return { canonical: userId, match: userId };
+  const canonical = new mongoose.Types.ObjectId(userId).toHexString();
+  return { canonical, match: new RegExp(`^${canonical}$`, 'i') };
+};
+
 class OAuthClientRoleAssignmentRepository
   extends BaseRepository<IOAuthClientRoleAssignmentDocument>
   implements IOAuthClientRoleAssignmentRepository
@@ -79,12 +86,13 @@ class OAuthClientRoleAssignmentRepository
     params: { userId: string; clientId: string; role: string; assignedBy: string },
     session?: mongoose.mongo.ClientSession
   ) {
-    const filter = { userId: params.userId, clientId: params.clientId, role: params.role };
+    const user = roleUserIdentity(params.userId);
+    const filter = { userId: user.match, clientId: params.clientId, role: params.role };
     const upsert = () =>
       this.model
         .findOneAndUpdate(
           filter,
-          { $setOnInsert: { assignedBy: params.assignedBy, assignedAt: new Date() } },
+          { $setOnInsert: { userId: user.canonical, assignedBy: params.assignedBy, assignedAt: new Date() } },
           { upsert: true, new: true, runValidators: true, includeResultMetadata: true, session }
         )
         .exec();
@@ -103,7 +111,9 @@ class OAuthClientRoleAssignmentRepository
   }
 
   async unassign(userId: string, clientId: string, role: string, session?: mongoose.mongo.ClientSession) {
-    const result = await this.model.deleteOne({ userId, clientId, role }, { session }).exec();
+    const result = await this.model
+      .deleteMany({ userId: roleUserIdentity(userId).match, clientId, role }, { session })
+      .exec();
     return result.deletedCount > 0;
   }
 
@@ -128,7 +138,10 @@ class OAuthClientRoleAssignmentRepository
   }
 
   listByUser(userId: string) {
-    return this.model.find({ userId }).sort({ clientId: 1, role: 1 }).exec();
+    return this.model
+      .find({ userId: roleUserIdentity(userId).match })
+      .sort({ clientId: 1, role: 1 })
+      .exec();
   }
 
   async deleteAllForClient(clientId: string, role?: string, session?: mongoose.mongo.ClientSession) {
@@ -139,7 +152,7 @@ class OAuthClientRoleAssignmentRepository
   }
 
   async deleteAllForUser(userId: string) {
-    const result = await this.model.deleteMany({ userId }).exec();
+    const result = await this.model.deleteMany({ userId: roleUserIdentity(userId).match }).exec();
     return result.deletedCount;
   }
 
@@ -155,8 +168,13 @@ class OAuthClientRoleAssignmentRepository
     if (!usable) return [];
     const client = await OAuthClientModel.findOne({ clientId }).select('roles').lean().exec();
     const defined = new Set((client?.roles ?? []).map(r => r.key));
-    const rows = await this.model.find({ userId, clientId }).select('role').sort({ role: 1 }).lean().exec();
-    return rows.map(r => r.role).filter(role => defined.has(role));
+    const rows = await this.model
+      .find({ userId: roleUserIdentity(userId).match, clientId })
+      .select('role')
+      .sort({ role: 1 })
+      .lean()
+      .exec();
+    return [...new Set(rows.map(r => r.role).filter(role => defined.has(role)))];
   }
 }
 

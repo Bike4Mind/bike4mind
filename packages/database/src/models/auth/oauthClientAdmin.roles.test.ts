@@ -637,3 +637,61 @@ describe('role reset transaction ordering', () => {
     expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(1);
   });
 });
+
+describe('role assignments use the resolved user identity', () => {
+  const canonicalId = 'abcdef1234567890abcdef12';
+  const makeCanonicalUser = () =>
+    User.create({ _id: new mongoose.Types.ObjectId(canonicalId), username: 'canonical-user', name: 'Canonical' });
+
+  it('stores one canonical assignment for alternate ObjectId spellings', async () => {
+    await makeCanonicalUser();
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'viewer', label: 'Viewer' });
+    const params = {
+      userId: canonicalId.toUpperCase(),
+      clientId: client.clientId,
+      role: 'viewer',
+      assignedBy: 'admin',
+    };
+    const first = await assignOAuthClientRole(params);
+    expect(first.user.id).toBe(canonicalId);
+    expect(await OAuthClientRoleAssignmentModel.findOne().lean()).toMatchObject({ userId: canonicalId });
+    expect((await listUserOAuthClientRoles(canonicalId))[0]?.assigned).toHaveLength(1);
+    expect((await listUserOAuthClientRoles(canonicalId.toUpperCase()))[0]?.assigned).toHaveLength(1);
+    expect((await assignOAuthClientRole({ ...params, userId: canonicalId })).created).toBe(false);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(1);
+    expect((await unassignOAuthClientRole(params)).user.id).toBe(canonicalId);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(0);
+  });
+
+  it('resolves holder details for an assignment stored with an uppercase identity', async () => {
+    await makeCanonicalUser();
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'viewer', label: 'Viewer' });
+    await OAuthClientRoleAssignmentModel.collection.insertOne({
+      userId: canonicalId.toUpperCase(),
+      clientId: client.clientId,
+      role: 'viewer',
+      assignedBy: 'original',
+      assignedAt: new Date('2026-01-01'),
+    });
+    expect((await listOAuthClientRoles(client.id)).holders).toEqual([
+      expect.objectContaining({ userId: canonicalId, name: 'Canonical' }),
+    ]);
+  });
+
+  it('lists and unassigns an existing canonical grant through an uppercase user ID', async () => {
+    await makeCanonicalUser();
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'viewer', label: 'Viewer' });
+    await assignOAuthClientRole({
+      userId: canonicalId,
+      clientId: client.clientId,
+      role: 'viewer',
+      assignedBy: 'admin',
+    });
+    expect((await listUserOAuthClientRoles(canonicalId.toUpperCase()))[0]?.assigned).toHaveLength(1);
+    await unassignOAuthClientRole({ userId: canonicalId.toUpperCase(), clientId: client.clientId, role: 'viewer' });
+    expect(await OAuthClientRoleAssignmentModel.countDocuments()).toBe(0);
+  });
+});
