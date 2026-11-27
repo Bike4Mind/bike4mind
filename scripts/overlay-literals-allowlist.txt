@@ -143,7 +143,6 @@ packages/database/src/models/infra/integrations/__tests__/IntegrationAuditLogMod
 packages/database/src/models/infra/integrations/IntegrationAuditLogModel.ts
 packages/scripts/help/__tests__/ingestHelpDatalake.test.ts
 packages/scripts/src/selfhostParityPolicy.ts
-packages/sdk/src/generated/openapi.ts
 packages/server-utils/src/dataLakes/grantingLakes.test.ts
 packages/server-utils/src/lib/secretRotation/constants.ts
 packages/server-utils/src/utils/config.test.ts
