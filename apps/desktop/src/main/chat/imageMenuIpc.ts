@@ -108,6 +108,64 @@ export function markdownImage(destination: string): string {
   return `![](${escaped})`;
 }
 
+/** What resolving and attaching a stored image needs; without `media`, a media ref is gone. */
+export type StoredImageDeps = {
+  media: Pick<MediaStore, 'locate'> | null;
+  attachments: Pick<AttachmentStore, 'locate' | 'add'>;
+  readFile(path: string): Promise<Buffer>;
+  now?(): Date;
+};
+
+async function resolveStoredImage(ref: ChatImageRef, deps: StoredImageDeps): Promise<ResolvedImage | null> {
+  const now = () => deps.now?.() ?? new Date();
+  if (ref.source === 'media') {
+    const parsed = parseMediaUrl(ref.url);
+    const file = parsed && deps.media && (await deps.media.locate(parsed.sessionId, parsed.name));
+    if (!file || !isImageMediaType(file.mimeType)) return null;
+    return {
+      path: file.path,
+      mediaType: file.mimeType,
+      fileName: `${ref.nameHint ?? 'image'}-${stamp(now())}.${extensionForImageType(file.mimeType)}`,
+    };
+  }
+  if (ref.source === 'attachment') {
+    const path = await deps.attachments.locate(ref.sessionId, ref.attachmentId);
+    if (!path || !isImageMediaType(ref.mediaType)) return null;
+    return {
+      path,
+      mediaType: ref.mediaType,
+      fileName: `${stemOf(ref.name)}.${extensionForImageType(ref.mediaType)}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Attaches an image this machine saved (generated media, or another attachment) to `sessionId`,
+ * through the same intake as a paste. Never throws: a failure is a rejected batch.
+ */
+export async function attachStoredImage(
+  sessionId: unknown,
+  value: unknown,
+  deps: StoredImageDeps
+): Promise<AddAttachmentsResult> {
+  const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name: 'image', reason: GONE }] };
+  if (typeof sessionId !== 'string' || !isValidSessionId(sessionId)) return gone;
+  try {
+    const ref = parseImageRef(value);
+    const image = ref && (await resolveStoredImage(ref, deps));
+    if (!image) return gone;
+    const data = await deps.readFile(image.path);
+    return await deps.attachments.add(sessionId, [
+      { source: 'bytes', name: image.fileName, mediaType: image.mediaType, data },
+    ]);
+  } catch {
+    // The file can vanish between locate and read, or the write can fail; either way the
+    // caller already knows how to show a rejected batch, so answer with one.
+    return { attachments: [], rejected: [{ name: 'image', reason: 'That image could not be attached.' }] };
+  }
+}
+
 /**
  * The image context menu's channels.
  *
@@ -116,30 +174,7 @@ export function markdownImage(destination: string): string {
  * store refuses resolves to nothing, so no renderer input can point an action at another file.
  */
 export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMenuDeps): void {
-  const now = () => deps.now?.() ?? new Date();
-
-  const resolve = async (ref: ChatImageRef): Promise<ResolvedImage | null> => {
-    if (ref.source === 'media') {
-      const parsed = parseMediaUrl(ref.url);
-      const file = parsed && (await deps.media.locate(parsed.sessionId, parsed.name));
-      if (!file || !isImageMediaType(file.mimeType)) return null;
-      return {
-        path: file.path,
-        mediaType: file.mimeType,
-        fileName: `${ref.nameHint ?? 'image'}-${stamp(now())}.${extensionForImageType(file.mimeType)}`,
-      };
-    }
-    if (ref.source === 'attachment') {
-      const path = await deps.attachments.locate(ref.sessionId, ref.attachmentId);
-      if (!path || !isImageMediaType(ref.mediaType)) return null;
-      return {
-        path,
-        mediaType: ref.mediaType,
-        fileName: `${stemOf(ref.name)}.${extensionForImageType(ref.mediaType)}`,
-      };
-    }
-    return null;
-  };
+  const resolve = (ref: ChatImageRef): Promise<ResolvedImage | null> => resolveStoredImage(ref, deps);
 
   const act = async (
     sender: WebContents,
@@ -199,22 +234,7 @@ export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMe
 
   ipc.handle(
     IPC_CHANNELS.chatAttachImage,
-    async (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> => {
-      const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name: 'image', reason: GONE }] };
-      if (typeof sessionId !== 'string' || !isValidSessionId(sessionId)) return gone;
-      try {
-        const ref = parseImageRef(value);
-        const image = ref && (await resolve(ref));
-        if (!image) return gone;
-        const data = await deps.readFile(image.path);
-        return await deps.attachments.add(sessionId, [
-          { source: 'bytes', name: image.fileName, mediaType: image.mediaType, data },
-        ]);
-      } catch {
-        // The file can vanish between locate and read, or the write can fail; either way the
-        // renderer already knows how to show a rejected batch, so answer with one.
-        return { attachments: [], rejected: [{ name: 'image', reason: 'That image could not be attached.' }] };
-      }
-    }
+    (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> =>
+      attachStoredImage(sessionId, value, deps)
   );
 }

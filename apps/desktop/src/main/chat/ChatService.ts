@@ -290,7 +290,7 @@ import {
   suggestionRequestMessages,
 } from './nextPrompt';
 import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
-import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
+import { deriveTitle, isValidSessionId, type SessionSettingsChange, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
@@ -2073,13 +2073,7 @@ export class ChatService {
     const scope = this.deps.store.scopeKey();
     const session = await this.deps.store.get(sessionId);
     if (session?.workerSelection) {
-      if (this.hasTurnInFlight(sessionId))
-        throw new Error('Stop the worker attempt before explicitly changing its model.');
-      // An explicit pick is how local work moves to a hosted model, so only device-local mode blocks it.
-      validateWorkerModel(model, (await this.listModels()).models, {
-        localOnly: this.workerLocality(false),
-        ...session.workerSelection?.requirements,
-      });
+      await this.checkWorkerModelPick(session, model);
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
       if (updated) this.markTaskDecisionMutation(sessionId, scope);
       this.syncTaskDecision(updated, scope);
@@ -2093,6 +2087,42 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
       });
     }
+    return this.liveSummary(updated);
+  }
+
+  /** Throws when a worker session may not move to `model` now. */
+  private async checkWorkerModelPick(session: ChatSession, model: string): Promise<void> {
+    if (this.hasTurnInFlight(session.id))
+      throw new Error('Stop the worker attempt before explicitly changing its model.');
+    // An explicit pick is how local work moves to a hosted model, so only device-local mode blocks it.
+    validateWorkerModel(model, (await this.listModels()).models, {
+      localOnly: this.workerLocality(false),
+      ...session.workerSelection?.requirements,
+    });
+  }
+
+  /**
+   * Several session settings in one write, for the host protocol's session/configure: each field
+   * follows the rules of its own setter here (a worker's model as setSessionModel checks it), and
+   * either every field lands or none does. Every connection hears of it through summaryChanged.
+   */
+  async configureSession(sessionId: string, settings: SessionSettingsChange): Promise<ChatSessionSummary | null> {
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return null;
+    const isWorker = Boolean(session.workerSelection);
+    if (isWorker && settings.model !== undefined) await this.checkWorkerModelPick(session, settings.model);
+    const updated = await this.deps.store.configure(sessionId, settings, scope);
+    if (!updated) return null;
+    if (isWorker && settings.model !== undefined) {
+      this.markTaskDecisionMutation(sessionId, scope);
+      this.syncTaskDecision(updated, scope);
+    } else if (settings.model !== undefined) {
+      await this.deps.modelMemory?.record(settings.model).catch(err => {
+        this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
+      });
+    }
+    this.emitSummary(updated);
     return this.liveSummary(updated);
   }
 
@@ -2968,7 +2998,8 @@ export class ChatService {
   /**
    * Set how much this conversation may do without asking.
    *
-   * Reached from one IPC channel the composer pill calls, and from nothing else. It is not on
+   * Reached from one IPC channel the composer pill calls, and from the host protocol's
+   * session/configure (configureSession), which a connected client's user sends. It is not on
    * HostContext, it is not in ToolContext, and no tool schema mentions it - a tool able to
    * raise its own approval mode would turn a single prompt injection into unrestricted read
    * access to the machine, which is the one escalation this whole feature has to not have.
@@ -3888,6 +3919,7 @@ export class ChatService {
     if (options.replaces) {
       const truncated = await this.deps.store.truncateFrom(sessionId, options.replaces, isTypedPrompt);
       if (!truncated) return { ok: false, error: 'That message is no longer in this conversation.' };
+      this.eventLog.rotate(sessionId);
       compactable = { ...reconciled, messages: truncated.messages };
     }
     await this.autoCompact(compactable);
@@ -4149,9 +4181,11 @@ export class ChatService {
   /**
    * Run the last prompt again and replace the reply it got: the reply is dropped from the
    * stored thread and a new one starts with the conversation's current settings. As with an
-   * edit, what the dropped reply's tools did is not undone.
+   * edit, what the dropped reply's tools did is not undone. With `expectedReplyId`, refused
+   * unless that is still the reply being replaced, so a caller looking at an older thread
+   * cannot drop a reply it never saw.
    */
-  async regenerateReply(sessionId: string): Promise<SendMessageResult> {
+  async regenerateReply(sessionId: string, expectedReplyId?: string): Promise<SendMessageResult> {
     const historyScope = this.deps.history?.scopeKey() ?? null;
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
     const refusal = this.rerunRefusal(sessionId);
@@ -4169,6 +4203,9 @@ export class ChatService {
       }
       const reply = regenerableReply(session.messages);
       if (!reply) return { ok: false, error: 'There is no reply to regenerate.' };
+      if (expectedReplyId !== undefined && reply.id !== expectedReplyId) {
+        return { ok: false, error: 'That reply is no longer the last one in this conversation.' };
+      }
       const unready = await this.resumeWorker(sessionId, session);
       if (unready) return { ok: false, error: unready };
 
@@ -4178,6 +4215,7 @@ export class ChatService {
         (message, stored) => regenerableReply(stored.messages)?.id === message.id
       );
       if (!truncated) return { ok: false, error: 'There is no reply to regenerate.' };
+      this.eventLog.rotate(sessionId);
       void this.pruneAttachments(truncated);
       this.attendedTurns.add(sessionId);
       return { ok: true, messageId: this.startReply(truncated, api, historyScope) };

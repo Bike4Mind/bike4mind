@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import type { ActiveContextNotice } from '@shared/chat';
 import { join } from 'node:path';
 import { ChatModels } from '@bike4mind/common';
@@ -13,6 +14,10 @@ import type {
   SendMessageRequest,
 } from '@shared/chat';
 import type { PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
+import type { SessionSettingsPatch } from '@shared/hostProtocol';
+import type { AttachmentStore } from '../main/chat/AttachmentStore';
+import { attachFilePath } from '../main/chat/filePathLinks';
+import { attachStoredImage } from '../main/chat/imageMenuIpc';
 import { ApprovalModePreference } from '../main/chat/ApprovalModePreference';
 import { ChatService, type ChatServiceDeps, type ChatServiceLogger } from '../main/chat/ChatService';
 import { createCompletionRunMinter } from '../main/chat/completionRuns';
@@ -41,6 +46,8 @@ import { BackgroundProcessRegistry } from '../main/chat/tools/BackgroundProcessR
 import { ForegroundCommandRegistry } from '../main/chat/tools/ForegroundCommandRegistry';
 import { keepSessionWritesIn } from '../main/chat/tools/sessionScripts';
 import { browseDirectory, type BrowseDirectoryResult } from './fs/browseDirectory';
+import { AttachmentUploads } from './attachments/AttachmentUploads';
+import { storedAttachmentContent, type StoredAttachmentContent } from './attachments/storedAttachmentContent';
 import type { SessionPageRequest } from '@shared/sessionPage';
 import type {
   HostAuth,
@@ -118,6 +125,12 @@ export class HostRuntime {
   private readonly spareWorktrees: HostCollaborators['spareWorktrees'];
   private readonly homeDirectory: string;
   private readonly logger: ChatServiceLogger;
+  private readonly protection: HostProtection;
+  private readonly media: HostCollaborators['media'];
+  /** Null when the app gave no attachment store; the attachment methods are then unavailable. */
+  readonly attachments: AttachmentStore | null;
+  /** Uploads into `attachments`; null with it. */
+  readonly uploads: AttachmentUploads | null;
 
   constructor(options: HostRuntimeOptions) {
     const { environment, events, auth, logger, protection, machine = {}, collaborators = {}, hooks = {} } = options;
@@ -127,6 +140,10 @@ export class HostRuntime {
     this.spareWorktrees = passedThrough.spareWorktrees;
     this.homeDirectory = environment.homeDirectory;
     this.logger = logger;
+    this.protection = protection;
+    this.media = passedThrough.media;
+    this.attachments = passedThrough.attachments ?? null;
+    this.uploads = this.attachments && new AttachmentUploads(this.attachments, { logger });
     this.recentFolders = new RecentFolderStore(join(dataDirectory, 'recent-folders.json'));
 
     // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
@@ -374,6 +391,74 @@ export class HostRuntime {
     return this.service.send(request.sessionId, request.text, request.attachments, {
       notes: rendererNotes(request.notes),
     });
+  }
+
+  continueReply(sessionId: string) {
+    return this.service.continueReply(sessionId);
+  }
+
+  editMessage(sessionId: string, messageId: string, text: string) {
+    return this.service.editMessage(sessionId, messageId, text);
+  }
+
+  /** With `messageId`, refused unless that is still the reply a regenerate would replace. */
+  regenerateReply(sessionId: string, messageId?: string) {
+    return this.service.regenerateReply(sessionId, messageId);
+  }
+
+  /** Null for an unknown session. */
+  configureSession(sessionId: string, patch: SessionSettingsPatch) {
+    return this.service.configureSession(sessionId, patch);
+  }
+
+  /** `content: null` when the file is gone. */
+  async readAttachment(
+    sessionId: string,
+    attachmentId: string
+  ): Promise<StoredAttachmentContent | { ok: true; content: null }> {
+    const bytes = await this.attachmentStore().read(sessionId, attachmentId);
+    return bytes ? storedAttachmentContent(bytes) : { ok: true, content: null };
+  }
+
+  /** Drops the draft's open uploads first, so none lands after its files are gone. */
+  async discardDraftAttachments(draftId: string): Promise<void> {
+    const store = this.attachmentStore();
+    await this.uploads?.abortSession(draftId);
+    await store.disposeDraft(draftId);
+  }
+
+  discardAttachment(sessionId: string, attachmentId: string): Promise<void> {
+    return this.attachmentStore().discard(sessionId, attachmentId);
+  }
+
+  copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void> {
+    return this.attachmentStore().copyDraft(draftId, sessionId, attachmentIds);
+  }
+
+  /** An image this machine saved, attached as the image menu's Attach does. */
+  attachStoredImage(sessionId: string, ref: unknown) {
+    return attachStoredImage(sessionId, ref, {
+      media: this.media ?? null,
+      attachments: this.attachmentStore(),
+      readFile,
+    });
+  }
+
+  /** A file a reply named, attached when it is inside a folder shared with the session. */
+  attachFilePath(sessionId: string, path: string) {
+    const store = this.attachmentStore();
+    return attachFilePath(sessionId, path, {
+      scopeFor: id => this.service.fileLinkScope(id),
+      protectedPaths: () => this.protection.tool.paths(),
+      home: this.homeDirectory,
+      stat: candidate => stat(candidate),
+      attach: (id, found) => store.add(id, [{ source: 'path', path: found }]),
+    });
+  }
+
+  private attachmentStore(): AttachmentStore {
+    if (!this.attachments) throw new Error('This host keeps no attachments.');
+    return this.attachments;
   }
 
   stopReply(sessionId: string): void {

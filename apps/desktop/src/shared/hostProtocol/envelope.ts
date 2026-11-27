@@ -22,6 +22,7 @@ export const HOST_ERROR_CODES = {
   accountMismatch: -32006,
   pathUnavailable: -32007,
   processNotFound: -32008,
+  attachmentRefused: -32009,
 } as const;
 
 export const hostErrorSchema = z.object({

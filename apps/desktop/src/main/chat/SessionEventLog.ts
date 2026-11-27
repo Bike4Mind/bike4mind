@@ -6,13 +6,15 @@ export type SequencedEvent = ChatStreamEvent & { seq: number };
 export type EventsSinceResult = { ok: true; events: SequencedEvent[] } | { ok: false; reason: 'snapshot-required' };
 
 export type SessionEventLogOptions = {
-  /** Names this process lifetime of the log; a cursor carrying another epoch predates a restart. */
+  /** Names this process lifetime of the log; a cursor carrying another epoch predates a restart or a rotate. */
   epoch?: string;
   maxEvents?: number;
   maxBytes?: number;
 };
 
 type SessionLog = {
+  /** The log's own epoch until the session's transcript is rewritten; see rotate. */
+  epoch: string;
   lastSeq: number;
   events: Array<{ event: SequencedEvent; bytes: number }>;
   bytes: number;
@@ -60,13 +62,29 @@ export class SessionEventLog {
   }
 
   cursor(sessionId: string): EventCursor {
-    return { epoch: this.epoch, seq: this.sessions.get(sessionId)?.lastSeq ?? 0 };
+    const log = this.sessions.get(sessionId);
+    return { epoch: log?.epoch ?? this.epoch, seq: log?.lastSeq ?? 0 };
+  }
+
+  /**
+   * Starts a new epoch for one session whose stored transcript was rewritten (an edit or a
+   * regenerate dropped its end). Events only ever add to a transcript, so a client holding the
+   * old one cannot be brought up to date by replay: its cursor stops resolving here, and the next
+   * live event it sees carries an epoch it does not hold, which is its cue to read the session
+   * again. `seq` keeps counting so no seq is ever reused within the session.
+   */
+  rotate(sessionId: string): void {
+    const log = this.sessionLog(sessionId);
+    log.epoch = randomUUID();
+    log.events = [];
+    log.bytes = 0;
   }
 
   since(sessionId: string, after: EventCursor): EventsSinceResult {
     const log = this.sessions.get(sessionId);
     const lastSeq = log?.lastSeq ?? 0;
-    if (after.epoch !== this.epoch || !Number.isInteger(after.seq) || after.seq < 0 || after.seq > lastSeq)
+    const epoch = log?.epoch ?? this.epoch;
+    if (after.epoch !== epoch || !Number.isInteger(after.seq) || after.seq < 0 || after.seq > lastSeq)
       return { ok: false, reason: 'snapshot-required' };
     if (after.seq === lastSeq) return { ok: true, events: [] };
     // lastSeq > after.seq >= 0 here, so the log exists. Retained events are contiguous and end at
@@ -84,7 +102,7 @@ export class SessionEventLog {
   private sessionLog(sessionId: string): SessionLog {
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
-    const created: SessionLog = { lastSeq: 0, events: [], bytes: 0 };
+    const created: SessionLog = { epoch: this.epoch, lastSeq: 0, events: [], bytes: 0 };
     this.sessions.set(sessionId, created);
     return created;
   }

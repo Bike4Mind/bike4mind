@@ -302,6 +302,76 @@ function normalizeOrigin(value: unknown): ChatSessionOrigin | null {
 /** Where the store reads the environment-and-account pair it is currently storing under. */
 export type SessionScopeProvider = () => SessionScope | null;
 
+/** The per-session settings `configure` writes together; each field as its own setter takes it. */
+export type SessionSettingsChange = {
+  model?: string;
+  reasoningEffort?: ReasoningEffortSetting;
+  promptCacheTtl?: PromptCacheTtl;
+  generation?: GenerationSettings;
+  approvalMode?: ChatApprovalMode;
+};
+
+/*
+ * One field's change each, shared by its setter and by `configure`. Each edits the session in
+ * place and says whether anything changed, which is what decides the write.
+ */
+
+function changeModel(session: ChatSession, model: string): boolean {
+  if (session.model === model) return false;
+  session.model = model;
+  session.updatedAt = new Date().toISOString();
+  return true;
+}
+
+/** For a session with a worker selection; throws for a canceled task, which cannot restart. */
+function changeWorkerModel(session: ChatSession, model: string): boolean {
+  if (!session.workerSelection) throw new Error('This session has no worker selection.');
+  if (session.workerTask?.state.status === 'canceled') {
+    throw new Error('Canceled tasks cannot restart. Create a new task.');
+  }
+  session.model = model;
+  session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
+  if (session.workerTask) {
+    const task = session.workerTask;
+    session.workerTask = workerTaskSchema.parse({
+      ...task,
+      attentionViewed: undefined,
+      state: { status: 'queued' },
+      attempts: [
+        ...task.attempts,
+        { id: randomUUID(), model, startedAt: new Date().toISOString(), trigger: 'user-upgrade' },
+      ],
+    });
+  }
+  return true;
+}
+
+function changeReasoningEffort(session: ChatSession, effort: ReasoningEffortSetting): boolean {
+  if (session.reasoningEffort === effort) return false;
+  session.reasoningEffort = effort;
+  session.updatedAt = new Date().toISOString();
+  return true;
+}
+
+function changeGeneration(session: ChatSession, generation: GenerationSettings): boolean {
+  const next = normalizeGeneration(generation);
+  if (JSON.stringify(session.generation ?? null) === JSON.stringify(next ?? null)) return false;
+  if (next) session.generation = next;
+  else delete session.generation;
+  return true;
+}
+
+function changePromptCacheTtl(session: ChatSession, ttl: PromptCacheTtl): boolean {
+  if (session.promptCacheTtl === ttl) return false;
+  session.promptCacheTtl = ttl;
+  return true;
+}
+
+function changeApprovalMode(session: ChatSession, approvalMode: ChatApprovalMode): boolean {
+  session.approvalMode = approvalMode;
+  return true;
+}
+
 /**
  * Where the mode a new conversation starts in is read from and written back to.
  *
@@ -653,27 +723,7 @@ export class SessionStore implements SessionWritesStore {
   setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
-      session => {
-        if (!session.workerSelection) return null;
-        if (session.workerTask?.state.status === 'canceled') {
-          throw new Error('Canceled tasks cannot restart. Create a new task.');
-        }
-        session.model = model;
-        session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
-        if (session.workerTask) {
-          const task = session.workerTask;
-          session.workerTask = workerTaskSchema.parse({
-            ...task,
-            attentionViewed: undefined,
-            state: { status: 'queued' },
-            attempts: [
-              ...task.attempts,
-              { id: randomUUID(), model, startedAt: new Date().toISOString(), trigger: 'user-upgrade' },
-            ],
-          });
-        }
-        return true;
-      },
+      session => (session.workerSelection ? changeWorkerModel(session, model) : null),
       expectedScope
     );
   }
@@ -1102,12 +1152,7 @@ export class SessionStore implements SessionWritesStore {
    * must not silently rewrite what an old conversation was answered with.
    */
   async setModel(id: string, model: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (session.model === model) return false;
-      session.model = model;
-      session.updatedAt = new Date().toISOString();
-      return true;
-    });
+    return this.mutate(id, session => changeModel(session, model));
   }
 
   async setHistoryEnabled(
@@ -1137,12 +1182,7 @@ export class SessionStore implements SessionWritesStore {
    * restores the choice instead of quietly dropping it.
    */
   async setReasoningEffort(id: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (session.reasoningEffort === effort) return false;
-      session.reasoningEffort = effort;
-      session.updatedAt = new Date().toISOString();
-      return true;
-    });
+    return this.mutate(id, session => changeReasoningEffort(session, effort));
   }
 
   /**
@@ -1151,13 +1191,7 @@ export class SessionStore implements SessionWritesStore {
    * `updatedAt` alone, as setApprovalMode does.
    */
   async setGeneration(id: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
-    const next = normalizeGeneration(generation);
-    return this.mutate(id, session => {
-      if (JSON.stringify(session.generation ?? null) === JSON.stringify(next ?? null)) return false;
-      if (next) session.generation = next;
-      else delete session.generation;
-      return true;
-    });
+    return this.mutate(id, session => changeGeneration(session, generation));
   }
 
   /**
@@ -1165,11 +1199,7 @@ export class SessionStore implements SessionWritesStore {
    * conversation. Leaves `updatedAt` alone, as setApprovalMode does.
    */
   async setPromptCacheTtl(id: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
-    const updated = await this.mutate(id, session => {
-      if (session.promptCacheTtl === ttl) return false;
-      session.promptCacheTtl = ttl;
-      return true;
-    });
+    const updated = await this.mutate(id, session => changePromptCacheTtl(session, ttl));
     if (updated) await this.promptCacheTtls?.record(ttl);
     return updated;
   }
@@ -1186,14 +1216,43 @@ export class SessionStore implements SessionWritesStore {
    * was last talked to, and bumping it would reorder the sidebar behind the user's back.
    */
   async setApprovalMode(id: string, approvalMode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
-    const updated = await this.mutate(id, session => {
-      session.approvalMode = approvalMode;
-      return true;
-    });
+    const updated = await this.mutate(id, session => changeApprovalMode(session, approvalMode));
     // Remembered only for a session that actually took the mode, so a stale id cannot move the
     // preference. Existing conversations keep whatever they were given; this is about the next
     // one. The clamp on 'full' lives in the preference itself.
     if (updated) await this.approvalModes?.record(approvalMode);
+    return updated;
+  }
+
+  /**
+   * Several of the settings above in one write: each field changes as its own setter would
+   * change it, and either all of them land or, when one throws, none does. A worker session's
+   * model changes as setWorkerModel changes it. The same preferences are remembered afterwards.
+   */
+  async configure(
+    id: string,
+    settings: SessionSettingsChange,
+    expectedScope: string | null
+  ): Promise<ChatSessionSummary | null> {
+    const { model, reasoningEffort, promptCacheTtl, generation, approvalMode } = settings;
+    const updated = await this.mutate(
+      id,
+      session => {
+        const changes = [
+          model !== undefined &&
+            (session.workerSelection ? changeWorkerModel(session, model) : changeModel(session, model)),
+          reasoningEffort !== undefined && changeReasoningEffort(session, reasoningEffort),
+          promptCacheTtl !== undefined && changePromptCacheTtl(session, promptCacheTtl),
+          generation !== undefined && changeGeneration(session, generation),
+          approvalMode !== undefined && changeApprovalMode(session, approvalMode),
+        ];
+        return changes.some(Boolean);
+      },
+      expectedScope
+    );
+    if (!updated) return null;
+    if (promptCacheTtl !== undefined) await this.promptCacheTtls?.record(promptCacheTtl);
+    if (approvalMode !== undefined) await this.approvalModes?.record(approvalMode);
     return updated;
   }
 

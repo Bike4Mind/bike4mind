@@ -3,9 +3,14 @@ import { z } from 'zod';
 /*
  * Compatibility contract. Within a major version a change is additive only: new methods, new
  * optional fields, new capabilities. A receiver ignores notification methods and object keys it
- * does not know, so no wire schema here is strict. Anything else (removing or retyping a field,
- * changing what a method means) bumps the major, and hosts and clients of different majors
- * refuse to talk.
+ * does not know, so the schemas of methods from before 1.4 are not strict. Anything else
+ * (removing or retyping a field, changing what a method means) bumps the major, and hosts and
+ * clients of different majors refuse to talk.
+ *
+ * Methods added since 1.4 have strict schemas, params and results alike: an unknown key is
+ * refused. The host does not track the minor each connection agreed on, so one of these shapes
+ * never grows within a major: a later minor that needs more adds a method (gated in
+ * hostMethodRequirements) instead.
  */
 
 export const hostProtocolVersionSchema = z.object({
@@ -14,7 +19,7 @@ export const hostProtocolVersionSchema = z.object({
 });
 export type HostProtocolVersion = z.infer<typeof hostProtocolVersionSchema>;
 
-export const HOST_PROTOCOL_VERSION = { major: 1, minor: 3 } as const satisfies HostProtocolVersion;
+export const HOST_PROTOCOL_VERSION = { major: 1, minor: 4 } as const satisfies HostProtocolVersion;
 
 export type HostProtocolNegotiation =
   { ok: true; minor: number } | { ok: false; reason: 'client-too-old' | 'host-too-old' };
@@ -26,6 +31,7 @@ export function negotiateHostProtocol(client: HostProtocolVersion, host: HostPro
   return { ok: true, minor: Math.min(client.minor, host.minor) };
 }
 
+/** Since 1.4 `attachments` also says the host serves the attachment/* methods. */
 export const KNOWN_HOST_CAPABILITIES = [
   'queue',
   'backgroundProcesses',
@@ -36,6 +42,10 @@ export const KNOWN_HOST_CAPABILITIES = [
   'browserTools',
   'loops',
   'videoJobs',
+  // Since 1.4: session/configure.
+  'sessionSettings',
+  // Since 1.4: turn/continue, turn/edit, turn/regenerate.
+  'turnRevision',
 ] as const;
 export type HostCapability = (typeof KNOWN_HOST_CAPABILITIES)[number];
 
