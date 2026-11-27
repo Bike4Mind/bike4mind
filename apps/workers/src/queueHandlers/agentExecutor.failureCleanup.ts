@@ -1,16 +1,5 @@
 import { withRetry, type RetryOptions } from '@bike4mind/common';
-
-/**
- * Persists a terminal `failed` state, retrying through a brief DB outage.
- *
- * Redelivering the SQS message cannot repair a failed `markFailed`: the redelivery goes through
- * the CAS claim, which expects `continuing`/`pending`, but the execution is still `running`, so
- * the claim loses and the message is acked with nothing fixed. Retrying in-process is the only
- * path that closes the gap before the abandoned-execution sweep, which only marks an execution stale after 6 hours. Still throws once the
- * retries are spent, so the caller can fall back to that sweep.
- *
- * Own module with structural deps so it unit-tests without the executor's Mongo/AWS imports.
- */
+import { isMongoNetworkError } from '@bike4mind/db-core';
 
 export const MARK_FAILED_RETRY: Pick<RetryOptions, 'maxRetries' | 'initialDelayMs' | 'maxDelayMs'> = {
   maxRetries: 3,
@@ -18,18 +7,26 @@ export const MARK_FAILED_RETRY: Pick<RetryOptions, 'maxRetries' | 'initialDelayM
   maxDelayMs: 2000,
 };
 
-export async function markFailedWithRetry<TError>(
-  markFailed: (executionId: string, error: TError) => Promise<unknown>,
-  executionId: string,
-  error: TError,
+// Covers the worst-case backoff (~3.5s) plus the failed websocket event and quest persist that follow.
+export const MARK_FAILED_MIN_REMAINING_MS = 10_000;
+
+/**
+ * Retries a failed `markFailed` write through a brief DB outage. Redelivering the SQS message
+ * cannot repair it: the CAS claim expects `continuing`/`pending`, so it loses on a `running`
+ * execution. Only socket-level Mongo errors are retried; server-selection timeouts have already
+ * waited their full timeout. Rethrows once spent so the caller can fall back to the sweep.
+ */
+export async function markFailedWithRetry(
+  markFailed: () => Promise<unknown>,
   logger: NonNullable<RetryOptions['logger']>,
-  retryOptions: Partial<RetryOptions> = {}
+  options: { getRemainingMs?: () => number; retry?: Partial<RetryOptions> } = {}
 ): Promise<void> {
-  await withRetry(() => markFailed(executionId, error), {
+  const { getRemainingMs, retry } = options;
+  await withRetry(markFailed, {
     ...MARK_FAILED_RETRY,
-    // Mongo outages surface under many error shapes; the default heuristic is network-oriented.
-    isRetryable: () => true,
+    isRetryable: error =>
+      isMongoNetworkError(error) && (getRemainingMs === undefined || getRemainingMs() > MARK_FAILED_MIN_REMAINING_MS),
     logger,
-    ...retryOptions,
+    ...retry,
   });
 }
