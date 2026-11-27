@@ -44,7 +44,7 @@ const LOCAL_CAPABILITIES: SessionCapabilities = {
  * What a session on `session.hostId` (absent: the local host) can offer. The local host offers
  * everything, as it always has. A remote host offers what has a host-protocol path in this client
  * AND that host advertised in `host/info`; the IPC-only controls stay off until the protocol
- * carries them (step 8), at which point their flag reads the host's capability list here.
+ * carries them, at which point their flag reads the host's capability list here.
  */
 export function sessionCapabilities(
   session: { hostId?: string } | null | undefined,
