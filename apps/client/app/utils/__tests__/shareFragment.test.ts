@@ -9,7 +9,7 @@ describe('shareFragmentCaptureScript', () => {
     window.history.replaceState(null, '', '/');
   });
 
-  it.each(['/opti/report/shared', '/quest/report/shared', '/opti/companies/shared', '/opti/report/shared/'])(
+  it.each(['/app/report/shared', '/other/report/shared', '/app/items/shared', '/app/report/shared/'])(
     'takes the fragment out of %s before anything else reads the location',
     path => {
       window.history.replaceState(null, '', `${path}?ref=mail#secret-token`);
@@ -23,7 +23,7 @@ describe('shareFragmentCaptureScript', () => {
     }
   );
 
-  it.each(['/notebooks#section', '/shared-files#x', '/opti/report/shared-old#x', '/opti/report/shared'])(
+  it.each(['/notebooks#section', '/shared-files#x', '/app/report/shared-old#x', '/app/report/shared'])(
     'leaves %s alone',
     url => {
       window.history.replaceState(null, '', url);
