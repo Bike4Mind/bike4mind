@@ -74,3 +74,16 @@ describe('Annotation dustbin TTL index', () => {
     expect(DELETED_AUTHOR_ANNOTATION_TTL_SECONDS).toBe(90 * 24 * 60 * 60);
   });
 });
+
+describe('Annotation anchor elementText', () => {
+  it('round-trips the text, rejects over 200 chars, and still saves without an anchor', async () => {
+    const saved = await comment('pub1', 'u1', { anchor: { x: 0.5, y: 0.5, elementText: 'Pricing' } });
+    const found = await Annotation.findById(saved._id).lean();
+    expect(found?.anchor?.elementText).toBe('Pricing');
+
+    await expect(comment('pub1', 'u1', { anchor: { x: 0.5, y: 0.5, elementText: 'a'.repeat(201) } })).rejects.toThrow();
+
+    const plain = await Annotation.findById((await comment('pub1', 'u1'))._id).lean();
+    expect(plain?.anchor).toBeUndefined();
+  });
+});

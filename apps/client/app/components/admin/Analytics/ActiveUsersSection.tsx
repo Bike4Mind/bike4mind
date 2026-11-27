@@ -27,11 +27,12 @@ const MODE_OPTIONS = [
 ] as const;
 
 // Fixed order so a surface keeps its color whatever the range.
-const SOURCE_ORDER = ['web', 'cli', 'desktop', 'api', 'agent', UNCLASSIFIED_SOURCE];
+const SOURCE_ORDER = ['web', 'cli', 'desktop', 'mcp', 'api', 'agent', UNCLASSIFIED_SOURCE];
 const SOURCE_LABELS: Record<string, string> = {
   web: 'Web',
   cli: 'CLI',
   desktop: 'Desktop',
+  mcp: 'MCP',
   api: 'API',
   agent: 'Agent',
   [UNCLASSIFIED_SOURCE]: 'Unclassified',

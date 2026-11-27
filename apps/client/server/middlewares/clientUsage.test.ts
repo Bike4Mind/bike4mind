@@ -52,6 +52,15 @@ describe('clientUsageMiddleware', () => {
     );
   });
 
+  it('records an MCP user agent as mcp, not api', () => {
+    mocks.isApiKeyAuth.mockReturnValue(true);
+    run(makeReq({ id: 'u1' }, { 'user-agent': 'b4m-mcp/claude-code/1.0.0' }));
+
+    const update = mocks.updateOne.mock.calls[0][1];
+    expect(update.$min).toEqual({ 'clientUsage.mcp.firstSeenAt': NOW });
+    expect(Object.keys(update.$max)).toEqual(['clientUsage.mcp.lastSeenAt']);
+  });
+
   it('records a browser session as web, without a version', () => {
     run(makeReq({ id: 'u1' }, { 'user-agent': 'Mozilla/5.0' }));
 

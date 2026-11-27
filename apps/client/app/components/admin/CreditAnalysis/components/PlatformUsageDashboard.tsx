@@ -191,7 +191,7 @@ const EndpointSection: React.FC<{
         </Select>
       </Stack>
       <Typography level="body-xs" color="neutral" sx={{ mb: 2 }}>
-        From the API-key request log, which records api, cli and desktop traffic only.
+        From the API-key request log, which records api, cli, desktop and mcp traffic only.
         {source !== ALL ? ' Filtering excludes requests logged before source was recorded.' : ''}{' '}
         {data ? `Last ${data.windowDays} days, independent of the filters above.` : 'Independent of the filters above.'}
       </Typography>

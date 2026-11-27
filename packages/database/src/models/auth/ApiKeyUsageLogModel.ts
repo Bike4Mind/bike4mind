@@ -31,6 +31,8 @@ export interface IApiKeyUsageLogDocument extends IMongoDocument {
    * so they drop out of a source/ownerType-filtered rollup.
    */
   source?: ApiKeyCompletionSource;
+  /** Sanitized MCP host name from the `b4m-mcp/<client>/<ver>` User-Agent; set only when `source` is `mcp`. */
+  mcpClient?: string;
   /** The key's billing owner when the request was made (same rule as reserveRequestCredits). */
   ownerType?: ApiKeyBillingOwnerType;
   /** Connected app of a federated exchange key; absent for every other key. */
@@ -66,6 +68,7 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
       default: undefined,
     },
     source: { type: String, enum: API_KEY_COMPLETION_SOURCES },
+    mcpClient: { type: String, maxlength: 32 },
     ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization] },
     oauthClientId: { type: String },
     payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
@@ -111,6 +114,7 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       | 'method'
       | 'source'
       | 'ownerType'
+      | 'mcpClient'
       | 'completionObservation'
       | 'oauthClientId'
       | 'payerStanding'
@@ -293,7 +297,7 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   /**
    * Platform-wide endpoint/latency rollup over a trailing window (default 30
    * days; pass `hours` for finer windows). Every row here is API-key-authed
-   * traffic, so `source` only ever narrows to api vs cli (the handler decides
+   * traffic, so `source` is only ever an ApiKeyCompletionSource (the handler decides
    * whether the section applies to other sources). `source` / `ownerType` match
    * the stamped fields, so either filter excludes rows logged before they
    * existed. Beyond the collection's 90-day TTL there is simply no data; callers

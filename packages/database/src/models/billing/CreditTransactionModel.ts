@@ -124,7 +124,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     // Idempotency key for generic_add refund transactions (e.g. Qwork credit settlements)
     transactionId: { type: String, required: false },
 
-    // Where the transaction originated (web/cli/api/agent/system). Optional -
+    // Where the transaction originated (one of COMPLETION_SOURCES). Optional -
     // historical rows are unclassified, and non-usage transactions (purchases,
     // refunds, transfers) don't carry meaningful source.
     source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },

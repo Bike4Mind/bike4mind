@@ -716,4 +716,13 @@ describe('findSpendChannelsByUsers', () => {
       'mixed-user': { apiCredits: 100, chatCredits: 80 },
     });
   });
+
+  it('counts mcp spend on the API side', async () => {
+    await insert('mcp-user', 40, 'mcp');
+    await insert('mcp-user', 10, 'api');
+
+    expect(await counterLogRepository.findSpendChannelsByUsers(['mcp-user'], windowStart, windowEnd)).toEqual({
+      'mcp-user': { apiCredits: 50, chatCredits: 0 },
+    });
+  });
 });

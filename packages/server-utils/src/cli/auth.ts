@@ -76,6 +76,8 @@ export interface ApiKeyInfo {
   createdByUserId?: string;
   /** OAuth client that minted this key, present only for a federated exchange key. */
   oauthExchangeClientId?: string;
+  /** An MCP key: admitted only on routes naming a scope it holds. */
+  explicitScopeOnly?: boolean;
   /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
   payerStanding?: PayerStanding;
 }
@@ -237,6 +239,7 @@ function toApiKeyInfo(v: {
   currentSpend?: number;
   createdByUserId?: string;
   oauthExchangeClientId?: string;
+  explicitScopeOnly?: boolean;
   payerStanding?: PayerStanding;
 }): ApiKeyInfo {
   return {
@@ -254,6 +257,7 @@ function toApiKeyInfo(v: {
     currentSpend: v.currentSpend,
     createdByUserId: v.createdByUserId,
     oauthExchangeClientId: v.oauthExchangeClientId,
+    explicitScopeOnly: v.explicitScopeOnly,
     payerStanding: v.payerStanding,
   };
 }
@@ -357,6 +361,15 @@ export async function verifyApiKey(
         status: 403,
         userId: validation.userId,
         keyId: validation.keyId,
+      });
+      throw new ForbiddenError('This key cannot be used for this endpoint');
+    }
+
+    // An MCP key is confined to the routes that name its scopes; this verifier has no scope-less route to offer.
+    if (validation.explicitScopeOnly) {
+      Logger.globalInstance.warn('API key rejected: MCP key used on a route that does not accept it', {
+        keyId: validation.keyId,
+        userId: validation.userId,
       });
       throw new ForbiddenError('This key cannot be used for this endpoint');
     }
@@ -524,6 +537,8 @@ const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
   // Never applies: a desktop request matches the client bucket below first and gets its cap.
   desktop: 100,
   agent: 1000,
+  // Same as api: a JWT caller sending a b4m-mcp UA was api before and keeps its limit.
+  mcp: 100,
   api: 100,
   web: 100,
   system: 100,

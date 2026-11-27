@@ -9,6 +9,7 @@ import {
   updateAnnotation,
   type AnnotationLean,
 } from './annotations';
+import { AnnotationDtoSchema } from '@bike4mind/common';
 import type { PublishUser } from './checkScopePermission';
 
 const db = vi.hoisted(() => ({
@@ -114,6 +115,28 @@ describe('toAnnotationDto', () => {
     expect(Object.keys(dto)).not.toContain('deletedAt');
     expect(Object.keys(dto)).not.toContain('deletedBy');
     expect(Object.keys(dto)).not.toContain('authorId');
+  });
+
+  it('returns anchor.elementText when stored and an anchor without it for a legacy row', () => {
+    const base: AnnotationLean = {
+      _id: { toString: () => 'a2' },
+      publicId: 'pub1',
+      kind: 'comment',
+      authorId: 'u1',
+      authorDisplayName: 'Bob',
+      body: 'hi',
+      threadRootId: null,
+      createdAt: new Date('2026-06-16T12:00:00.000Z'),
+      resolvedAt: null,
+    };
+    const withText = toAnnotationDto({ ...base, anchor: { x: 0.1, y: 0.2, elementText: 'Pricing' } });
+    expect(withText.anchor).toEqual({ x: 0.1, y: 0.2, elementText: 'Pricing' });
+    expect(AnnotationDtoSchema.parse(withText).anchor?.elementText).toBe('Pricing');
+
+    const legacy = toAnnotationDto({ ...base, anchor: { x: 0.1, y: 0.2 } });
+    expect(legacy.anchor).toEqual({ x: 0.1, y: 0.2 });
+    expect(AnnotationDtoSchema.safeParse(legacy).success).toBe(true);
+    expect(toAnnotationDto(base).anchor).toBeUndefined();
   });
 });
 

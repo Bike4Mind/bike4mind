@@ -52,7 +52,7 @@ const query = (overrides: Partial<Parameters<typeof userApiKeyRepository.findLeg
   });
 
 describe('UserApiKeyRepository.findLegacyCandidatesPage', () => {
-  it('keeps only active, unexpired, recently used, pre-cutoff, non-confined, non-exchange keys', async () => {
+  it('keeps only active, unexpired, recently used, pre-cutoff, non-confined, non-exchange, non-MCP keys', async () => {
     await seed('match');
     await seed('created after cutoff', { createdAt: new Date('2027-02-01T00:00:00Z') });
     await seed('not used recently', { lastUsedAt: new Date('2026-10-01T00:00:00Z') });
@@ -61,6 +61,7 @@ describe('UserApiKeyRepository.findLegacyCandidatesPage', () => {
     await seed('expired', { expiresAt: new Date('2020-01-01T00:00:00Z') });
     await seed('confined', { scopes: [ApiKeyScope.EMBED_CHAT] });
     await seed('exchange', { metadata: { createdFrom: 'oauth-exchange' } });
+    await seed('mcp', { explicitScopeOnly: true, scopes: [ApiKeyScope.ME_READ] });
     await seed('deleted', { deletedAt: new Date() });
 
     const page = await query();

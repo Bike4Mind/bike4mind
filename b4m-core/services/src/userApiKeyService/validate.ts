@@ -65,6 +65,8 @@ export interface ValidationResult {
   createdAt?: Date;
   /** OAuth client that minted the key, present only for a federated exchange key. */
   oauthExchangeClientId?: string;
+  /** An MCP key: admitted only on routes naming a scope it holds (IUserApiKey.explicitScopeOnly). */
+  explicitScopeOnly?: boolean;
   /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
   payerStanding?: PayerStanding;
   /** An org-owned key's reach grants (IUserApiKey.orgOwned.grants); present iff the key is org-owned. */
@@ -142,6 +144,7 @@ function finalizeApiKeyValidation(
     createdAt: apiKey.createdAt,
     oauthExchangeClientId: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.oauthClientId : undefined,
     payerStanding: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.payerStanding : undefined,
+    explicitScopeOnly: apiKey.explicitScopeOnly === true ? true : undefined,
     orgOwnedGrants: apiKey.orgOwned ? (apiKey.orgOwned.grants ?? []) : undefined,
   };
 }

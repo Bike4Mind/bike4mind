@@ -63,7 +63,11 @@ async function* batches<Row>(rows: AsyncIterable<Row>) {
 }
 
 const sourceCut = (source?: string) =>
-  source === 'api' ? 'user' : source === 'cli' || source === 'desktop' ? 'firstParty' : 'unclassified';
+  source === 'api'
+    ? 'user'
+    : source === 'cli' || source === 'desktop' || source === 'mcp'
+      ? 'firstParty'
+      : 'unclassified';
 
 // Cache only within this invocation: exclusion changes take effect on the next hourly collection.
 function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {

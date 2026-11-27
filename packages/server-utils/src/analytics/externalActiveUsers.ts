@@ -8,9 +8,10 @@ import { internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/c
  * An active user-day is a distinct userId with at least one UsageEvent (status ok), Quest chat
  * message or AgentExecution on a UTC day. Public API activity (UsageEvent source 'api', API-key
  * AgentExecutions) is kept in a separate user-day map: it is reported as "API users" and never
- * counts toward DAU, activation or retention. Internal users (admins, staff domains) are split out
- * of the app map into their own daily series and never enter an external figure. Days are carried as
- * integer UTC epoch days so retention offsets are plain subtraction.
+ * counts toward DAU, activation or retention (MCP-host UsageEvents, source 'mcp', do count).
+ * Internal users (admins, staff domains) are split out of the app map into their own daily series
+ * and never enter an external figure. Days are carried as integer UTC epoch days so retention
+ * offsets are plain subtraction.
  */
 
 export const DEFAULT_DAYS = 90;
@@ -63,16 +64,16 @@ Usage: report:external-active-users [--days <n>] [--test-pattern <regex>] [--hel
 
 An active user-day is a distinct userId with a UsageEvent (status ok), a Quest chat message or an
 AgentExecution (any status: starting a run is the user's action, a failure is ours) on a UTC day.
-DAU is web app + CLI + desktop activity only. Public API activity is reported separately as "API users" (users
-with at least one API-sourced action that day, whether or not they are also in DAU) and never
+DAU is web app + CLI + desktop + MCP-host activity only. Public API activity is reported separately as
+"API users" (users with at least one API-sourced action that day, whether or not they are also in DAU) and never
 activates or retains a cohort user. API activity means a UsageEvent with source 'api' or an
 AgentExecution started with an API key (plus the Quest that run wrote). An unset UsageEvent source
 counts as the app.
 Excluded: admins, accounts flagged isSynthetic, emails ending in a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS domain, emails matching
 --test-pattern, and userIds with no User document.
 Internal users are the admins and staff-domain accounts above. They stay out of DAU, API users,
-cohorts and the per-source rows, and show in their own "Internal" column: users with a web app, CLI
-or desktop action that day (API-only activity is not counted, as for DAU). Test-pattern and
+cohorts and the per-source rows, and show in their own "Internal" column: users with a web app, CLI,
+desktop or MCP-host action that day (API-only activity is not counted, as for DAU). Test-pattern and
 no-User-doc accounts are in neither.
 
 Known gaps in the API split:
@@ -82,6 +83,8 @@ Known gaps in the API split:
   CLI early in a window that predates that deploy, and those users show up as API users.
 - Desktop usage recorded before the 'desktop' source deployed is stored as 'api', with the same
   undercount and the same effect on API users.
+- MCP usage recorded before the 'mcp' source deployed is stored as 'api', with the same undercount
+  and the same effect on API users.
 
 Cohort = external users whose User.createdAt falls inside the window, grouped by the UTC Sunday-start
 week of their signup day. Users who signed up before the window count toward DAU but are in no
@@ -375,25 +378,25 @@ export interface ExternalActivityReport {
   today: string;
   windowStart: string;
   days: number;
-  /** External users with app, CLI or desktop activity: the DAU population. */
+  /** External users with app, CLI, desktop or MCP-host activity: the DAU population. */
   externalUsers: number;
   /** External users with API activity in the window, whether or not they are also in DAU. */
   externalApiUsers: number;
-  /** Internal (admin or staff-domain) users with app, CLI or desktop activity in the window. */
+  /** Internal (admin or staff-domain) users with app, CLI, desktop or MCP-host activity in the window. */
   internalUsers: number;
   excluded: Record<ExclusionReason, number>;
   staffExclusionConfigured: boolean;
   dau: DauRow[];
   /** Daily external users with at least one API-sourced action; same span as `dau`. */
   apiUsers: DauRow[];
-  /** Daily internal users with app, CLI or desktop activity; same span as `dau`. */
+  /** Daily internal users with app, CLI, desktop or MCP-host activity; same span as `dau`. */
   internal: DauRow[];
   sources: SourceRow[];
   cohorts: CohortTable;
 }
 
 export function buildReport(input: {
-  /** App, CLI and desktop activity: drives DAU, activation and retention. */
+  /** App, CLI, desktop and MCP-host activity: drives DAU, activation and retention. */
   userDays: UserDayMap;
   /** Public API activity: drives the API users series only. */
   apiUserDays: UserDayMap;
@@ -445,9 +448,9 @@ export function formatReport(report: ExternalActivityReport): string {
   const { excluded } = report;
   const lines: string[] = [
     `External activity, ${report.windowStart} to ${report.today} UTC (${report.days} days)`,
-    `External users with app, CLI or desktop activity: ${report.externalUsers}`,
+    `External users with app, CLI, desktop or MCP-host activity: ${report.externalUsers}`,
     `External users with API activity (not in DAU): ${report.externalApiUsers}`,
-    `Internal users with app, CLI or desktop activity: ${report.internalUsers}`,
+    `Internal users with app, CLI, desktop or MCP-host activity: ${report.internalUsers}`,
     `Excluded users: ${excluded.admin} admin, ${excluded.staffDomain} staff domain, ` +
       `${excluded.testPattern} test pattern, ${excluded.synthetic} synthetic, ${excluded.noUser} no User doc`,
   ];
@@ -463,7 +466,8 @@ export function formatReport(report: ExternalActivityReport): string {
 
   lines.push(
     '',
-    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop. API and Internal users are counted separately.`
+    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop + MCP-host. ` +
+      'API and Internal users are counted separately.'
   );
   lines.push(pad(['Day', 'DAU', 'API users', 'Internal'], SERIES_WIDTHS));
   report.dau.forEach((row, i) => {

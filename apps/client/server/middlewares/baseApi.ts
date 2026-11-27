@@ -321,7 +321,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
     router.use(analyticsMiddleware());
 
-    // Per-user record of which clients (web, desktop, CLI, API) they use; at most one write a day.
+    // Per-user record of which clients (web, desktop, CLI, MCP host, API) they use; at most one write a day.
     router.use(clientUsageMiddleware());
 
     // An admin's `all` IP block refuses every write an authenticated caller makes from that network:

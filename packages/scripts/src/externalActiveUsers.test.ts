@@ -609,7 +609,7 @@ describe('formatReport', () => {
     expect(text).toMatch(/2026-10-13 {2}1 +1 +1 {2}\(partial day\)/);
     expect(text).toMatch(/2026-10-12 {2}1 +0 +0\n/);
     expect(text).toContain('External users with API activity (not in DAU): 1');
-    expect(text).toContain('Internal users with app, CLI or desktop activity: 1');
+    expect(text).toContain('Internal users with app, CLI, desktop or MCP-host activity: 1');
     expect(text).toMatch(/chat\s+2/);
     expect(text).toContain('Weekly signup cohorts');
     expect(text).toMatch(/Cohort\s+Signups\s+Activated\s+Act %\s+D1\s+D7\s+D30/);

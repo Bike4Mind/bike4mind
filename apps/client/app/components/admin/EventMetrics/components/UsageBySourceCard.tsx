@@ -17,7 +17,7 @@ import { CHART_MUTED, adminChartSeries, chartLegendProps, chartPieProps, chartTo
 
 // Stable colour-per-source so the chart's slice colours match the table rows
 // across renders (recharts colours-by-index would re-shuffle on data changes).
-const KNOWN_SOURCES = ['web', 'cli', 'desktop', 'agent', 'api', 'system'] as const;
+const KNOWN_SOURCES = ['web', 'cli', 'desktop', 'mcp', 'agent', 'api', 'system'] as const;
 const SOURCE_COLORS: Record<string, string> = Object.fromEntries(
   adminChartSeries(KNOWN_SOURCES.length).map((color, index) => [KNOWN_SOURCES[index], color])
 );
@@ -36,7 +36,7 @@ const sourceColor = (source: string) => SOURCE_COLORS[source] ?? FALLBACK_COLOR;
 
 /**
  * Admin widget: completion activity grouped by request surface
- * (web / cli / desktop / api / agent / system), as event counts and distinct users.
+ * (web / cli / desktop / mcp / api / agent / system), as event counts and distinct users.
  *
  * Sources `metadata.source` on CounterLog. Buckets without a source (legacy
  * events pre-instrumentation) are excluded server-side.

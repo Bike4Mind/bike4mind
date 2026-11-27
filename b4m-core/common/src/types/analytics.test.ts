@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   COMPLETION_SOURCES,
+  ACTIVE_SOURCES,
+  CLIENT_SURFACES,
   isApiKeyCompletionSource,
+  parseMcpClient,
   resolveApiCompletionSource,
   resolveClientSurface,
   resolveRequestClient,
@@ -93,8 +96,49 @@ describe('resolveApiCompletionSource', () => {
 });
 
 describe('isApiKeyCompletionSource', () => {
-  it('is true only for api, cli and desktop', () => {
-    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli', 'desktop']);
+  it('is true only for api, cli, desktop and mcp', () => {
+    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli', 'desktop', 'mcp']);
+  });
+
+  it('counts mcp as an active source and a client surface', () => {
+    expect(ACTIVE_SOURCES).toContain('mcp');
+    expect(CLIENT_SURFACES).toContain('mcp');
+  });
+});
+
+describe('MCP classification', () => {
+  const surface = (headers: Record<string, string>) => resolveClientSurface(headers, { delegatedCredential: true });
+
+  it('resolves the MCP user agent, in any case, to mcp with its version', () => {
+    for (const ua of ['b4m-mcp/claude-code/1.2.0', 'B4M-MCP/claude-code/1.2.0']) {
+      expect(resolveApiCompletionSource({ 'user-agent': ua })).toBe('mcp');
+      expect(surface({ 'user-agent': ua })).toEqual({ surface: 'mcp', version: '1.2.0' });
+    }
+    expect(parseMcpClient({ 'user-agent': 'b4m-mcp/cursor/1.2.0' })).toEqual({ client: 'cursor', version: '1.2.0' });
+  });
+
+  it('reads the user agent before x-b4m-client', () => {
+    const header = { 'x-b4m-client': 'b4m-mcp/x/1' };
+    expect(resolveApiCompletionSource({ 'user-agent': 'curl/8', ...header })).toBe('api');
+    expect(resolveApiCompletionSource(header)).toBe('mcp');
+  });
+
+  it('keeps the request as mcp but sanitizes a malformed client name', () => {
+    for (const name of ['x'.repeat(33), 'bad name', 'caf\u00e9', '']) {
+      const headers = { 'user-agent': `b4m-mcp/${name}/1` };
+      expect(parseMcpClient(headers)).toEqual({ client: 'unknown', version: '1' });
+      expect(resolveApiCompletionSource(headers)).toBe('mcp');
+    }
+  });
+
+  it('drops a version over 32 characters and tolerates a missing one', () => {
+    expect(parseMcpClient({ 'user-agent': `b4m-mcp/x/${'9'.repeat(33)}` })).toEqual({ client: 'x' });
+    expect(parseMcpClient({ 'user-agent': 'b4m-mcp/x' })).toEqual({ client: 'x' });
+  });
+
+  it('does not match the prefix elsewhere in the value', () => {
+    expect(resolveApiCompletionSource({ 'user-agent': 'wrapper b4m-mcp/x/1' })).toBe('api');
+    expect(parseMcpClient({ 'user-agent': 'curl/8' })).toBeUndefined();
   });
 });
 

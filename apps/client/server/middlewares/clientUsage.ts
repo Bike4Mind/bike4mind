@@ -54,7 +54,7 @@ export function needsClientUsageStamp(
 }
 
 /**
- * Records which client (web, desktop, CLI, API) the signed-in user is calling from, on
+ * Records which client (web, desktop, CLI, MCP host, API) the signed-in user is calling from, on
  * `user.clientUsage.<surface>`. Runs after `auth`, which loads req.user fresh from Mongo, so the
  * stored `lastSeenAt` doubles as the throttle: at most one write per user, surface and day.
  * The write is not awaited and its update operators are idempotent, so a race only repeats it.

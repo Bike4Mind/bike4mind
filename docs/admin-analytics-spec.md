@@ -114,7 +114,7 @@ Money
 ### 3.3 Definitions every section shares
 
 - **Counted user**: any user that is not `isSystem`, `isSynthetic` or `isAdmin` and not on the staff email domains. A `userId` with no `users` row (deleted, or not an ObjectId) still counts, so DAU equals a direct distinct count over `usageevents`. Suspended users are counted in history (they were active then) but excluded from "Top users". A footer note on the page says this once.
-- **Active user (day D)**: a counted user with at least one `usageevents` row (any feature, `status: 'ok'`) on UTC day D. Why `UsageEvent`: it is written for every billable AI call on every surface (web, CLI, desktop, API, agent), it is indexed on `createdAt`, and it has no TTL. CounterLog is a product-event stream with free-form `userId` and is used only for feature adoption. `lastActiveAt` is socket-driven and misses API users, so it is not used.
+- **Active user (day D)**: a counted user with at least one `usageevents` row (any feature, `status: 'ok'`) on UTC day D. Why `UsageEvent`: it is written for every billable AI call on every surface (web, CLI, desktop, MCP host, API, agent), it is indexed on `createdAt`, and it has no TTL. CounterLog is a product-event stream with free-form `userId` and is used only for feature adoption. `lastActiveAt` is socket-driven and misses API users, so it is not used.
 - **DAU / WAU / MAU (day D)**: distinct active users on D / in the 7 UTC days ending D / in the 28 UTC days ending D. 28 rather than 30 so MAU windows hold the same weekdays.
 - **Stickiness**: average DAU over the range / MAU at the range end, as a percent.
 - **Legit signup / suspected signup**: `isSuspectedSignup(classifySignups(...))` from `packages/server-utils/src/users/signupClassifier.ts` and `packages/server-utils/src/app/utils/signupSignals.ts`, including the Gmail-aware signals from #6037. Users not yet classified are "unclassified", never folded into legit.
@@ -164,7 +164,7 @@ Each tile: label, value, comparison line ("+12% vs prev 28d", signed, tabular), 
 ### 4.3 Active users (J1, J2)
 
 - Chart: line, DAU / WAU / MAU over the range. Primary series `accent` (MAU), WAU and DAU in the guide's comparison style (`inkMuted`, dashed for the previous period when compare is on). Takeaway caption under the title, e.g. "MAU up 12% vs previous 28 days".
-- Secondary toggle in the card action: "By surface" stacks DAU by `UsageEvent.source` (web, cli, desktop, api, agent, plus "unclassified" for older rows with no `source`; `system` excluded).
+- Secondary toggle in the card action: "By surface" stacks DAU by `UsageEvent.source` (web, cli, desktop, mcp, api, agent, plus "unclassified" for older rows with no `source`; `system` excluded).
 - Drill-down: clicking a day opens the users list for users active that day (needs the new `activeOn` filter, issue 7).
 
 ### 4.4 Signups: real vs suspected (J3)

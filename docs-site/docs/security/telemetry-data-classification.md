@@ -524,7 +524,7 @@ or unbound key, and 503 while ingest is switched off or hops are not configured.
 
 ## API-key usage log
 
-Every request to a `baseApi` route that authenticates with an API key writes one `ApiKeyUsageLog` row when the response finishes. Routes served through the contract router (`/api/ai/v1`) and embed-key routes (`/api/embed`) do not write rows. The `endpoint` field stores the Next.js route template (for example `/api/agents/[id]`), never the raw URL: path ids and the query string are not recorded. A query-string key never shapes the template. The `UserApiKeyEvents.USED` analytics event carries the same templated endpoint. Rows written before templating was introduced may still hold a raw URL until they expire.
+Every request to a `baseApi` route that authenticates with an API key writes one `ApiKeyUsageLog` row when the response finishes. Routes served through the contract router (`/api/ai/v1`) and embed-key routes (`/api/embed`) do not write rows. The `endpoint` field stores the Next.js route template (for example `/api/agents/[id]`), never the raw URL: path ids and the query string are not recorded. A query-string key never shapes the template. The `UserApiKeyEvents.USED` analytics event carries the same templated endpoint. Rows written before templating was introduced may still hold a raw URL until they expire. A request from an MCP host also stores the host name from its `b4m-mcp/<client>/<version>` `User-Agent` in `mcpClient`.
 
 | Data           | Storage                           | Lifetime            | Purpose                                          |
 | -------------- | --------------------------------- | ------------------- | ------------------------------------------------ |
@@ -533,17 +533,18 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
+| MCP host       | `mcpClient`, at most 32 chars     | 90 days (TTL index) | Usage stats; set only for MCP-host requests      |
 
 Streaming HTTP API-key completion requests can additionally record a server-observed start time, correlation id, requested model and explicit completion outcome in `ApiKeyUsageLog.completionObservation`. The start is written after authentication and before execution, then the same server-owned log row is updated on response completion or disconnect. A missing terminal response keeps an unknown outcome; status `0` means no HTTP response was recorded. Daily-cap rejections are separate from successful completions, and HTTP transport status is separate from in-band stream outcome. No prompts, messages, response bodies or key secrets are added. These fields use the existing 90-day API-log TTL, including retained security logs after account deletion; no source retention is extended.
 
 ## Client usage
 
-Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
+Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, an MCP host, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, and an MCP host names itself in a `b4m-mcp/<client>/<version>` `User-Agent`, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
 
-| Data           | Storage                                                         | Lifetime                                    | Purpose                                         |
-| -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
-| Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
-| Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+| Data           | Storage                                                                 | Lifetime                                   | Purpose                                         |
+| -------------- | ----------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Client seen    | `clientUsage.<web, desktop, cli, mcp or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
+| Client version | `clientUsage.<desktop, cli or mcp>.version`, at most 32 characters      | Account lifetime; deleted with the account | Usage statistics                                |
 
 ## Related advisory accounts
 

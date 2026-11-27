@@ -34,7 +34,7 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
-import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
+import { ANNOTATION_ANCHOR_TEXT_MAX, stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
@@ -2166,7 +2166,7 @@ ${footer}
  * only exchanges UI messages with the parent wrapper widget:
  *   parent -> iframe : { b4m:'pinmode', on } | { b4m:'pins', pins:[{id,x,y,pending}] } | { b4m:'scrollto', y }
  *   (GEOMETRY ONLY - never comment text/author: the iframe runs untrusted author JS)
- *   iframe -> parent : { b4m:'ready' } | { b4m:'pin-dropped', x, y } | { b4m:'pin-activate', id }
+ *   iframe -> parent : { b4m:'ready' } | { b4m:'pin-dropped', x, y, text? } | { b4m:'pin-activate', id }
  * Coords are normalized 0..1 against the bundle document's scroll size. Both sides validate
  * the message source AND origin (parent <-> iframe). In Approach B the iframe is a TRUE
  * cross-origin frame, so the bridge pins its parent's origin from `document.referrer` (the
@@ -2186,7 +2186,7 @@ const PIN_BRIDGE_JS = String.raw`(function(){
   function post(m){try{parent.postMessage(m,PO);}catch(e){}}
   function setMode(on){pinMode=on;var c=on?'crosshair':'';document.documentElement.style.cursor=c;if(document.body){document.body.style.cursor=c;}}
   function draw(){var l=L();l.textContent='';pins.forEach(function(p){if(typeof p.x!=='number'||typeof p.y!=='number'){return;}var m=document.createElement('div');m.style.cssText='position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;pointer-events:auto;background:'+(p.pending?'#e0a800':'#3949d4');m.style.left=(p.x*W())+'px';m.style.top=(p.y*H())+'px';m.addEventListener('click',function(e){e.stopPropagation();post({b4m:'pin-activate',id:p.id});});l.appendChild(m);});}
-  document.addEventListener('click',function(e){if(!pinMode){return;}e.preventDefault();e.stopPropagation();var x=e.pageX/W(),y=e.pageY/H();setMode(false);post({b4m:'pin-dropped',x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))});},true);
+  document.addEventListener('click',function(e){if(!pinMode){return;}e.preventDefault();e.stopPropagation();var x=e.pageX/W(),y=e.pageY/H();setMode(false);var m={b4m:'pin-dropped',x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))};try{var el=e.target,t=(el&&el.nodeType===1&&el!==document.body&&el!==document.documentElement?(el.innerText||el.textContent||''):'').replace(/\s+/g,' ').trim().slice(0,${ANNOTATION_ANCHOR_TEXT_MAX});if(t){m.text=t;}}catch(err){}post(m);},true);
   window.addEventListener('message',function(e){if(e.source!==window.parent){return;}if(PO!=='*'&&e.origin!==PO){return;}var d=e.data||{};if(d.b4m==='pinmode'){setMode(!!d.on);}else if(d.b4m==='pins'){pins=Array.isArray(d.pins)?d.pins:[];draw();}else if(d.b4m==='scrollto'&&typeof d.y==='number'){window.scrollTo({top:d.y*H()-window.innerHeight/2,behavior:'smooth'});}});
   window.addEventListener('resize',draw);
   post({b4m:'ready'});

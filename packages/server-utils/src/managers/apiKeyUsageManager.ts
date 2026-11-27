@@ -17,6 +17,8 @@ export interface LogApiKeyUsageParams {
   responseTime: number;
   statusCode: number;
   source: ApiKeyCompletionSource;
+  /** Sanitized MCP host name; set only for `mcp` source. */
+  mcpClient?: string;
   ownerType: ApiKeyBillingOwnerType;
   /** Set for an exchange key only. */
   oauthClientId?: string;
@@ -26,7 +28,8 @@ export interface LogApiKeyUsageParams {
   logger?: Logger;
 }
 
-const exchangeAttributionFields = ({ oauthClientId, payerStanding }: LogApiKeyUsageParams) => ({
+const optionalAttributionFields = ({ oauthClientId, payerStanding, mcpClient }: LogApiKeyUsageParams) => ({
+  ...(mcpClient ? { mcpClient } : {}),
   ...(oauthClientId ? { oauthClientId } : {}),
   ...(oauthClientId && payerStanding ? { payerStanding } : {}),
 });
@@ -39,7 +42,7 @@ export class ApiKeyUsageManager {
   /** Resolves to the start row id, `null` when the account is gone, or `undefined` when the write failed. */
   static async beginCompletionUsage(params: LogApiKeyUsageParams): Promise<string | null | undefined> {
     const { keyId, userId, ipAddress, endpoint, method, source, ownerType, completionObservation, logger } = params;
-    const attribution = exchangeAttributionFields(params);
+    const attribution = optionalAttributionFields(params);
     try {
       return await apiKeyUsageLogRepository.beginCompletionObservation({
         keyId,
@@ -108,7 +111,7 @@ export class ApiKeyUsageManager {
         statusCode,
         source,
         ownerType,
-        ...exchangeAttributionFields(params),
+        ...optionalAttributionFields(params),
         ...(completionObservation ? { completionObservation } : {}),
       });
 

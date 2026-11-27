@@ -36,11 +36,12 @@ const makeRes = (overrides: Partial<FakeRes> = {}): FakeRes =>
 const register = (
   res: FakeRes,
   completion?: Parameters<typeof logApiKeyUsageOnResponse>[0]['completion'],
-  apiKey: ApiKeyInfo = { keyId: 'k1', userId: 'u1' } as ApiKeyInfo
+  apiKey: ApiKeyInfo = { keyId: 'k1', userId: 'u1' } as ApiKeyInfo,
+  headers: Record<string, string> = {}
 ) => {
   const track = vi.fn<(p: Promise<void>) => void>();
   const ready = logApiKeyUsageOnResponse({
-    req: { method: 'POST' } as Request,
+    req: { method: 'POST', headers } as Request,
     res: res as unknown as Response,
     apiKey,
     endpoint: '/api/ai/v1/completions',
@@ -231,6 +232,29 @@ describe('logApiKeyUsageOnResponse', () => {
     res.emit('close');
     await Promise.resolve();
     expect(mockLogUsage).toHaveBeenCalledTimes(1);
+  });
+
+  describe('mcp client attribution', () => {
+    const completion = { requestId: 'r1', requestedModel: 'model-alpha', outcome: () => 'completed' as const };
+
+    it('stamps the sanitized client on the start row and the terminal row for an MCP user agent', async () => {
+      const res = makeRes({ headersSent: true });
+      const { ready, track } = register(res, completion, undefined, { 'user-agent': 'b4m-mcp/cursor/1.0.0' });
+      await ready;
+      res.emit('finish');
+      await track.mock.calls[1][0];
+      const expected = expect.objectContaining({ mcpClient: 'cursor' });
+      expect(mockBeginUsage).toHaveBeenCalledWith(expected);
+      expect(mockLogUsage).toHaveBeenCalledWith(expected);
+    });
+
+    it('stamps no client for a non-MCP user agent', async () => {
+      const res = makeRes({ headersSent: true });
+      register(res, undefined, undefined, { 'user-agent': 'curl/8.0' });
+      res.emit('finish');
+      await Promise.resolve();
+      expect(mockLogUsage.mock.calls[0][0].mcpClient).toBeUndefined();
+    });
   });
 
   describe('exchange key attribution', () => {

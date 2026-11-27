@@ -9,7 +9,14 @@ import {
   MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
   MAX_ACTIVE_KEYS_PER_USER,
 } from '../create';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  BadRequestError,
+  MCP_FORBIDDEN_API_KEY_SCOPES,
+  CreditHolderType,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -1244,5 +1251,93 @@ describe('createUserApiKey - org-owned keys', () => {
         db: { userApiKeys: makeRepo() as unknown as IUserApiKeyRepository },
       })
     ).rejects.toThrow(BadRequestError);
+  });
+});
+
+describe('createUserApiKey - MCP key', () => {
+  const mcpParams = {
+    name: 'mcp',
+    scopes: [ApiKeyScope.ME_READ, ApiKeyScope.READ_NOTEBOOKS],
+    metadata: { createdFrom: 'dashboard' as const },
+    explicitScopeOnly: true as const,
+  };
+  const adapters = (repo: ReturnType<typeof makeRepo>, extra: Record<string, unknown> = {}) =>
+    ({ trust: TRUSTED, db: { userApiKeys: repo }, systemUserId: 'sys-1', ...extra }) as unknown as Parameters<
+      typeof createUserApiKey
+    >[2];
+  const mint = (params: Record<string, unknown>, extra?: Record<string, unknown>) => {
+    const repo = makeRepo();
+    return { repo, result: createUserApiKey('user-1', { ...mcpParams, ...params } as never, adapters(repo, extra)) };
+  };
+
+  it('persists the flag, a private ceiling and a 180-day expiry by default', async () => {
+    const { repo, result } = mint({});
+    await result;
+    const doc = repo.createIfUnderCap.mock.calls[0][0];
+    expect(doc.explicitScopeOnly).toBe(true);
+    expect(doc.exposureCeiling).toBe('private');
+    const days = (doc.expiresAt.getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(179.9);
+    expect(days).toBeLessThanOrEqual(180);
+  });
+
+  it('keeps a ceiling and an expiry the minter set', async () => {
+    const expiresAt = new Date(Date.now() + 30 * 86_400_000);
+    const { repo, result } = mint({ exposureCeiling: 'organization', expiresAt });
+    await result;
+    const doc = repo.createIfUnderCap.mock.calls[0][0];
+    expect(doc.exposureCeiling).toBe('organization');
+    expect(doc.expiresAt).toBe(expiresAt);
+  });
+
+  it('lets the functions scopes sit beside the ordinary ones', async () => {
+    const { result } = mint({
+      scopes: [ApiKeyScope.ME_READ, ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR],
+    });
+    await expect(result).resolves.toBeDefined();
+  });
+
+  it.each([...MCP_FORBIDDEN_API_KEY_SCOPES, ApiKeyScope.AI_GENERATE])('refuses %s, naming it', async scope => {
+    const { result } = mint({ scopes: [ApiKeyScope.ME_READ, scope] });
+    await expect(result).rejects.toThrow(scope);
+  });
+
+  it('refuses a key with no scopes, before the MCP rules run', async () => {
+    await expect(mint({ scopes: [] }).result).rejects.toThrow('scopes: Too small: expected array to have >=1 items');
+  });
+
+  it('refuses a ceiling without the flag', async () => {
+    const { result } = mint({ explicitScopeOnly: undefined, exposureCeiling: 'public' });
+    await expect(result).rejects.toThrow('exposureCeiling requires an MCP key');
+  });
+
+  it('refuses an MCP key from an API-key caller', async () => {
+    const { result } = mint({}, { callerScopes: [ApiKeyScope.ME_READ, ApiKeyScope.READ_NOTEBOOKS] });
+    await expect(result).rejects.toThrow('signed-in session');
+  });
+
+  it.each([
+    ['org-owned', { orgOwned: { createdByUserId: 'u' } }],
+    ['product-bound', { productId: 'p' }],
+    ['agent-bound', { agentId: 'a' }],
+  ])('refuses an %s MCP key', async (_label, extra) => {
+    await expect(mint(extra).result).rejects.toThrow('cannot be org-owned');
+  });
+
+  it('refuses an oauth-exchange MCP key', async () => {
+    const { result } = mint({ metadata: { createdFrom: 'oauth-exchange' } });
+    await expect(result).rejects.toThrow('oauth-exchange keys are minted only');
+  });
+
+  it('leaves an ordinary key without the fields', async () => {
+    const repo = makeRepo();
+    await createUserApiKey(
+      'user-1',
+      { name: 'k', scopes: [ApiKeyScope.ME_READ], metadata: { createdFrom: 'dashboard' } },
+      adapters(repo)
+    );
+    const doc = repo.createIfUnderCap.mock.calls[0][0];
+    expect(doc).not.toHaveProperty('explicitScopeOnly');
+    expect(doc.expiresAt).toBeUndefined();
   });
 });

@@ -6,6 +6,7 @@ type SourceHelp = {
 const SOURCE_HELP: Record<string, SourceHelp> = {
   web: { label: 'Web app', description: 'Activity attributed to the browser app.' },
   desktop: { label: 'Desktop app', description: 'Activity attributed to the Bike4Mind desktop app.' },
+  mcp: { label: 'MCP', description: 'Calls made through the Bike4Mind MCP server.' },
   cli: {
     label: 'Command line (CLI)',
     description: 'Activity from the Bike4Mind command-line app, used in a terminal.',

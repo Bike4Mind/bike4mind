@@ -12,6 +12,7 @@
 // assertions below are load-bearing too: an anonymous reader of a public artifact must issue
 // ZERO requests to /api/auth/refreshToken, which is rate-limited per IP.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { ANNOTATION_ANCHOR_TEXT_MAX } from '@bike4mind/common';
 import handler from '../widget';
 import { ACCESS_TOKEN_STORAGE_KEY } from '@client/app/hooks/useAccessToken';
 
@@ -735,5 +736,67 @@ describe('publish widget - Published-gear view report', () => {
 
     await expect(runWidget()).resolves.toBeUndefined();
     expect(viewCalls()).toHaveLength(0);
+  });
+});
+
+describe('publish widget - pin anchor text', () => {
+  beforeEach(() => {
+    calls = [];
+    addedDocListeners = [];
+    document.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) => {
+      addedDocListeners.push([type, fn]);
+      nativeAddEventListener(type, fn, opts);
+    }) as typeof document.addEventListener;
+    vi.useFakeTimers();
+    mountWidget();
+  });
+
+  afterEach(() => {
+    addedDocListeners.forEach(([type, fn]) => document.removeEventListener(type, fn));
+    document.addEventListener = nativeAddEventListener as typeof document.addEventListener;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Drop a pin carrying `extra` on the pin-dropped message, post a comment, return the POSTed anchor. */
+  async function postedAnchor(extra: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
+    stubFetch({ signedIn: true });
+    await runWidget();
+    clickLauncher();
+    await vi.advanceTimersByTimeAsync(0);
+
+    (document.getElementById('b4m-pintog') as HTMLButtonElement).click();
+    const frame = document.querySelector('iframe')!.contentWindow as Window;
+    window.dispatchEvent(
+      new MessageEvent('message', { data: { b4m: 'pin-dropped', x: 0.5, y: 0.25, ...extra }, source: frame })
+    );
+    (document.getElementById('b4m-ta') as HTMLTextAreaElement).value = 'note';
+    (document.getElementById('b4m-send') as HTMLButtonElement).click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const post = calls.find(c => c.init?.method === 'POST' && !c.url.includes(REFRESH));
+    return (JSON.parse(post!.init!.body as string) as { anchor?: Record<string, unknown> }).anchor;
+  }
+
+  it('forwards trimmed, whitespace-collapsed text', async () => {
+    expect(await postedAnchor({ text: '  Hello\n world ' })).toEqual({ x: 0.5, y: 0.25, elementText: 'Hello world' });
+  });
+
+  it('truncates long text to the anchor text cap', async () => {
+    const anchor = await postedAnchor({ text: 'a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX + 300) });
+    expect(anchor?.elementText).toBe('a'.repeat(ANNOTATION_ANCHOR_TEXT_MAX));
+  });
+
+  it('drops a non-string value but keeps the pin', async () => {
+    expect(await postedAnchor({ text: {} })).toEqual({ x: 0.5, y: 0.25 });
+  });
+
+  it('keeps the pin when the message has no text (older cached bridge)', async () => {
+    expect(await postedAnchor({})).toEqual({ x: 0.5, y: 0.25 });
+  });
+
+  it('drops whitespace-only text', async () => {
+    expect(await postedAnchor({ text: ' \n\t ' })).toEqual({ x: 0.5, y: 0.25 });
   });
 });

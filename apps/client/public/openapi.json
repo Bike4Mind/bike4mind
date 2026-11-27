@@ -20072,6 +20072,7 @@
                     "web",
                     "cli",
                     "desktop",
+                    "mcp",
                     "api",
                     "agent",
                     "system"

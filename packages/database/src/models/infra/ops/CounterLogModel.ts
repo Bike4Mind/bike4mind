@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import {
   AI_USAGE_TRANSACTION_TYPES,
+  type CompletionSource,
   AiEvents,
   ICounterLog,
   ICounterLogDocument,
@@ -121,12 +122,20 @@ export type YoungAccountSpender = {
 
 /**
  * In-window AI credit spend split by channel (CreditTransaction.source): `api` is third-party API
- * use, `chat` the interactive surfaces (web, cli, desktop). Agent, system and unclassified rows are
- * in neither, so a post-turn system charge never reads as chat.
+ * use (`mcp` included: MCP hosts call the public API, as `api` did before), `chat` the interactive surfaces (web, cli,
+ * desktop). Agent, system and unclassified rows are in neither, so a post-turn system charge never reads as chat.
  */
 export type SpendChannels = { apiCredits: number; chatCredits: number };
 
+const API_SOURCES = ['api', 'mcp'] as const;
 const CHAT_SOURCES = ['web', 'cli', 'desktop'] as const;
+// Compile error when a new CompletionSource is in neither channel and not listed as excluded here.
+type UnchanneledSource = Exclude<
+  CompletionSource,
+  (typeof API_SOURCES)[number] | (typeof CHAT_SOURCES)[number] | 'agent' | 'system'
+>;
+const _allSourcesChanneled: [UnchanneledSource] extends [never] ? true : never = true;
+void _allSourcesChanneled;
 
 export type YoungAccountSpendSummary = {
   totalCredits: number;
@@ -238,7 +247,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         {
           $group: {
             _id: '$ownerId',
-            apiCredits: { $sum: { $cond: [{ $eq: ['$source', 'api'] }, { $abs: '$credits' }, 0] } },
+            apiCredits: { $sum: { $cond: [{ $in: ['$source', [...API_SOURCES]] }, { $abs: '$credits' }, 0] } },
             chatCredits: { $sum: { $cond: [{ $in: ['$source', [...CHAT_SOURCES]] }, { $abs: '$credits' }, 0] } },
           },
         },
@@ -987,7 +996,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         },
         { $limit: 3 },
       ],
-      // Usage breakdown by request surface (web/cli/api/agent/system) for the
+      // Usage breakdown by request surface (web/cli/desktop/mcp/api/agent/system) for the
       // current period. Reads `metadata.source` set by completion-emitting
       // events (Model Started, Completion API Completed/Failed). Events
       // without `metadata.source` (legacy or non-AI counters) are excluded so

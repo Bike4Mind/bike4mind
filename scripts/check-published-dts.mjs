@@ -200,11 +200,42 @@ function assertInstalledFromTarballs(consumerDir, packages) {
   if (problems.length > 0) throw new Error(problems.join('\n'));
 }
 
+// Third-party declarations (@modelcontextprotocol/sdk) name the DOM-only HeadersInit; a one-type shim keeps the
+// consumer DOM-free (the self-test still proves it). The shim is global, so it would also hide a HeadersInit
+// dangling in our own dist; assertNoShimmedNames is what keeps our dists free of it.
+const SHIMS_FILE = 'shims.d.ts';
+
+export function usesShimmedName(source) {
+  return /\bHeadersInit\b/.test(source);
+}
+
+function assertNoShimmedNames(packages) {
+  const problems = [];
+  for (const pkg of packages) {
+    const distDir = path.join(pkg.dir, 'dist');
+    for (const file of fs
+      .readdirSync(distDir, { recursive: true })
+      .map(String)
+      .filter(f => DECLARATION_FILE.test(f))) {
+      if (usesShimmedName(fs.readFileSync(path.join(distDir, file), 'utf8'))) problems.push(`${pkg.name}/dist/${file}`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `these declarations name HeadersInit, which only the consumer's shim defines; use a local type instead:\n${problems.join('\n')}`
+    );
+  }
+}
+
 function writeTsconfigs(consumerDir) {
+  fs.writeFileSync(
+    path.join(consumerDir, SHIMS_FILE),
+    'type HeadersInit = Record<string, string> | [string, string][];\n'
+  );
   for (const { name, options, entries } of CONFIGS) {
     const compilerOptions = { ...COMPILER_OPTIONS, ...options };
     const selfTestEntries = entries.map(entry => entry.replace(/^(?:esm|cjs)\./, 'selftest.'));
-    writeJson(path.join(consumerDir, `tsconfig.${name}.json`), { compilerOptions, include: entries });
+    writeJson(path.join(consumerDir, `tsconfig.${name}.json`), { compilerOptions, include: [...entries, SHIMS_FILE] });
     writeJson(path.join(consumerDir, `tsconfig.selftest-${name}.json`), { compilerOptions, include: selfTestEntries });
   }
 }
@@ -342,6 +373,7 @@ export function checkExitCode(results) {
 function check(packages, pins, tmp) {
   const consumerDir = path.join(tmp, 'consumer');
   assertStandalone(packages);
+  assertNoShimmedNames(packages);
   console.log(`packing ${packages.length} packages`);
   const tarballs = packAll(packages, path.join(tmp, 'tarballs'));
   console.log(`installing into a bare consumer with ${pins.join(' and ')}`);

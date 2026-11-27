@@ -43,6 +43,8 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   identifiedClientIds: true,
   preauthorizedLakeIds: true,
   orgOwned: true,
+  explicitScopeOnly: true,
+  exposureCeiling: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,

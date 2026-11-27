@@ -245,6 +245,40 @@ describe('apiKeyAuth scope gate', () => {
     expect((await run([ApiKeyScope.OVERWATCH_INGEST_WRITE], makeReq())).passed).toBe(true);
   });
 
+  describe('an MCP key (explicitScopeOnly)', () => {
+    beforeEach(() => {
+      validateUserApiKeyMock.mockResolvedValue({
+        isValid: true,
+        keyId: 'key-1',
+        userId: 'user-1',
+        scopes: [ApiKeyScope.ME_READ, ApiKeyScope.READ_NOTEBOOKS],
+        explicitScopeOnly: true,
+        rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      });
+    });
+
+    it('403s on a scope-less route before the owner is loaded', async () => {
+      const { passed, error } = await run(undefined, makeReq());
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
+      expect(findByIdMock).not.toHaveBeenCalled();
+    });
+
+    it('403s on a route naming a scope it does not hold, staged or not', async () => {
+      process.env[SCOPE_STAGING_ENV_VAR] = ApiKeyScope.READ_FILES;
+      expect((await run([ApiKeyScope.READ_FILES], makeReq())).passed).toBe(false);
+    });
+
+    it('admits it on a route naming a scope it holds, and marks req.apiKeyInfo', async () => {
+      const req = makeReq();
+      const { passed } = await run([ApiKeyScope.ME_READ], req);
+      expect(passed).toBe(true);
+      expect((req as unknown as { apiKeyInfo: { explicitScopeOnly?: boolean } }).apiKeyInfo.explicitScopeOnly).toBe(
+        true
+      );
+    });
+  });
+
   it('403s on a missing alsoRequiredScopes entry even though the OR list matches', async () => {
     const req = makeReq();
     const { passed, error } = await run([ApiKeyScope.AI_CHAT], req, [ApiKeyScope.OPTIHASHI_COMPUTE]);
@@ -376,6 +410,16 @@ describe('apiKeyAuth usage log stamping', () => {
     expect((await loggedUsage({ 'user-agent': 'b4m-cli/1.2.3' })).source).toBe('cli');
     vi.clearAllMocks();
     expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).source).toBe('api');
+  });
+
+  it('stamps source mcp and the sanitized client name only for an MCP user agent', async () => {
+    const mcp = await loggedUsage({ 'user-agent': 'b4m-mcp/claude-code/1.0.0' });
+    expect(mcp.source).toBe('mcp');
+    expect(mcp.mcpClient).toBe('claude-code');
+    vi.clearAllMocks();
+    expect((await loggedUsage({ 'user-agent': 'b4m-mcp/bad name/1' })).mcpClient).toBe('unknown');
+    vi.clearAllMocks();
+    expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).mcpClient).toBeUndefined();
   });
 
   it('logs the route template, never the raw URL or its query string', async () => {
