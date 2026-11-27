@@ -153,6 +153,20 @@ final class ArtifactWebDocumentTests: XCTestCase {
     XCTAssertTrue(html.contains("ok"))
   }
 
+  func testHeaderElementDoesNotReceiveThePolicy() {
+    let fragment = ArtifactWebDocument.html(from: "<header><h1>Hi</h1></header><script>x()</script>")
+    let headless = ArtifactWebDocument.html(
+      from: "<!doctype html><html lang=en><body><header>x</header><script>x()</script></body></html>")
+    for html in [fragment, headless] {
+      let policy = html.range(of: "Content-Security-Policy")
+      let header = html.range(of: "<header>")
+      XCTAssertNotNil(policy)
+      XCTAssertNotNil(header)
+      XCTAssertLessThan(policy!.lowerBound, header!.lowerBound)
+      XCTAssertTrue(html.contains("<head>"))
+    }
+  }
+
   func testUnclosedIframeDoesNotSwallowThePolicy() {
     let html = ArtifactWebDocument.html(from: "<body><iframe src=x>trailing")
     XCTAssertTrue(html.contains("Content-Security-Policy"))

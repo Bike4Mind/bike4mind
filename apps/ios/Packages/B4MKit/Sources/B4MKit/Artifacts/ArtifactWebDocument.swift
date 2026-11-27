@@ -3,10 +3,11 @@ import Foundation
 /// Builds the HTML the artifact web view loads. The web app isolates artifacts in a sandboxed iframe under a
 /// per-route CSP; neither carries over to a bare `WKWebView`, so this layer does the equivalent: it strips
 /// the tags that escape the document, and pins a Content-Security-Policy that lets the artifact draw and run
-/// its own scripts but never talk to a server, submit a form or embed another page.
+/// its own scripts but blocks fetch/XHR/WebSocket, form posts and embedded frames.
 public enum ArtifactWebDocument {
   /// Scripts and styles may be inline or from https hosts (artifacts commonly pull a charting or CSS library from a
-  /// CDN); everything that could send data out is closed.
+  /// CDN). Not an exfiltration guarantee: the https allowances on script, image, style, font and media sources
+  /// still let a page issue outbound GETs (e.g. an image URL carrying data).
   static let contentSecurityPolicy = [
     "default-src 'none'",
     "script-src 'unsafe-inline' 'unsafe-eval' https:",
@@ -33,10 +34,11 @@ public enum ArtifactWebDocument {
   public static func html(from source: String) -> String {
     let cleaned = sanitize(source)
     let head = cspTag + viewportTag
-    if let range = cleaned.range(of: "<head[^>]*>", options: [.regularExpression, .caseInsensitive]) {
+    // `\b` keeps `<head` from matching `<header` (and `<html` from matching a longer tag name).
+    if let range = cleaned.range(of: "<head\\b[^>]*>", options: [.regularExpression, .caseInsensitive]) {
       return cleaned.replacingCharacters(in: range, with: cleaned[range] + head)
     }
-    if let range = cleaned.range(of: "<html[^>]*>", options: [.regularExpression, .caseInsensitive]) {
+    if let range = cleaned.range(of: "<html\\b[^>]*>", options: [.regularExpression, .caseInsensitive]) {
       return cleaned.replacingCharacters(in: range, with: cleaned[range] + "<head>" + head + "</head>")
     }
     return "<!doctype html><html><head>\(head)</head><body>\(cleaned)</body></html>"
