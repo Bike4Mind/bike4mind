@@ -30,10 +30,6 @@ import com.bike4mind.client.models.GetClientConfigResponse200ModelsAvailableInne
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
-import kotlinx.serialization.KSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
 
 /**
  * @param id Pass as `model` on the generation endpoints.
@@ -165,10 +161,10 @@ data class GetClientConfigResponse200CatalogModelsInner (
     val thinkingStyle: kotlin.String? = null,
 
     @SerialName(value = "thinking_always_on")
-    val thinkingAlwaysOn: GetClientConfigResponse200CatalogModelsInner.ThinkingAlwaysOn? = null,
+    val thinkingAlwaysOn: kotlin.Boolean? = null,
 
     @SerialName(value = "openai_reasoning_effort")
-    val openaiReasoningEffort: GetClientConfigResponse200CatalogModelsInner.OpenaiReasoningEffort? = null,
+    val openaiReasoningEffort: kotlin.Boolean? = null,
 
     @SerialName(value = "effort_incompatible_with_tools")
     val effortIncompatibleWithTools: kotlin.Boolean? = null,
@@ -199,48 +195,6 @@ data class GetClientConfigResponse200CatalogModelsInner (
 
 ) {
 
-    /**
-     * Values: TRUE
-     */
-    @Serializable(with = ThinkingAlwaysOnSerializer::class)
-    enum class ThinkingAlwaysOn(val value: kotlin.Boolean) {
-        @SerialName(value = "true") TRUE(true);
-    }
-
-    internal object ThinkingAlwaysOnSerializer : KSerializer<ThinkingAlwaysOn> {
-        override val descriptor = kotlin.Boolean.serializer().descriptor
-
-        override fun deserialize(decoder: Decoder): ThinkingAlwaysOn {
-            val value = decoder.decodeSerializableValue(kotlin.Boolean.serializer())
-            return ThinkingAlwaysOn.entries.firstOrNull { it.value == value }
-                ?: throw IllegalArgumentException("Unknown enum value: $value")
-        }
-
-        override fun serialize(encoder: Encoder, value: ThinkingAlwaysOn) {
-            encoder.encodeSerializableValue(kotlin.Boolean.serializer(), value.value)
-        }
-    }
-    /**
-     * Values: TRUE
-     */
-    @Serializable(with = OpenaiReasoningEffortSerializer::class)
-    enum class OpenaiReasoningEffort(val value: kotlin.Boolean) {
-        @SerialName(value = "true") TRUE(true);
-    }
-
-    internal object OpenaiReasoningEffortSerializer : KSerializer<OpenaiReasoningEffort> {
-        override val descriptor = kotlin.Boolean.serializer().descriptor
-
-        override fun deserialize(decoder: Decoder): OpenaiReasoningEffort {
-            val value = decoder.decodeSerializableValue(kotlin.Boolean.serializer())
-            return OpenaiReasoningEffort.entries.firstOrNull { it.value == value }
-                ?: throw IllegalArgumentException("Unknown enum value: $value")
-        }
-
-        override fun serialize(encoder: Encoder, value: OpenaiReasoningEffort) {
-            encoder.encodeSerializableValue(kotlin.Boolean.serializer(), value.value)
-        }
-    }
 
 }
 
