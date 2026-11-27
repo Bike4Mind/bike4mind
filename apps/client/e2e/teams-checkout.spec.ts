@@ -4,7 +4,7 @@ import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
 import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
 import { payButton } from './helpers/stripe-pay-button';
-import { wafBypassHeaders } from './helpers/waf-bypass';
+import { fetchWithWafBypass } from './helpers/waf-bypass';
 import type { TeamsPage } from './pages/TeamsPage';
 
 /**
@@ -65,7 +65,7 @@ async function startCheckout(page: Page, teamsPage: TeamsPage, teamName: string)
   await page.route(SUBSCRIBE_ROUTE, async route => {
     if (route.request().method() !== 'POST') return route.fallback();
     // This handler fulfills, so installWafBypass's handler never runs for the POST: add its header here.
-    const fetched = await route.fetch({ headers: { ...route.request().headers(), ...wafBypassHeaders() } });
+    const fetched = await fetchWithWafBypass(route);
     body = await fetched.text();
     await route.fulfill({ response: fetched, body });
   });

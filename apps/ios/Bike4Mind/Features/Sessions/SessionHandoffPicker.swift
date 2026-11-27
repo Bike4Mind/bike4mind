@@ -16,7 +16,7 @@ struct SessionHandoffPicker: View {
           Text(
             "Web and desktop server conversations must stay open and signed in. iPhone/iPad notifications must be enabled. Local desktop chats stay on that device."
           )
-          .font(.footnote)
+          .font(Tokens.Typography.caption)
         }
         ForEach(devices) { device in
           Button {
@@ -24,7 +24,7 @@ struct SessionHandoffPicker: View {
           } label: {
             VStack(alignment: .leading) {
               Text(device.name)
-              Text("\(device.platform)\(device.available ? "" : " - inactive")").font(.caption)
+              Text("\(device.platform)\(device.available ? "" : " - inactive")").font(Tokens.Typography.meta)
             }
           }
           .disabled(busy || !device.available)
