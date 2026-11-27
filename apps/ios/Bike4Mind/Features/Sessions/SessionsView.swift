@@ -16,6 +16,9 @@ private struct SessionsListScreen: View {
   @State private var captureJobs: CaptureJobsViewModel
   @Environment(AppServices.self) private var services
   @Environment(\.scenePhase) private var scenePhase
+  @State private var renaming: SessionSummary?
+  @State private var renameText = ""
+  @State private var deleting: SessionSummary?
 
   init(model: SessionsViewModel, captureJobs: any CaptureJobTracking) {
     self.model = model
@@ -40,6 +43,37 @@ private struct SessionsListScreen: View {
         if phase == .active { Task { await captureJobs.reload() } }
       }
       .refreshable { await model.refresh() }
+      .alert("Rename Notebook", isPresented: isPresenting($renaming), presenting: renaming) { session in
+        TextField("Name", text: $renameText)
+          .accessibilityIdentifier("sessions-rename-field")
+        Button("Cancel", role: .cancel) {}
+        Button("Save") {
+          let name = renameText
+          Task { await model.rename(session.id, to: name) }
+        }
+        .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityIdentifier("sessions-rename-save-btn")
+      }
+      .confirmationDialog(
+        "Delete this notebook?", isPresented: isPresenting($deleting), titleVisibility: .visible,
+        presenting: deleting
+      ) { session in
+        Button("Delete", role: .destructive) {
+          Task { await model.delete(session.id) }
+        }
+        .accessibilityIdentifier("sessions-delete-confirm-btn")
+      } message: { session in
+        Text("\"\(session.title)\" and its messages will be deleted everywhere. This can't be undone.")
+      }
+  }
+
+  private func isPresenting(_ item: Binding<SessionSummary?>) -> Binding<Bool> {
+    Binding(get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } })
+  }
+
+  private func beginRename(_ session: SessionSummary) {
+    renameText = session.name
+    renaming = session
   }
 
   @ViewBuilder
@@ -93,9 +127,26 @@ private struct SessionsListScreen: View {
         if case .failed(let error) = model.state {
           InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
         }
+        if let error = model.mutationError {
+          InlineErrorBanner(message: error.message, actionTitle: "Dismiss") { model.dismissMutationError() }
+            .accessibilityIdentifier("sessions-mutation-error")
+        }
         ForEach(model.sessions) { session in
           NavigationLink(value: SessionsDestination.session(session)) {
             SessionRow(session: session)
+          }
+          // Not role: .destructive, which removes the row before the confirmation is answered.
+          .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Delete", systemImage: "trash") { deleting = session }
+              .tint(Tokens.Palette.destructive)
+              .accessibilityIdentifier("sessions-row-delete-btn")
+            Button("Rename", systemImage: "pencil") { beginRename(session) }
+              .tint(Tokens.Palette.brand)
+              .accessibilityIdentifier("sessions-row-rename-btn")
+          }
+          .contextMenu {
+            Button("Rename", systemImage: "pencil") { beginRename(session) }
+            Button("Delete", systemImage: "trash", role: .destructive) { deleting = session }
           }
           .task { await model.loadMoreIfNeeded(currentItem: session) }
         }
@@ -147,7 +198,8 @@ private struct SessionRow: View {
 
 struct InlineErrorBanner: View {
   let message: String
-  let retry: () -> Void
+  var actionTitle = "Retry"
+  let action: () -> Void
 
   var body: some View {
     ViewThatFits(in: .horizontal) {
@@ -164,7 +216,7 @@ struct InlineErrorBanner: View {
         .accessibilityHidden(true)
       Text(message).font(Tokens.Typography.caption)
     }
-    Button("Retry", action: retry)
+    Button(actionTitle, action: action)
       .font(Tokens.Typography.caption.weight(.semibold))
       .buttonStyle(.borderless)
       .frame(minHeight: 44)
