@@ -61,7 +61,7 @@ const handler = baseApi().post(
     if (!req.ability.can('create', ModalModel)) throw new ForbiddenError('Permission denied');
 
     if (newModalData.imageUrl) {
-      newModalData.imageUrl = await storableModalImageUrl(newModalData.imageUrl);
+      newModalData.imageUrl = await storableModalImageUrl(newModalData.imageUrl, req.user!.id);
     }
 
     if (newModalData.images && newModalData.images.length > 0) {
