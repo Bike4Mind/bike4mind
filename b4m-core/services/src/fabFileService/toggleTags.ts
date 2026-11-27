@@ -476,9 +476,7 @@ export const toggleTags = async (
         await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
       }
     }
-    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag) - and,
-    // now that a stats recompute can no longer publish a lake as a side effect, no
-    // manage-rights split is needed either. Every prefix-arm join just needs its stats corrected.
+    // Every prefix-arm join already passed its gate in the pre-write pass; it just needs its stats corrected.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
       touchedLakes.set(lake.id, lake);
     }

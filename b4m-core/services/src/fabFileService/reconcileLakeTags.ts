@@ -299,8 +299,6 @@ export const reconcileLakeTags = async (
   // Prime grants for the prefix-arm lakes (the unmanaged-dropped-prefix check further down
   // consults them), reusing the cached meta-tag lakes.
   await grantResolver.prime([...prefixArmJoins.map(j => j.lake), ...prefixArmCandidateLakes]);
-  // Always empty now that every prefix-arm join is manage-gated; kept until its readers fold into `joins`.
-  const statsOnlyJoins: MembershipLake[] = [];
   for (const j of prefixArmJoins) {
     const mayJoin = canManage(j.lake) && canColdAddFileToLake(j.lake, actor, grantResolver.get(j.lake.id), owner);
     if (!mayJoin) throw new BadRequestError('You do not have permission to add files to this data lake');
@@ -316,7 +314,7 @@ export const reconcileLakeTags = async (
   // An unresolvable owner joins nothing (see the owner warning above), so there is nothing to grade.
   if (owner !== undefined) {
     await assertLakeAdmission(
-      [...joins, ...statsOnlyJoins],
+      joins,
       [
         {
           id: fabFileId,
@@ -404,7 +402,7 @@ export const reconcileLakeTags = async (
       // Recorded BEFORE the stats recompute, not after: the join is already persisted by the time
       // `commit()` runs, and recording is best-effort while `recomputeLakeStats` can throw - a
       // throw there would otherwise lose this lake's event AND every later join's in one go.
-      for (const lake of [...joins, ...statsOnlyJoins]) {
+      for (const lake of joins) {
         if (recomputed.has(lake.id)) continue;
         await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin: 'person' }, { db, logger });
         await recomputeLakeStats(lake, { db, logger });

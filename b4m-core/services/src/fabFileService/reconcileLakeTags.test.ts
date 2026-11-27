@@ -543,11 +543,7 @@ describe('reconcileLakeTags', () => {
       });
     });
 
-    // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
-    // stats recompute's activation side effect also flips a draft lake to active - a one-way
-    // publication change a mere file-share recipient must not be able to force onto a lake they
-    // do not manage. Stats still get corrected (so they don't drift forever), just never the
-    // activation.
+    // A prefix-arm join is membership, so an actor who cannot manage the lake is refused before any write.
     it('refuses a prefix-arm join by an actor who cannot manage the lake', async () => {
       const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
       adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
