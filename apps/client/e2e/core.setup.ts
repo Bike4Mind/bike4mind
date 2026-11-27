@@ -1,4 +1,4 @@
-import { test as setup } from '@playwright/test';
+import { test as setup } from './waf-test';
 import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { seedAuthStorageState } from './helpers/auth-seed';

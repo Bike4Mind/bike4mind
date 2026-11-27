@@ -4,7 +4,8 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Card, Radio, RadioGroup, Sheet, Stack } from '@mui/joy';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './waf-test';
 
 const stylesheet = readFileSync(path.resolve(__dirname, '../app/globals.css'), 'utf8');
 

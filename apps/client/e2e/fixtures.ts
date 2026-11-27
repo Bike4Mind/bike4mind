@@ -159,8 +159,8 @@ export async function openPageAs(
   contextOptions: BrowserContextOptions = {}
 ): Promise<{ page: Page; close: () => Promise<void> }> {
   const context = await browser.newContext({ ...contextOptions, baseURL });
+  await installWafBypass(context);
   const page = await context.newPage();
-  await installWafBypass(page);
   await prepareAppPage(page, () => auth);
   return { page, close: () => context.close() };
 }

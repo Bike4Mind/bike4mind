@@ -1,4 +1,4 @@
-import { test as setup } from '@playwright/test';
+import { test as setup } from '../waf-test';
 import { seedAuthStorageState } from './auth-seed';
 import { apiCreateTestUser, apiUpdateUserPreferences } from './api';
 import { getTestRunId, saveSpecUser, getE2ETestId } from './test-users';

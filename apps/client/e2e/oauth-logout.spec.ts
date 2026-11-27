@@ -56,7 +56,7 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
     const context = await browser.newContext({ baseURL, storageState: NO_SESSION });
     const page = await context.newPage();
     try {
-      await installWafBypass(page);
+      await installWafBypass(context);
       await stubRelyingParty(page);
       await page.goto(logoutUrl({ client_id: clientId, post_logout_redirect_uri: SIGNED_OUT_URI, state: 'e2e-s1' }));
       await expect(page).toHaveURL(`${SIGNED_OUT_URI}?state=e2e-s1`, { timeout: TIMEOUTS.NAVIGATION });
@@ -69,7 +69,7 @@ test.describe.serial('OAuth RP-Initiated Logout', () => {
     const context = await browser.newContext({ baseURL, storageState: NO_SESSION });
     const page = await context.newPage();
     try {
-      await installWafBypass(page);
+      await installWafBypass(context);
       await page.goto(logoutUrl({ client_id: clientId, post_logout_redirect_uri: 'https://elsewhere.example.test/' }));
       await expect(page.getByTestId('oauth-logout-error-message')).toContainText('not registered', {
         timeout: TIMEOUTS.NAVIGATION,

@@ -1,4 +1,4 @@
-import { test as setup } from '@playwright/test';
+import { test as setup } from './waf-test';
 import { apiLoginViaOtc } from './helpers/api';
 import { seedAuthStorageState } from './helpers/auth-seed';
 import { getTestUsers, saveCoreData } from './helpers/test-users';

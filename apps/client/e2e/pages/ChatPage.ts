@@ -1,6 +1,7 @@
 import { expect, type Response } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
+import { wafBypassHeaders } from '../helpers/waf-bypass';
 import {
   describeStall,
   hasFirstAnswerText,
@@ -107,7 +108,7 @@ export class ChatPage extends BasePage {
     if (refs.length !== 1 || !authorization || timeoutMs <= 0) return unknown;
     try {
       const response = await this.page.request.get(`/api/quests/${encodeURIComponent(refs[0].questId)}`, {
-        headers: { Authorization: authorization },
+        headers: { ...wafBypassHeaders(), Authorization: authorization },
         timeout: timeoutMs,
       });
       if (!response.ok()) return unknown;

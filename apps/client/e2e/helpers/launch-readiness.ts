@@ -44,8 +44,8 @@ export async function openShortScreenPageAs(
   auth: SpecAuth
 ): Promise<{ page: Page; goto: (path: string) => Promise<void>; close: () => Promise<void> }> {
   const context = await browser.newContext({ ...SHORT_SCREEN_MOBILE, baseURL });
+  await installWafBypass(context);
   const page = await context.newPage();
-  await installWafBypass(page);
   await throttleToSlowLink(page);
   const goto = async (path: string) => {
     await page.goto(buildAuthSuccessUrl(path, auth));
