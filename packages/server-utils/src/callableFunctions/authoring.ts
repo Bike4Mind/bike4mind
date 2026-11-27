@@ -1,5 +1,5 @@
 import { BadRequestError, ConflictError, NotFoundError, type ICallableFunctionDetail } from '@bike4mind/common';
-import { callableFunctionRepository } from '@bike4mind/database';
+import { artifactRepository, callableFunctionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { artifactService } from '@bike4mind/services';
 import { ARTIFACT_DB, hideArtifactDenial } from '../artifacts/artifactAccess';
@@ -82,6 +82,9 @@ export async function saveCallableFunctionCode(
   }
   const contract = checkCallableFunctionCode(input.code, input.contract);
   assertCallableFunctionRepinnable(current, contract);
+  // The pin takes only the owner's own artifact, so a collaborator's write access must not land a version first.
+  const held = await artifactRepository.findOne({ id: current.pin.artifactId, userId: actor.id });
+  if (!held || held.deletedAt) throw new NotFoundError('Artifact not found');
   const { artifact } = await hideArtifactDenial(
     artifactService.update(
       actor.id,

@@ -165,6 +165,7 @@ const CODE = 'FUNCTION = {"name": "beam_midspan_deflection"}\n\ndef run(inputs):
 const T0 = new Date('2026-11-20T10:00:00.000Z');
 const OWNED_ID = '6b0000000000000000000001';
 const SHARED_ID = '6b0000000000000000000002';
+const UNKNOWN_ID = '6b0000000000000000000009';
 
 const fnDoc = (id: string, ownerKey: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -316,6 +317,18 @@ describe("authoring the key owner's own function", () => {
     expect(h.artifactUpdate).not.toHaveBeenCalled();
   });
 
+  it('refuses saving code to an artifact the owner no longer holds without writing a version', async () => {
+    h.artifacts[0]!.userId = 'u9';
+    const res = await call(codeRoute, {
+      method: 'PUT',
+      query: { id: OWNED_ID },
+      body: { code: `${CODE}# tuned\n`, contract: CONTRACT, pin_version: 3 },
+    });
+    expect(res.status).toBe(404);
+    expect(h.artifactUpdate).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
+  });
+
   it('reads its own function with its code, and lists drafts with live ones', async () => {
     h.functions.push(fnDoc('6b0000000000000000000003', 'u1', { state: 'draft', slug: 'draft_one' }));
     const read = await call(sourceRoute, { query: { id: OWNED_ID } });
@@ -352,7 +365,7 @@ describe("authoring the key owner's own function", () => {
   });
 });
 
-describe('a function shared with the caller is not theirs to author', () => {
+describe("another person's function, shared with the caller or not, is not theirs to author", () => {
   const asRecipient: [string, unknown, { method?: string; query?: Record<string, string>; body?: unknown }][] = [
     ['read its code', sourceRoute, {}],
     ['save new code', codeRoute, { method: 'PUT', body: { code: CODE, contract: CONTRACT, pin_version: 3 } }],
@@ -371,10 +384,15 @@ describe('a function shared with the caller is not theirs to author', () => {
     ['read its calls', callsRoute, {}],
   ];
 
-  it.each(asRecipient)('cannot %s', async (_action, route, options) => {
+  it.each(asRecipient)('cannot %s, and is told what an unknown id is told', async (_action, route, options) => {
     const before = JSON.stringify(h.functions);
-    const res = await call(route, { ...options, query: { id: SHARED_ID, ...options.query }, user: 'u2' });
-    expect(res.status).toBe(404);
+    // u2 is named in the share, u3 is not.
+    for (const user of ['u2', 'u3']) {
+      const res = await call(route, { ...options, query: { id: SHARED_ID, ...options.query }, user });
+      const unknown = await call(route, { ...options, query: { id: UNKNOWN_ID, ...options.query }, user });
+      expect(res.status).toBe(404);
+      expect(res).toEqual(unknown);
+    }
     expect(h.writes).toEqual([]);
     expect(JSON.stringify(h.functions)).toBe(before);
     expect(h.artifactUpdate).not.toHaveBeenCalled();
