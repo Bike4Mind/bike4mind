@@ -2,6 +2,7 @@ package com.bike4mind.kit.sessions
 
 import com.bike4mind.client.apis.AIApi
 import com.bike4mind.client.apis.SessionsApi
+import com.bike4mind.client.models.ListSessionQuestsResponse200DataInnerPendingAction
 import com.bike4mind.kit.networking.requireBody
 
 /** Sessions ("notebooks" in the product UI) and their transcripts, mapped from the generated client. */
@@ -27,9 +28,7 @@ class SessionsRepository(private val sessions: SessionsApi, private val ai: AIAp
                 status = QuestStatus.from(it.status),
                 type = it.type,
                 errorCode = it.errorCode,
-                pendingAction = it.pendingAction?.let { action ->
-                    PendingAction(action.tool, PendingAction.display(action.params), action.ts.toLong())
-                },
+                pendingAction = it.pendingAction?.toPendingAction(),
             )
         }
 
@@ -45,4 +44,13 @@ class SessionsRepository(private val sessions: SessionsApi, private val ai: AIAp
             errorCode = quest.errorCode,
         )
     }
+}
+
+/** Null when a custom connector does not name itself and its host, matching the realtime frame parser. */
+internal fun ListSessionQuestsResponse200DataInnerPendingAction.toPendingAction(): PendingAction? {
+    val connector = customConnector?.let {
+        if (it.displayName.isBlank() || it.urlHost.isBlank()) return null
+        PendingActionConnector(it.displayName, it.urlHost)
+    }
+    return PendingAction(tool, PendingAction.display(params), ts.toLong(), connector)
 }

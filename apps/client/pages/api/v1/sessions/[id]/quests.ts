@@ -1,6 +1,6 @@
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { listSessionQuestsContract, questReplyText, type SessionQuest } from '@bike4mind/common';
-import type { IChatHistoryItemDocument } from '@bike4mind/common';
+import type { IChatHistoryItemDocument, IPendingAction, SessionQuestPendingAction } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
@@ -20,7 +20,18 @@ function toPublicQuest(quest: IChatHistoryItemDocument, { isOwner }: { isOwner: 
     createdAt: quest.timestamp ?? quest.createdAt,
     creditsUsed: quest.creditsUsed,
     // The pending approval is the owner's to act on and its params are the owner's tool input.
-    pendingAction: isOwner ? quest.pendingAction : undefined,
+    pendingAction: isOwner && quest.pendingAction ? toPublicPendingAction(quest.pendingAction) : undefined,
+  };
+}
+
+function toPublicPendingAction({ tool, params, ts, customConnector }: IPendingAction): SessionQuestPendingAction {
+  return {
+    tool,
+    params,
+    ts,
+    ...(customConnector && {
+      customConnector: { displayName: customConnector.displayName, urlHost: customConnector.urlHost },
+    }),
   };
 }
 

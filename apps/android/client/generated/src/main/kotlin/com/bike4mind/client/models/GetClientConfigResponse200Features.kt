@@ -38,7 +38,7 @@ import kotlinx.serialization.Contextual
  * @param mcpServer
  * @param customMcpConnectors
  * @param mementos
- * @param questMaster
+ * @param questMaster Deprecated: the in-chat QuestMaster plan feature was removed. Always false.
  * @param rapidReply
  * @param researchEngine
  * @param teamPlan
@@ -75,6 +75,7 @@ data class GetClientConfigResponse200Features (
     @SerialName(value = "mementos")
     val mementos: kotlin.Boolean,
 
+    /* Deprecated: the in-chat QuestMaster plan feature was removed. Always false. */
     @SerialName(value = "quest_master")
     val questMaster: kotlin.Boolean,
 

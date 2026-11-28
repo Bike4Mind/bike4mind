@@ -1,9 +1,10 @@
-"""Drops `enum` from string schemas before the OpenAPI snapshot reaches openapi-generator.
+"""Drops `enum` from string and boolean schemas before the OpenAPI snapshot reaches openapi-generator.
 
 The generator renders a string enum as a Kotlin `enum class`, and kotlinx.serialization throws on any value
 the class does not list, so one new server value (a quest status, an error code) would fail the decode of the
 whole response on every installed build, and shipped builds cannot be hot-fixed. Plain strings decode
-anything; the app maps them onto its own types and treats unknown values as unknown.
+anything; the app maps them onto its own types and treats unknown values as unknown. A boolean literal (`true`)
+generates a one-value enum class the same way, so it is opened to a plain Boolean too.
 
 GeneratedClientTest.noGeneratedModelEnumIsClosed guards the output. Run by `make generate-client`.
 Usage: python3 open_enums.py <input.json> <output.json>
@@ -22,9 +23,17 @@ def is_string_enum(schema):
     return "string" in types or all(isinstance(value, str) for value in values)
 
 
+def is_boolean_enum(schema):
+    values = schema.get("enum")
+    return isinstance(values, list) and bool(values) and all(isinstance(value, bool) for value in values)
+
+
 def open_enums(node):
     if isinstance(node, dict):
-        if is_string_enum(node):
+        if is_boolean_enum(node):
+            del node["enum"]
+            node.setdefault("type", "boolean")
+        elif is_string_enum(node):
             del node["enum"]
             node.setdefault("type", "string")
         for value in node.values():
