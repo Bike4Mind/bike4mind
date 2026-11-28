@@ -2,6 +2,8 @@ import { z, type ZodType } from 'zod';
 import { CONTEXT_NOTICE_KINDS } from '../chat';
 import { sessionPageRequestSchema } from '../sessionPage';
 import { eventCursorSchema } from './cursor';
+import { attachmentMethods } from './attachments';
+import { sessionSettingsMethods, turnRevisionMethods } from './sessionSettings';
 import { hostProtocolVersionSchema, hostCapabilitiesSchema } from './version';
 import {
   backgroundProcessPayloadSchema,
@@ -58,6 +60,12 @@ export const archiveConfirmationSchema = z.object({
 export const hostErrorData = {
   pathUnavailable: z.object({ path: z.string(), reason: z.string() }),
   processNotFound: z.object({ sessionId: z.string(), processId: z.string() }),
+  // `reason` is one of ATTACHMENT_REFUSAL_REASONS; `limit` is the byte limit a size refusal applied.
+  attachmentRefused: z.object({
+    reason: z.string(),
+    uploadId: z.string().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  }),
 } as const satisfies Record<string, ZodType>;
 export type HostErrorData<K extends keyof typeof hostErrorData> = z.infer<(typeof hostErrorData)[K]>;
 
@@ -222,6 +230,9 @@ export const hostMethods = {
     params: noParams,
     result: z.object({ decisions: z.array(pendingTaskDecisionPayloadSchema) }),
   },
+  ...attachmentMethods,
+  ...sessionSettingsMethods,
+  ...turnRevisionMethods,
 } as const satisfies Record<string, { params: ZodType; result: ZodType }>;
 
 /** The context-notice and context-notice-cleared stream events (ChatStreamEvent). */

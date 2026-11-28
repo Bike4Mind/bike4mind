@@ -179,12 +179,45 @@ describe('HostServer', () => {
     ['host/info', 'now'],
     ['host/auth/start', 3],
     ['host/auth/status', []],
+    ['session/configure', { sessionId: 's1', patch: { model: 'm', unknown: 1 } }],
+    ['turn/continue', {}],
+    ['turn/edit', { sessionId: 's1', messageId: 'm1' }],
+    ['turn/regenerate', { sessionId: 's1', messageId: 3 }],
+    ['attachment/uploadBegin', { sessionId: 's1', name: 'a.txt' }],
+    ['attachment/uploadChunk', { uploadId: 'u1', index: -1, data: 'aGk=' }],
+    ['attachment/uploadCommit', { uploadId: 'u1', sha256: 'short' }],
+    ['attachment/uploadAbort', {}],
+    ['attachment/read', { sessionId: 's1' }],
+    ['attachment/discard', { attachmentId: 'a1' }],
+    ['attachment/copyDraft', { draftId: 's1', sessionId: 's2', attachmentIds: [] }],
+    ['attachment/discardDraft', { draftId: 'not-a-draft' }],
+    ['attachment/fromMedia', { sessionId: 's1', ref: { source: 'remote', url: 'https://x.test/a.png' } }],
+    ['attachment/fromPath', { sessionId: 's1', path: 'x'.repeat(2000) }],
   ];
   it.each(invalidParams)('rejects invalid params for %s without calling the runtime', async (method, params) => {
     const { client, runtime } = serve();
     const response = await client().call(method, params);
     expect(errorOf(response).code).toBe(HOST_ERROR_CODES.invalidParams);
     for (const fn of Object.values(runtime)) if (vi.isMockFunction(fn)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('answers session/configure of an unknown session with sessionNotFound', async () => {
+    const runtime = Object.assign(fakeRuntime(), { configureSession: vi.fn(async () => null) });
+    const response = await serve(runtime)
+      .client()
+      .call('session/configure', {
+        sessionId: 'gone',
+        patch: { approvalMode: 'auto' },
+      });
+    expect(errorOf(response).code).toBe(HOST_ERROR_CODES.sessionNotFound);
+  });
+
+  it('answers the attachment methods with capabilityUnavailable on a runtime without a store', async () => {
+    const { call } = serve().client();
+    const begin = await call('attachment/uploadBegin', { sessionId: 's1', name: 'a.txt', byteSize: 1 });
+    expect(errorOf(begin).code).toBe(HOST_ERROR_CODES.capabilityUnavailable);
+    const read = await call('attachment/read', { sessionId: 's1', attachmentId: 'a1' });
+    expect(errorOf(read).code).toBe(HOST_ERROR_CODES.capabilityUnavailable);
   });
 
   it('covers every method in either the served table or the pending list', () => {

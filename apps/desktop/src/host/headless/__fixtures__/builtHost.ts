@@ -27,6 +27,8 @@ export type FakeApi = {
   /** Lets the first completion, held mid-stream, finish. */
   releaseTurn(): void;
   completions(): number;
+  /** The raw body of every completion request, in order. */
+  completionBodies(): readonly string[];
   listen(): Promise<string>;
 };
 
@@ -37,6 +39,7 @@ export function startFakeApi(): FakeApi {
     releaseTurn = resolveTurn;
   });
   let completions = 0;
+  const completionBodies: string[] = [];
   const unexpected: string[] = [];
   const sse = (body: unknown) => `data: ${typeof body === 'string' ? body : JSON.stringify(body)}\n\n`;
 
@@ -46,6 +49,22 @@ export function startFakeApi(): FakeApi {
   };
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const path = (request.url ?? '').split('?')[0];
+    if (path === '/api/ai/v1/completions' && request.method === 'POST') {
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => (body += chunk));
+      request.on('end', () => {
+        completionBodies.push(body);
+        const first = ++completions === 1;
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write(sse({ type: 'content', text: 'Hello ' }));
+        const finish = () =>
+          response.end(sse({ type: 'content', text: 'there.', stopReason: 'end_turn' }) + sse('[DONE]'));
+        if (first) void turnReleased.then(finish);
+        else finish();
+      });
+      return;
+    }
     request.resume();
     if (path === '/api/identify') return json(response, { user: { id: E2E_USER_ID, email: 'rider@example.com' } });
     if (path === '/api/settings/fetch') return json(response, {});
@@ -53,16 +72,6 @@ export function startFakeApi(): FakeApi {
     if (path === '/api/skills') return json(response, { data: [] });
     if (path === '/api/models' || path === '/api/v1/models' || path === '/api/v1/video-models') {
       return json(response, { data: [], models: [] });
-    }
-    if (path === '/api/ai/v1/completions' && request.method === 'POST') {
-      const first = ++completions === 1;
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      response.write(sse({ type: 'content', text: 'Hello ' }));
-      const finish = () =>
-        response.end(sse({ type: 'content', text: 'there.', stopReason: 'end_turn' }) + sse('[DONE]'));
-      if (first) void turnReleased.then(finish);
-      else finish();
-      return;
     }
     unexpected.push(`${request.method} ${path}`);
     response.writeHead(404).end();
@@ -72,6 +81,7 @@ export function startFakeApi(): FakeApi {
     unexpected,
     releaseTurn: () => releaseTurn(),
     completions: () => completions,
+    completionBodies: () => completionBodies,
     listen: () =>
       new Promise<string>(resolveUrl =>
         server.listen(0, '127.0.0.1', () => resolveUrl(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))

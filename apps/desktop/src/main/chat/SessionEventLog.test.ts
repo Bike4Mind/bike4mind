@@ -182,3 +182,32 @@ describe('SessionEventLog', () => {
     expect(log.cursor(session)).toEqual({ epoch: 'e', seq: 0 });
   });
 });
+
+describe('SessionEventLog.rotate', () => {
+  const start = (sessionId: string): ChatStreamEvent => ({ type: 'start', sessionId, messageId: 'r' });
+
+  it('gives only that session a new epoch, so a cursor from before stops resolving there alone', () => {
+    const log = new SessionEventLog({ epoch: 'e' });
+    log.append(start('a'));
+    log.append(start('b'));
+    const before = log.cursor('a');
+
+    log.rotate('a');
+
+    expect(log.cursor('a').epoch).not.toBe('e');
+    expect(log.since('a', before)).toEqual({ ok: false, reason: 'snapshot-required' });
+    expect(log.since('b', { epoch: 'e', seq: 0 })).toMatchObject({ ok: true });
+  });
+
+  it('keeps counting seq and replays what follows from a cursor taken after it', () => {
+    const log = new SessionEventLog({ epoch: 'e' });
+    log.append(start('a'));
+    log.rotate('a');
+    const after = log.cursor('a');
+    expect(after.seq).toBe(1);
+
+    const next = log.append({ type: 'delta', sessionId: 'a', messageId: 'r', text: 'x' });
+    expect(next.seq).toBe(2);
+    expect(log.since('a', after)).toEqual({ ok: true, events: [next] });
+  });
+});

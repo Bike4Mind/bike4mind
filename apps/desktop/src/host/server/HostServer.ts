@@ -18,6 +18,7 @@ import {
 } from '@shared/hostProtocol';
 import { taskDecisionReplySchema } from '@shared/orchestration';
 import { sessionForRenderer } from '../../main/chat/ChatService';
+import { isValidSessionId } from '../../main/chat/SessionStore';
 import type { HostRuntime } from '../HostRuntime';
 import type { HostEventSink } from '../ports';
 import type { HostEventSource } from './HostEventRelay';
@@ -62,6 +63,18 @@ export type HostServerRuntime = Pick<
   | 'sendQueuedNow'
   | 'forgetRecentFolder'
   | 'inspectProject'
+  | 'continueReply'
+  | 'editMessage'
+  | 'regenerateReply'
+  | 'configureSession'
+  | 'readAttachment'
+  | 'discardAttachment'
+  | 'copyDraftAttachments'
+  | 'discardDraftAttachments'
+  | 'attachStoredImage'
+  | 'attachFilePath'
+  | 'attachments'
+  | 'uploads'
 > & {
   service: Pick<HostRuntime['service'], 'eventsSince'>;
   eventLog: Pick<HostRuntime['eventLog'], 'cursor'>;
@@ -91,6 +104,15 @@ type Handlers = { [M in ServedHostMethod]: Handler<M> };
 const pendingMethods: ReadonlySet<string> = new Set(pendingHostMethods);
 
 const isServed = (method: HostMethod): method is ServedHostMethod => !pendingMethods.has(method);
+
+/**
+ * Session, draft and attachment ids become path components on the host, so each must have the
+ * store's id shape (isValidSessionId) before anything reaches the store.
+ */
+function requireIds(...ids: string[]): void {
+  const invalid = ids.find(id => !isValidSessionId(id));
+  if (invalid !== undefined) throw new HostMethodError(HOST_ERROR_CODES.invalidParams, `Invalid id: ${invalid}`);
+}
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -132,6 +154,7 @@ export class HostServer {
       close: () => {
         connection.subscriptions.clear();
         this.connections.delete(connection);
+        void this.runtime.uploads?.abortOwner(connection);
       },
     };
   }
@@ -266,6 +289,75 @@ export class HostServer {
       'model/list': async ({ force }) => ({ models: await runtime.listModels(force ?? false) }),
       'draft/defaults': async () => ({ defaults: await runtime.draftDefaults() }),
       'taskDecision/list': async () => ({ decisions: await runtime.listTaskDecisions() }),
+      'session/configure': async ({ sessionId, patch }) => {
+        requireIds(sessionId);
+        const summary = await runtime.configureSession(sessionId, patch);
+        if (!summary) throw new HostMethodError(HOST_ERROR_CODES.sessionNotFound, `No session ${sessionId}`);
+        return { summary };
+      },
+      'turn/continue': ({ sessionId }) => runtime.continueReply(sessionId),
+      'turn/edit': ({ sessionId, messageId, text }) => runtime.editMessage(sessionId, messageId, text),
+      'turn/regenerate': ({ sessionId, messageId }) => runtime.regenerateReply(sessionId, messageId),
+      ...this.attachmentHandlers(),
+    };
+  }
+
+  private attachmentHandlers(): Pick<Handlers, Extract<ServedHostMethod, `attachment/${string}`>> {
+    const runtime = this.runtime;
+    const uploads = () => {
+      if (!runtime.uploads) {
+        throw new HostMethodError(HOST_ERROR_CODES.capabilityUnavailable, 'This host keeps no attachments');
+      }
+      return runtime.uploads;
+    };
+    const withStore = <T>(run: () => Promise<T>): Promise<T> => {
+      uploads();
+      return run();
+    };
+    return {
+      'attachment/uploadBegin': (request, connection) => uploads().begin(connection, request),
+      'attachment/uploadChunk': ({ uploadId, index, data }, connection) =>
+        uploads().chunk(connection, uploadId, index, data),
+      'attachment/uploadCommit': ({ uploadId, sha256 }, connection) => uploads().commit(connection, uploadId, sha256),
+      'attachment/uploadAbort': async ({ uploadId }, connection) => {
+        await uploads().abort(connection, uploadId);
+        return {};
+      },
+      'attachment/read': ({ sessionId, attachmentId }) =>
+        withStore(async () => {
+          requireIds(sessionId, attachmentId);
+          const read = await runtime.readAttachment(sessionId, attachmentId);
+          if (!read.ok) {
+            throw new HostMethodError(
+              HOST_ERROR_CODES.attachmentRefused,
+              'That attachment cannot be read as text or an image',
+              {
+                reason: read.reason,
+              } satisfies HostErrorData<'attachmentRefused'>
+            );
+          }
+          return { content: read.content };
+        }),
+      'attachment/discard': ({ sessionId, attachmentId }) =>
+        withStore(async () => {
+          requireIds(sessionId, attachmentId);
+          await runtime.discardAttachment(sessionId, attachmentId);
+          return {};
+        }),
+      'attachment/copyDraft': ({ draftId, sessionId, attachmentIds }) =>
+        withStore(async () => {
+          requireIds(draftId, sessionId, ...attachmentIds);
+          await runtime.copyDraftAttachments(draftId, sessionId, attachmentIds);
+          return {};
+        }),
+      'attachment/discardDraft': ({ draftId }) =>
+        withStore(async () => {
+          requireIds(draftId);
+          await runtime.discardDraftAttachments(draftId);
+          return {};
+        }),
+      'attachment/fromMedia': ({ sessionId, ref }) => withStore(() => runtime.attachStoredImage(sessionId, ref)),
+      'attachment/fromPath': ({ sessionId, path }) => withStore(() => runtime.attachFilePath(sessionId, path)),
     };
   }
 

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { z } from 'zod';
+import type { ChatAttachment } from '../chat';
+import { chatAttachmentSchema } from './attachments';
 import { hostErrorData, hostMethods, hostNotifications, type HostMethod, type HostNotificationName } from './methods';
 
 const cursor = { epoch: 'e1', seq: 4 };
@@ -17,6 +20,15 @@ const info = {
 };
 const queued = { id: 'q1', sessionId: 's1', text: 'hi' };
 const sessionStatus = { sessionId: 's1', status: 'processing' };
+const turnResult = { ok: true, queued: false, messageId: 'm1' };
+const attachment = {
+  id: 'a1',
+  kind: 'image',
+  name: 'a.png',
+  mediaType: 'image/png',
+  byteSize: 10,
+  sourceBytes: 10,
+};
 
 const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; result: unknown }> = {
   'host/initialize': {
@@ -112,6 +124,56 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
     params: {},
     badParams: 'nope',
     result: { decisions: [{ sessionId: 's1', rootId: 'r1', title: 't', decision: { kind: 'stopped' } }] },
+  },
+  'session/configure': {
+    params: { sessionId: 's1', patch: { model: 'm', approvalMode: 'auto' } },
+    badParams: { sessionId: 's1', patch: { model: 'm', colour: 'red' } },
+    result: { summary },
+  },
+  'turn/continue': { params: { sessionId: 's1' }, badParams: { sessionId: 's1', extra: 1 }, result: turnResult },
+  'turn/edit': {
+    params: { sessionId: 's1', messageId: 'm1', text: 'again' },
+    badParams: { sessionId: 's1', messageId: 'm1', text: '' },
+    result: turnResult,
+  },
+  'turn/regenerate': { params: { sessionId: 's1' }, badParams: { messageId: 'm1' }, result: turnResult },
+  'attachment/uploadBegin': {
+    params: { sessionId: 'draft-1', name: 'a.png', mediaType: 'image/png', byteSize: 10 },
+    badParams: { sessionId: 'draft-1', name: 'a.png', byteSize: -1 },
+    result: { uploadId: 'u1', chunkBytes: 262144 },
+  },
+  'attachment/uploadChunk': {
+    params: { uploadId: 'u1', index: 0, data: 'aGk=' },
+    badParams: { uploadId: 'u1', index: 0, data: 'not base64!' },
+    result: { receivedBytes: 2 },
+  },
+  'attachment/uploadCommit': {
+    params: { uploadId: 'u1', sha256: 'a'.repeat(64) },
+    badParams: { uploadId: 'u1', sha256: 'A'.repeat(64) },
+    result: { attachment },
+  },
+  'attachment/uploadAbort': { params: { uploadId: 'u1' }, badParams: {}, result: {} },
+  'attachment/read': {
+    params: { sessionId: 's1', attachmentId: 'a1' },
+    badParams: { sessionId: 's1', attachmentId: 'a1', mediaType: 'image/png' },
+    result: { content: null },
+  },
+  'attachment/discard': { params: { sessionId: 's1', attachmentId: 'a1' }, badParams: { sessionId: 's1' }, result: {} },
+  'attachment/copyDraft': {
+    params: { draftId: 'draft-1', sessionId: 's1', attachmentIds: ['a1'] },
+    badParams: { draftId: 's2', sessionId: 's1', attachmentIds: ['a1'] },
+    result: {},
+  },
+  'attachment/discardDraft': { params: { draftId: 'draft-1' }, badParams: { draftId: 's1' }, result: {} },
+  'attachment/fromMedia': {
+    params: { sessionId: 's1', ref: { source: 'media', url: 'b4m-media://s1/a.png' } },
+    badParams: { sessionId: 's1', ref: { source: 'remote', url: 'https://x.test/a.png' } },
+    result: { attachments: [attachment], rejected: [] },
+  },
+  'attachment/fromPath': {
+    params: { sessionId: 's1', path: '/w/a.txt' },
+    badParams: { sessionId: 's1', path: '' },
+    result: { attachments: [], rejected: [{ name: 'a.txt', reason: 'gone' }] },
   },
 };
 
@@ -238,5 +300,39 @@ describe('hostErrorData', () => {
     expect(hostErrorData.pathUnavailable.safeParse({ reason: 'notFound' }).success).toBe(false);
     expect(hostErrorData.processNotFound.safeParse({ sessionId: 's1', processId: 'p1' }).success).toBe(true);
     expect(hostErrorData.processNotFound.safeParse({ sessionId: 's1' }).success).toBe(false);
+  });
+});
+
+describe('the methods added in 1.4', () => {
+  it('refuse an unknown key in their results as well as their params', () => {
+    expect(
+      hostMethods['attachment/uploadBegin'].result.safeParse({ uploadId: 'u1', chunkBytes: 1, x: 1 }).success
+    ).toBe(false);
+    expect(
+      hostMethods['attachment/uploadCommit'].result.safeParse({ attachment: { ...attachment, x: 1 } }).success
+    ).toBe(false);
+    expect(hostMethods['session/configure'].result.safeParse({ summary, extra: true }).success).toBe(false);
+  });
+
+  it('refuse an empty configure patch and a value its own setter would refuse', () => {
+    const { params } = hostMethods['session/configure'];
+    expect(params.safeParse({ sessionId: 's1', patch: {} }).success).toBe(false);
+    expect(params.safeParse({ sessionId: 's1', patch: { approvalMode: 'yolo' } }).success).toBe(false);
+    expect(params.safeParse({ sessionId: 's1', patch: { promptCacheTtl: '3d' } }).success).toBe(false);
+    expect(params.safeParse({ sessionId: 's1', patch: { reasoningEffort: 'extreme' } }).success).toBe(false);
+    expect(params.safeParse({ sessionId: 's1', patch: { generation: { temperature: 'hot' } } }).success).toBe(false);
+  });
+
+  it('take an empty generation set, which clears the overrides', () => {
+    const parsed = hostMethods['session/configure'].params.safeParse({ sessionId: 's1', patch: { generation: {} } });
+    expect(parsed.success && parsed.data.patch.generation).toEqual({});
+  });
+});
+
+describe('chatAttachmentSchema', () => {
+  // A strict result schema refuses a key it does not know, so a field added to ChatAttachment
+  // alone would fail every upload commit at runtime; checked both ways at compile time.
+  it('has exactly the shape of ChatAttachment', () => {
+    expectTypeOf<z.infer<typeof chatAttachmentSchema>>().toEqualTypeOf<ChatAttachment>();
   });
 });

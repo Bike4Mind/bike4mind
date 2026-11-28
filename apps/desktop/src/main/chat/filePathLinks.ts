@@ -138,7 +138,7 @@ const LINE_SUFFIX = /:\d+(?::\d+)?$/;
 async function resolveOne(
   requested: string,
   scope: FilePathScope,
-  deps: FilePathLinkDeps
+  deps: Pick<FilePathLinkDeps, 'home' | 'protectedPaths' | 'stat' | 'platform'>
 ): Promise<{ path: string; stats: Stats; line?: number } | null> {
   const expanded = /^~[\\/]/.test(requested) ? join(deps.home, requested.slice(2)) : requested;
   const suffix = LINE_SUFFIX.exec(expanded);
@@ -212,6 +212,35 @@ async function viewOf(found: { path: string; stats: Stats; line?: number }): Pro
     truncated: found.stats.size > head.length,
     ...(found.line ? { line: found.line } : {}),
   };
+}
+
+export type AttachFilePathDeps = Pick<
+  FilePathLinkDeps,
+  'scopeFor' | 'protectedPaths' | 'home' | 'stat' | 'attach' | 'platform'
+>;
+
+/**
+ * Attaches the file a reply named when it resolves inside a folder shared with the session (the
+ * check resolveOne makes); otherwise a rejected batch saying it is gone. Never throws.
+ */
+export async function attachFilePath(
+  sessionId: unknown,
+  value: unknown,
+  deps: AttachFilePathDeps
+): Promise<AddAttachmentsResult> {
+  if (typeof value !== 'string' || !isPathText(value)) {
+    return { attachments: [], rejected: [{ name: 'file', reason: GONE }] };
+  }
+  const name = basename(value) || 'file';
+  const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name, reason: GONE }] };
+  if (typeof sessionId !== 'string' || !isValidSessionId(sessionId)) return gone;
+  try {
+    const scope = await deps.scopeFor(sessionId);
+    const found = scope && (await resolveOne(value, scope, deps));
+    return found ? await deps.attach(sessionId, resolve(found.path)) : gone;
+  } catch {
+    return { attachments: [], rejected: [{ name, reason: 'That file could not be attached.' }] };
+  }
 }
 
 /**
@@ -289,21 +318,8 @@ export function registerFilePathLinkIpc(ipc: Pick<IpcMain, 'handle'>, deps: File
 
   ipc.handle(
     IPC_CHANNELS.chatAttachFilePath,
-    async (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> => {
-      if (typeof value !== 'string' || !isPathText(value)) {
-        return { attachments: [], rejected: [{ name: 'file', reason: GONE }] };
-      }
-      const name = basename(value) || 'file';
-      const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name, reason: GONE }] };
-      try {
-        const scope = await scopeOf(sessionId);
-        const found = scope && (await resolveOne(value, scope, deps));
-        // scopeOf has already refused an id that is not a valid session id.
-        return found ? await deps.attach(sessionId as string, resolve(found.path)) : gone;
-      } catch {
-        return { attachments: [], rejected: [{ name, reason: 'That file could not be attached.' }] };
-      }
-    }
+    (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> =>
+      attachFilePath(sessionId, value, deps)
   );
 
   ipc.handle(

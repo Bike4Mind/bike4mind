@@ -1598,3 +1598,125 @@ describe('orchestration', () => {
     expect((await new SessionStore(directory, 'worker').get(child.id))?.orchestrationPolicy).toEqual(legacyPolicy);
   });
 });
+
+describe('SessionStore.configure', () => {
+  it('writes every named setting at once and remembers the preferences their setters remember', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'b4m-configure-'));
+    const directory = join(base, 'sessions');
+    const approvalFile = join(base, 'approval-mode.json');
+    const ttlFile = join(base, 'prompt-cache-ttl.json');
+    const store = new SessionStore(
+      directory,
+      MODEL,
+      'launch-one',
+      undefined,
+      new ApprovalModePreference(approvalFile),
+      undefined,
+      new PromptCacheTtlPreference(ttlFile)
+    );
+    const created = await store.create();
+
+    const summary = await store.configure(
+      created.id,
+      { model: 'other-model', reasoningEffort: 'high', promptCacheTtl: '1h', approvalMode: 'ask' },
+      store.scopeKey()
+    );
+
+    expect(summary).toMatchObject({ model: 'other-model', reasoningEffort: 'high', promptCacheTtl: '1h' });
+    const stored = await new SessionStore(directory, MODEL, 'launch-two').get(created.id);
+    expect(stored).toMatchObject({
+      model: 'other-model',
+      reasoningEffort: 'high',
+      promptCacheTtl: '1h',
+      approvalMode: 'ask',
+    });
+    expect(await new ApprovalModePreference(approvalFile).read()).toBe('ask');
+    expect(await new PromptCacheTtlPreference(ttlFile).read()).toBe('1h');
+  });
+
+  it('writes none of the settings when one of them is refused', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-configure-refused-'));
+    const store = new SessionStore(directory, 'worker');
+    const child = await store.create('worker', {
+      workerSelection: { role: 'implementation', effectiveModel: 'worker', source: 'override', rootRunId: 'run' },
+      workerTask: {
+        version: 1,
+        contract: {
+          version: 1,
+          outcome: 'Bounded task',
+          rationale: 'Focused scope',
+          role: 'implementation',
+          paths: [],
+          contextReferences: [],
+          ownedChanges: [],
+          coordinationConstraints: [],
+          nonGoals: [],
+          acceptanceCriteria: ['Observed result'],
+          verification: [],
+          assumptions: [],
+          escalationConditions: [],
+        },
+        automaticUpgrades: 0,
+        resolvedDecisions: [],
+        attempts: [{ id: 'attempt', model: 'worker', startedAt: '2026-11-19', trigger: 'initial' }],
+        state: { status: 'queued' },
+      },
+    });
+    await store.updateWorkerTask(child.id, task => ({
+      ...task,
+      state: { status: 'canceled', reason: 'Canceled by user' },
+    }));
+    const before = await store.get(child.id);
+
+    await expect(
+      store.configure(child.id, { model: 'reviewer', reasoningEffort: 'high' }, store.scopeKey())
+    ).rejects.toThrow(/Canceled/);
+
+    const after = await new SessionStore(directory, 'worker', 'launch-two').get(child.id);
+    expect(after?.model).toBe('worker');
+    expect(after?.reasoningEffort).toBe(before?.reasoningEffort);
+  });
+
+  it('skips a field equal to the current value, so a worker queues no new attempt', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-configure-echo-'));
+    const store = new SessionStore(directory, 'worker');
+    const child = await store.create('worker', {
+      workerSelection: { role: 'implementation', effectiveModel: 'worker', source: 'override', rootRunId: 'run' },
+      workerTask: {
+        version: 1,
+        contract: {
+          version: 1,
+          outcome: 'Bounded task',
+          rationale: 'Focused scope',
+          role: 'implementation',
+          paths: [],
+          contextReferences: [],
+          ownedChanges: [],
+          coordinationConstraints: [],
+          nonGoals: [],
+          acceptanceCriteria: ['Observed result'],
+          verification: [],
+          assumptions: [],
+          escalationConditions: [],
+        },
+        automaticUpgrades: 0,
+        resolvedDecisions: [],
+        attempts: [{ id: 'attempt', model: 'worker', startedAt: '2026-11-19', trigger: 'initial' }],
+        state: { status: 'running' },
+      },
+    });
+
+    await store.configure(child.id, { model: 'worker', reasoningEffort: 'high' }, store.scopeKey());
+
+    const after = await new SessionStore(directory, 'worker', 'launch-two').get(child.id);
+    expect(after?.reasoningEffort).toBe('high');
+    expect(after?.workerTask?.attempts).toHaveLength(1);
+    expect(after?.workerTask?.state.status).toBe('running');
+    expect(after?.workerSelection?.source).toBe('override');
+  });
+
+  it('answers null for a session that does not exist', async () => {
+    const { store } = await freshStore();
+    expect(await store.configure('3f0c2c55-9a43-4cf6-8d0e-1b1f0a2b3c4d', { reasoningEffort: 'high' }, null)).toBeNull();
+  });
+});

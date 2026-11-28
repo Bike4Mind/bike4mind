@@ -21,6 +21,8 @@ export const HEADLESS_HOST_CAPABILITIES = [
   'queue',
   'backgroundProcesses',
   'attachments',
+  'sessionSettings',
+  'turnRevision',
 ] as const satisfies readonly HostCapability[];
 
 export type HeadlessHostOptions = {
@@ -135,6 +137,7 @@ export async function composeHeadlessHost(options: HeadlessHostOptions): Promise
     dispose: () => {
       server.dispose();
       runtime.service.dispose();
+      void runtime.uploads?.dispose();
       skills.dispose();
       permissions.dispose();
       auth.dispose();

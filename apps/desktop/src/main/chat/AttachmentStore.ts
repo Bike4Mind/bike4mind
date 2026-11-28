@@ -1,6 +1,6 @@
 import { copyFile, open, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import type { AddAttachmentsResult, ChatAttachmentInput } from '@shared/chat';
 import { isValidSessionId } from './SessionStore';
 import {
@@ -24,6 +24,17 @@ const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** Entries are capped text (at most TEXT_BYTE_CAP each), so this bounds the cache's memory too. */
 const PDF_TEXT_CACHE_MAX = 16;
+
+/**
+ * A file already on disk in the store's staging directory (an upload), taken in under the name and
+ * media type its sender gave. The name only labels and classifies the file; it is never a path.
+ */
+export type StagedAttachment = { path: string; name: string; mediaType?: string | undefined };
+
+type IntakeInput = ChatAttachmentInput | ({ source: 'staged' } & StagedAttachment);
+
+/** Under the base directory, and not a valid session id, so no session's files can land in it. */
+const STAGING_DIRECTORY = '.uploads';
 
 export interface AttachmentStoreLogger {
   debug(message: string): void;
@@ -57,6 +68,11 @@ export class AttachmentStore {
   private readonly disposedDrafts = new Set<string>();
   private readonly intakeWrites = new Map<string, Set<Promise<void>>>();
 
+  /** True once disposeDraft ran for this id: nothing more is taken in under it. */
+  isDiscardedDraft(sessionId: string): boolean {
+    return this.disposedDrafts.has(sessionId);
+  }
+
   private assertDraftActive(sessionId: string): void {
     if (this.disposedDrafts.has(sessionId)) throw new Error('This draft was discarded.');
   }
@@ -77,7 +93,28 @@ export class AttachmentStore {
    * A partial success is the right outcome: dropping three screenshots and one binary should
    * attach the three and say why the fourth did not, not refuse the gesture.
    */
-  async add(sessionId: string, inputs: readonly ChatAttachmentInput[]): Promise<AddAttachmentsResult> {
+  add(sessionId: string, inputs: readonly ChatAttachmentInput[]): Promise<AddAttachmentsResult> {
+    return this.track(sessionId, inputs);
+  }
+
+  /** Where uploads are written while they arrive; each file there is the caller's to remove. */
+  get stagingDirectory(): string {
+    return join(this.baseDirectory, STAGING_DIRECTORY);
+  }
+
+  /**
+   * Takes in one staged upload with the same classification and caps as a picked file. The staged
+   * file stays where it is; the caller removes it.
+   */
+  async addStaged(sessionId: string, staged: StagedAttachment): Promise<AddAttachmentsResult> {
+    const relativeToStaging = relative(this.stagingDirectory, staged.path);
+    if (!relativeToStaging || relativeToStaging.startsWith('..') || isAbsolute(relativeToStaging)) {
+      throw new Error('A staged attachment must be in the staging directory.');
+    }
+    return this.track(sessionId, [{ source: 'staged', ...staged }]);
+  }
+
+  private async track(sessionId: string, inputs: readonly IntakeInput[]): Promise<AddAttachmentsResult> {
     this.sessionDirectory(sessionId);
     this.assertDraftActive(sessionId);
     let finish!: () => void;
@@ -96,14 +133,19 @@ export class AttachmentStore {
     }
   }
 
-  private async intake(sessionId: string, inputs: readonly ChatAttachmentInput[]): Promise<AddAttachmentsResult> {
+  private async intake(sessionId: string, inputs: readonly IntakeInput[]): Promise<AddAttachmentsResult> {
     const result: AddAttachmentsResult = { attachments: [], rejected: [] };
 
     for (const input of inputs.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
       const name = input.source === 'path' ? input.path : input.name;
       let prepared: PrepareResult;
       try {
-        prepared = input.source === 'path' ? await this.readPath(input.path) : await this.readBytes(input);
+        prepared =
+          input.source === 'path'
+            ? await this.readPath(input.path, { name: input.path })
+            : input.source === 'staged'
+              ? await this.readPath(input.path, { name: input.name, mediaType: input.mediaType })
+              : await this.readBytes(input);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(`CHAT: attachment intake failed for ${name}: ${message}`);
@@ -270,14 +312,22 @@ export class AttachmentStore {
    *
    * A 50MB log is read as its first TEXT_BYTE_CAP+1 bytes: enough to fill the cap and to know
    * there is more, without pulling 50MB into the main process to throw away.
+   *
+   * `label` classifies the file: its name (the path itself for a picked file) and, for an upload,
+   * the media type its sender gave, which counts only when it names an image type.
    */
-  private async readPath(path: string): Promise<PrepareResult> {
+  private async readPath(
+    path: string,
+    label: { name: string; mediaType?: string | undefined }
+  ): Promise<PrepareResult> {
+    const { name } = label;
     const info = await stat(path);
     if (info.isDirectory())
       return { ok: false, reason: 'That is a folder. Attach a file, or share the folder with the assistant.' };
     if (!info.isFile()) return { ok: false, reason: 'That is not a file.' };
 
-    const imageType = imageMediaTypeForName(path);
+    const imageType =
+      label.mediaType && isImageMediaType(label.mediaType) ? label.mediaType : imageMediaTypeForName(name);
     if (imageType) {
       if (info.size > IMAGE_INPUT_MAX) {
         return {
@@ -285,7 +335,7 @@ export class AttachmentStore {
           reason: `That image is ${formatBytes(info.size)}; the limit is ${formatBytes(IMAGE_INPUT_MAX)}.`,
         };
       }
-      return prepareImage(path, imageType, await readFile(path), this.shrink);
+      return prepareImage(name, imageType, await readFile(path), this.shrink);
     }
 
     const handle = await open(path, 'r');
@@ -293,16 +343,16 @@ export class AttachmentStore {
       const head = Buffer.alloc(Math.min(info.size, TEXT_BYTE_CAP + 1));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
       const headBytes = head.subarray(0, bytesRead);
-      if (looksLikePdf(path, undefined, headBytes)) {
+      if (looksLikePdf(name, label.mediaType, headBytes)) {
         if (info.size > PDF_INPUT_MAX) {
           return {
             ok: false,
             reason: `That PDF is ${formatBytes(info.size)}; the limit is ${formatBytes(PDF_INPUT_MAX)}.`,
           };
         }
-        return preparePdf(path, await readFile(path));
+        return preparePdf(name, await readFile(path));
       }
-      return prepareText(path, headBytes, info.size);
+      return prepareText(name, headBytes, info.size);
     } finally {
       await handle.close();
     }
