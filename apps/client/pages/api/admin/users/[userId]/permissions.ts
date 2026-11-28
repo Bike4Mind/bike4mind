@@ -19,6 +19,7 @@ import { requireStepUp } from '@server/auth/stepUp';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { noteSubject } from '@server/users/adminUserNotes';
+import { assertListedForExplicitOnly, fenceExplicitOnlyPermissions } from '@server/admin/creditGrants/seniorGranters';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -107,11 +108,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
         adminPermissions: sortAdminPermissions([...after, ...nextRoles.flatMap(role => role.permissions)]),
       });
       const rolesBefore = rolesRequested ? await adminRoleRepository.findByIds(storedRoleIds) : nextRoles;
-      assertCanChangeExplicitOnlyPermissions(
-        req.user,
-        [...before, ...rolesBefore.flatMap(role => role.permissions)],
-        [...after, ...nextRoles.flatMap(role => role.permissions)]
-      );
+      const effectiveBefore = [...before, ...rolesBefore.flatMap(role => role.permissions)];
+      const effectiveAfter = [...after, ...nextRoles.flatMap(role => role.permissions)];
+      assertCanChangeExplicitOnlyPermissions(fenceExplicitOnlyPermissions(req.user), effectiveBefore, effectiveAfter);
+      assertListedForExplicitOnly(userId, effectiveBefore, effectiveAfter);
       // Compare the cleaned set the editor showed; the write below replaces the raw stored array.
       const stored: readonly string[] = user.adminPermissions ?? [];
       const rolesStale = rolesRequested && !sameSet(beforeRoleIds, storedRoleIds);

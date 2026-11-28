@@ -20,6 +20,13 @@ const memberCounts = async (roleIds: readonly string[]): Promise<Map<string, num
   return new Map(rows.map(row => [String(row._id), row.members]));
 };
 
+const memberIds = async (roleId: string): Promise<string[]> => {
+  const rows = await User.find({ adminRoleIds: new Types.ObjectId(roleId) }, { _id: 1 }).lean<
+    { _id: Types.ObjectId }[]
+  >();
+  return rows.map(row => String(row._id));
+};
+
 const removeFromMembers = async (roleId: string): Promise<number> => {
   const id = new Types.ObjectId(roleId);
   const result = await User.updateMany({ adminRoleIds: id }, { $pull: { adminRoleIds: id } });
@@ -29,6 +36,7 @@ const removeFromMembers = async (roleId: string): Promise<number> => {
 export const adminRolesDeps = (req: AuditRequest): AdminRolesDeps => ({
   roles: adminRoleRepository,
   memberCounts,
+  memberIds,
   removeFromMembers,
   audit: requestAuditWriter(req),
   requireStepUp: () => requireStepUp(req),

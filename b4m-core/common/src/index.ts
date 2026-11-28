@@ -252,6 +252,7 @@ export * from './storageOwner';
 export * from './storageBreakdown';
 export * from './organizationStorage';
 export * from './adminPermissions';
+export * from './adminCreditGrants';
 export * from './mfaEnforcement';
 export * from './adminRoles';
 

@@ -121,6 +121,18 @@ export interface IAdminAuditLogRepository {
     since: Date,
     options?: { excludeApproved?: boolean; includeSubscriptionGrants?: boolean }
   ): Promise<number>;
+  /**
+   * Credits granted to one user by any admin since the cutoff, approval-run grants and subscription grants
+   * included: the per-recipient grant cap (apps/client/server/admin/creditGrants/tierCap.ts).
+   */
+  sumCreditsGrantedTo(targetUserId: string, since: Date): Promise<number>;
+  /** The newest `limit` entries sumCreditsGrantedTo counts, newest first. */
+  listCreditGrantsTo(targetUserId: string, since: Date, limit: number): Promise<AuditEntry[]>;
+  /**
+   * The same sum for credits that funded one organization: entries naming it in `organizationId` (a team
+   * grant to a member) or as the target. Keeps one grant per member from multiplying the cap.
+   */
+  sumCreditsGrantedToOrganization(organizationId: string, since: Date): Promise<number>;
   /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
   countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
   /** Entries under `actions` by any actor with occurredAt at or after `since`. */

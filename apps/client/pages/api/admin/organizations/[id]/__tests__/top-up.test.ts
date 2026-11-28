@@ -68,6 +68,8 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   }),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
+// Every account counts as listed here; the senior granter list is covered by seniorGranters.test.ts and selfGrant.test.ts.
+vi.mock('@server/admin/creditGrants/seniorGranters', () => ({ fenceExplicitOnlyPermissions: <T>(actor: T) => actor }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';

@@ -15,9 +15,14 @@ import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-uti
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  isSelfOrImpersonator,
+  recordAdminActionFromRequest,
+  type AdminAuditWriter,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { assertDelegateCanCreditUser, organizationMemberIds } from './delegateTargets';
 import { assertApproverOutsideTargets, isApprovedSelfGrant } from './selfGrant';
+import { enforceCreditGrantCap, isLargeGrantApproval } from './tierCap';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -35,6 +40,8 @@ export const GrantSubscriptionSchema = z.object({
   organizationId: z.string().optional(), // For existing team subscriptions
   durationMonths: z.number().min(1).max(12).prefault(1), // How many months to grant
   billingOwnerId: z.string().optional(), // User ID of the billing owner (maps to organization.userId)
+  // The typed large-grant confirmation (tierCap.ts); stored with an approval request.
+  confirmLargeGrant: z.boolean().optional(),
 });
 
 export const GrantSubscriptionParamsSchema = GrantSubscriptionSchema.extend({
@@ -91,9 +98,106 @@ export async function grantSubscriptionTargetIds({
   return ids;
 }
 
-/** Grants the subscription as `req.user`; shared by the route and the approval executor. */
+/** The audit writer for a grant run by `req.user`, pointing at the approval when it runs on one. */
+const grantAuditWriter =
+  (req: Request, approval?: AdminApproval): AdminAuditWriter =>
+  input =>
+    recordAdminActionFromRequest(req, { ...input, details: { ...approvalDetails(approval), ...input.details } });
+
+/**
+ * The per-recipient grant cap (tierCap.ts) for this grant as `req.user`. A team grant's credits count against
+ * the organization, not the member, and a subscription grant is exempt from the hard limit: approval is its
+ * control. `reserve: false` only reads: the route runs it to choose between granting now and queueing.
+ */
+export async function checkGrantSubscriptionCap(
+  req: Request,
+  params: GrantSubscriptionParams,
+  credits: number,
+  recipient: { id: string; email?: string | null; username?: string | null },
+  {
+    targetIds,
+    approval,
+    reserve,
+    approvalAvailable,
+  }: { targetIds: readonly string[]; approval?: AdminApproval; reserve?: boolean; approvalAvailable: boolean }
+) {
+  const team = params.subscriptionType === 'team';
+  const organization =
+    team && params.organizationId ? await organizationRepository.findById(params.organizationId) : undefined;
+  if (team && params.organizationId && !organization) throw new NotFoundError('Organization not found');
+  return enforceCreditGrantCap(
+    {
+      actor: req.user!,
+      recipient: { id: recipient.id, displayName: recipient.email ?? recipient.username ?? recipient.id },
+      countRecipient: !team,
+      organizationId: organization?.id,
+      credits,
+      targetsSelf: targetIds.some(id => isSelfOrImpersonator(req.user!, id)),
+      exemptFromHardLimit: true,
+      approvalAvailable,
+      approved: isLargeGrantApproval(approval),
+      confirmLargeGrant: params.confirmLargeGrant,
+      reason: params.reason,
+      attemptedAction: 'user.subscription.granted',
+    },
+    grantAuditWriter(req, approval),
+    { reserve }
+  );
+}
+
+/**
+ * Grants the subscription as `req.user`; shared by the route and the approval executor. The grant cap is
+ * checked here, so a grant run on approval is held to it too, and stays reserved until the grant is done.
+ */
 export async function grantSubscription(req: Request, params: GrantSubscriptionParams, approval?: AdminApproval) {
   const teamPlan = await getTeamPlanSettings();
+  const credits = grantSubscriptionCredits(params, teamPlan);
+  if (params.creditsAtRequest !== undefined && credits !== params.creditsAtRequest) {
+    throw new ConflictError('The credits this grant adds changed since it was requested. Submit a new request.');
+  }
+  const targetIds = await grantSubscriptionTargetIds(params);
+  const selfGrant = targetIds.some(
+    id => isSelfOrImpersonator(req.user!, id) || (approval?.requestedBy.selfIds.includes(id) ?? false)
+  );
+  const user = await validateGrantSubscription(params, teamPlan);
+  // Covers a grant over the immediate limit to the approver as well as a held self-grant.
+  if (isLargeGrantApproval(approval)) {
+    const what = params.subscriptionType === 'team' ? undefined : 'your own account';
+    assertApproverOutsideTargets(req.user!, targetIds, what);
+  }
+  if (!isApprovedSelfGrant(approval, targetIds)) {
+    await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
+  }
+
+  // Runs now: a grant that has come to need approval since it was checked is refused rather than queued.
+  const cap = await checkGrantSubscriptionCap(req, params, credits, user, {
+    targetIds,
+    approval,
+    approvalAvailable: false,
+  });
+  const release = cap.outcome === 'immediate' ? cap.release : async () => undefined;
+  try {
+    return await runGrantSubscription(req, params, { approval, teamPlan, user, selfGrant });
+  } finally {
+    await release();
+  }
+}
+
+async function runGrantSubscription(
+  req: Request,
+  params: GrantSubscriptionParams,
+  {
+    approval,
+    teamPlan,
+    user,
+    selfGrant,
+  }: {
+    approval?: AdminApproval;
+    teamPlan: TeamPlan;
+    user: Awaited<ReturnType<typeof validateGrantSubscription>>;
+    selfGrant: boolean;
+  }
+) {
   const {
     userId,
     subscriptionType,
@@ -105,20 +209,6 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
     billingOwnerId,
     reason,
   } = params;
-  if (params.creditsAtRequest !== undefined && grantSubscriptionCredits(params, teamPlan) !== params.creditsAtRequest) {
-    throw new ConflictError('The credits this grant adds changed since it was requested. Submit a new request.');
-  }
-  const targetIds = await grantSubscriptionTargetIds(params);
-  const selfGrant = targetIds.some(
-    id => isSelfOrImpersonator(req.user!, id) || (approval?.requestedBy.selfIds.includes(id) ?? false)
-  );
-  const user = await validateGrantSubscription(params, teamPlan);
-  if (!isApprovedSelfGrant(approval, targetIds)) {
-    await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
-  } else if (subscriptionType === 'team') {
-    assertApproverOutsideTargets(req.user!, targetIds);
-  }
-
   const now = dayjs();
   const periodStartsAt = now.toDate();
   const periodEndsAt = now.add(durationMonths, 'months').toDate();

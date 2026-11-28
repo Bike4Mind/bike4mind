@@ -65,12 +65,21 @@ export type ExecuteDeps = ResolveDeps & {
     batchId: string,
     deadline: number
   ) => Promise<AccountSubscriptionCancellation>;
+  /**
+   * Holds one user's positive credit change to the per-recipient admin grant cap before its transaction
+   * (apps/client/server/admin/creditGrants/tierCap.ts). A refusal fails only that user, with its message.
+   * Omitted: no cap applies.
+   */
+  capCreditGrant?: (user: BulkUser, credits: number) => Promise<CreditGrantHold>;
   logger?: UsersBulkLogger;
   now?: () => Date;
   newBatchId?: () => string;
   /** ms after the start past which no new chunk is started; defaults to EXECUTE_BUDGET_MS. */
   budgetMs?: number;
 };
+
+/** `release` runs once the user's transaction has settled, committed or not. */
+export type CreditGrantHold = { allowed: true; release: () => Promise<void> } | { allowed: false; message: string };
 
 export type ExecuteActor = {
   id: string;
@@ -122,11 +131,15 @@ const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsers
   (data as { state?: unknown }).state === 'done' &&
   typeof (data as { result?: unknown }).result === 'object';
 
-/** The steps for one user, inside its transaction. Returns null when nothing changed. */
+/**
+ * The steps for one user, inside its transaction. Returns null when nothing changed. `grantCeiling` is
+ * the grant capCreditGrant cleared from the cohort read; a fresh balance that grants more is refused.
+ */
 async function applySteps(
   userId: string,
   { action, actorId, reason, batchId, creditBalances }: Omit<ApplyContext, 'cancelDeadline'>,
-  deps: ApplyDeps
+  deps: ApplyDeps,
+  grantCeiling?: number
 ): Promise<UserUndoSnapshot | null> {
   const { db } = deps;
   const user = await db.findUser(userId);
@@ -153,6 +166,9 @@ async function applySteps(
   }
 
   const delta = creditDeltaFor(action, user.currentCredits);
+  if (grantCeiling !== undefined && delta > grantCeiling) {
+    throw new ConflictError('The credit balance changed; review this action again.');
+  }
   if (delta !== 0) {
     ({ creditTransactionId } = await db.adjustCredits({
       userId,
@@ -208,8 +224,14 @@ function summaryFor(action: AdminUsersBulkAction, snapshot: UserUndoSnapshot): s
 }
 
 async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteDeps): Promise<UserOutcome> {
+  let hold: CreditGrantHold | null = null;
   try {
-    const snapshot = await deps.withTransaction(() => applySteps(user.id, context, deps));
+    const grant = Math.max(0, creditDeltaFor(context.action, user.currentCredits));
+    if (grant > 0 && deps.capCreditGrant) hold = await deps.capCreditGrant(user, grant);
+    if (hold && !hold.allowed) return { status: 'failed', userId: user.id, error: hold.message };
+    // Also with no hold (grant 0), so a balance that fell since the cohort read cannot grant uncapped.
+    const grantCeiling = deps.capCreditGrant ? grant : undefined;
+    const snapshot = await deps.withTransaction(() => applySteps(user.id, context, deps, grantCeiling));
     const { type } = context.action;
     if (!snapshot) {
       if (!isBanAction(type)) return { status: 'skipped' };
@@ -231,6 +253,8 @@ async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteD
   } catch (error) {
     deps.logger?.error('Users bulk action failed for user', { userId: user.id, error });
     return { status: 'failed', userId: user.id, error: errorMessage(error) };
+  } finally {
+    if (hold?.allowed) await hold.release();
   }
 }
 

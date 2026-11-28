@@ -73,6 +73,8 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 }));
 vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
+// Every account counts as listed here; the senior granter list is covered by seniorGranters.test.ts and selfGrant.test.ts.
+vi.mock('@server/admin/creditGrants/seniorGranters', () => ({ fenceExplicitOnlyPermissions: <T>(actor: T) => actor }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';

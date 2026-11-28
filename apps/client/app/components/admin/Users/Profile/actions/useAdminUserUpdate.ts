@@ -13,6 +13,8 @@ import { isApprovalPending, notifyApprovalSubmitted } from '@client/app/hooks/da
 export type AdminUserUpdate = Omit<Partial<IUser>, 'isAdmin'> & {
   creditDelta?: number;
   creditReason?: string;
+  /** Sent after the typed large-grant confirmation; see server/admin/creditGrants/tierCap.ts. */
+  confirmLargeGrant?: boolean;
   throttleTier?: ThrottleTier;
   throttleReason?: string;
   statusChangeReason?: string;

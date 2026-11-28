@@ -296,6 +296,18 @@ export function runAfterCommit(
 }
 
 /**
+ * Runs `fn` outside the caller's transaction: its Mongoose queries take no ambient session from
+ * `transactionAsyncLocalStorage`, so its writes commit on their own, are visible to concurrent requests at
+ * once, and survive the caller's rollback or retry. Raw driver calls behave as they do anywhere else.
+ */
+export function outsideTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  // A real Mongoose 8 internal, not in its public types (see withAlsSession below).
+  const als = (mongoose as unknown as { transactionAsyncLocalStorage?: { exit<R>(callback: () => R): R } })
+    .transactionAsyncLocalStorage;
+  return als ? als.exit(fn) : fn();
+}
+
+/**
  * Execute a function within a MongoDB transaction with automatic retry on transient errors.
  *
  * Note: We have [transactionAsyncLocalStorage](https://mongoosejs.com/docs/transactions.html#asynclocalstorage)

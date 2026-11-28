@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { adminCreditGrant, adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
 import { updateUserSchema } from './update';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { CreditHolderType } from '@bike4mind/common';
@@ -387,6 +387,64 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: 0.5 }).success).toBe(false);
     expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: Infinity }).success).toBe(false);
     expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 0, creditDelta: -50 }).success).toBe(true);
+  });
+});
+
+describe('adminCreditGrant', () => {
+  it.each([
+    ['a positive creditDelta', { creditDelta: 300 }, 100, 300],
+    ['a negative creditDelta', { creditDelta: -300 }, 100, 0],
+    ['creditDelta over currentCredits', { creditDelta: 20, currentCredits: 500 }, 100, 20],
+    ['currentCredits above the balance, as new minus old', { currentCredits: 350_000 }, 100_000, 250_000],
+    ['currentCredits below the balance', { currentCredits: 50 }, 100, 0],
+    ['currentCredits from a negative balance', { currentCredits: 100 }, -40, 140],
+    ['no credit change', {}, 100, 0],
+  ])('counts %s', (_label, params, balance, expected) => {
+    expect(adminCreditGrant(params, balance)).toBe(expected);
+  });
+});
+
+describe('adminUpdateUser - confirmCreditGrant', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('re-runs the cap with the grant computed from the balance this write read', async () => {
+    const { adapters, incrementCredits } = makeAdapters(40);
+    const confirmCreditGrant = vi.fn(async () => undefined);
+
+    await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, currentCredits: 400, creditReason: 'Bonus' },
+      { ...adapters, confirmCreditGrant }
+    );
+
+    expect(confirmCreditGrant).toHaveBeenCalledWith(360);
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 360, expect.anything());
+  });
+
+  it('writes nothing when the recheck refuses the grant', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(40);
+    const refusal = Object.assign(new Error('over the limit'), { statusCode: 403 });
+
+    await expect(
+      adminUpdateUser(
+        ADMIN_ID,
+        { id: TARGET_ID, currentCredits: 400, creditReason: 'Bonus' },
+        { ...adapters, confirmCreditGrant: vi.fn(async () => Promise.reject(refusal)) }
+      )
+    ).rejects.toBe(refusal);
+
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('never rechecks a deduction', async () => {
+    const { adapters, incrementCredits } = makeAdapters(100);
+    const confirmCreditGrant = vi.fn(async () => undefined);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, { ...adapters, confirmCreditGrant });
+
+    expect(confirmCreditGrant).not.toHaveBeenCalled();
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 });
 

@@ -8,6 +8,8 @@ import { usersBulkExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/ad
 import { assertCanRunUsersBulkAction, tagsAddedBy } from '@server/admin/usersBulk/authorize';
 import { requestUsersBulkApprovalIfNeeded } from '@server/admin/usersBulk/approvalGate';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { requestAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
+import { usersBulkCreditGrantCap } from '@server/admin/creditGrants/tierCap';
 import {
   ADMIN_USERS_BULK_ROUTE_PERMISSIONS,
   AdminUsersBulkExecuteRequestSchema,
@@ -48,7 +50,10 @@ const handler = adminApi({
             fullAdmin: isFullAdmin(req.user),
             ...(gate.creditBalances ? { creditBalances: gate.creditBalances } : {}),
           },
-          usersBulkExecuteDeps(req, request.reason, req.logger)
+          {
+            ...usersBulkExecuteDeps(req, request.reason, req.logger),
+            capCreditGrant: usersBulkCreditGrantCap(req.user, requestAuditWriter(req), request.reason),
+          }
         );
         return res.json(result);
       } finally {

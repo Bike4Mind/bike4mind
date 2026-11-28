@@ -22,6 +22,43 @@ export type AdminAuditLogRecord = Omit<AuditEntry, 'id' | 'source'>;
 const IMMUTABLE_MESSAGE = 'AdminAuditLog entries are immutable';
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
+/** Every action that grants credits, subscription grants included. */
+const CREDIT_GRANT_ACTIONS_WITH_SUBSCRIPTIONS: readonly AdminAuditAction[] = [
+  ...ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+  'user.subscription.granted',
+];
+
+/**
+ * Admin grants to one user, for the per-recipient grant cap. Explicit rather than ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+ * which also holds undo entries (`user.bulk.undone`: reversing a Contain is not a grant) and signup releases.
+ */
+const RECIPIENT_GRANT_ACTIONS: readonly AdminAuditAction[] = [
+  'user.credits.adjusted',
+  'user.bulk.credits_adjusted',
+  'user.subscription.granted',
+];
+
+/** Admin grants that fund an organization, for the cap on team subscription grants to it. */
+const ORGANIZATION_GRANT_ACTIONS: readonly AdminAuditAction[] = [
+  'org.credits.granted',
+  'org.credits.topped_up',
+  'org.credits.adjusted',
+  'user.subscription.granted',
+];
+
+/**
+ * Positive grants to one user since `since`; served by the target.kind / target.id / occurredAt index. A team
+ * subscription grant funds the organization, so it counts there (sumCreditsGrantedToOrganization), not here.
+ */
+const creditGrantsToUser = (targetUserId: string, since: Date) => ({
+  'target.kind': 'user',
+  'target.id': targetUserId,
+  occurredAt: { $gte: since },
+  action: { $in: [...RECIPIENT_GRANT_ACTIONS] },
+  'details.credits': { $gt: 0 },
+  'details.subscriptionType': { $ne: 'team' },
+});
+
 const ActorSchema = new Schema(
   {
     kind: { type: String, enum: ['user', 'apiKey', 'system', 'script'], required: true },
@@ -549,16 +586,54 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
   ): Promise<number> {
     const approved = options.excludeApproved ? { 'details.approval': { $exists: false } } : {};
     const actions = options.includeSubscriptionGrants
-      ? [...ADMIN_AUDIT_CREDIT_GRANT_ACTIONS, 'user.subscription.granted']
+      ? CREDIT_GRANT_ACTIONS_WITH_SUBSCRIPTIONS
       : ADMIN_AUDIT_CREDIT_GRANT_ACTIONS;
     const [total] = await this.auditLogModel
       .aggregate<{ credits: number }>([
         {
           $match: {
             ...creditGrantsBy(actorUserId),
-            action: { $in: actions },
+            action: { $in: [...actions] },
             occurredAt: { $gte: since },
             ...approved,
+          },
+        },
+        { $group: { _id: null, credits: { $sum: '$details.credits' } } },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+    return total?.credits ?? 0;
+  }
+
+  async sumCreditsGrantedTo(targetUserId: string, since: Date): Promise<number> {
+    const [total] = await this.auditLogModel
+      .aggregate<{ credits: number }>([
+        { $match: creditGrantsToUser(targetUserId, since) },
+        { $group: { _id: null, credits: { $sum: '$details.credits' } } },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+    return total?.credits ?? 0;
+  }
+
+  async listCreditGrantsTo(targetUserId: string, since: Date, limit: number): Promise<AuditEntry[]> {
+    const records = await this.auditLogModel
+      .find(creditGrantsToUser(targetUserId, since))
+      .sort({ occurredAt: -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS)
+      .lean<StoredRecord[]>();
+    return records.map(toAuditEntry);
+  }
+
+  async sumCreditsGrantedToOrganization(organizationId: string, since: Date): Promise<number> {
+    const [total] = await this.auditLogModel
+      .aggregate<{ credits: number }>([
+        {
+          // Each branch is served by its own index: organizationId / occurredAt, and target.kind / target.id / occurredAt.
+          $match: {
+            $or: [{ organizationId }, { 'target.kind': 'organization', 'target.id': organizationId }],
+            occurredAt: { $gte: since },
+            action: { $in: [...ORGANIZATION_GRANT_ACTIONS] },
+            'details.credits': { $gt: 0 },
           },
         },
         { $group: { _id: null, credits: { $sum: '$details.credits' } } },

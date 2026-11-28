@@ -10,6 +10,7 @@ import { selfIdsOf } from './actor';
 import { usersBulkExecuteDepsFor } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { assertCanRunUsersBulkAction, tagsAddedBy } from './authorize';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { usersBulkCreditGrantCap } from '@server/admin/creditGrants/tierCap';
 
 /**
  * Runs an approved bulk execute as the approver. Neither admin is ever acted on, and a cohort that
@@ -26,9 +27,14 @@ export const executeApprovedUsersBulk: ApprovalExecutor = async (params, { req, 
   // Delegated-admin accounts stay in the cohort only when both admins could act on them; a cohort the
   // requester's preview resolved differently is then a 409, as for any cohort that changed.
   const fullAdmin = isFullAdmin(req.user) && isFullAdmin(await userRepository.findById(approval.requestedBy.id));
+  const write = approvalAuditWriter(req, approval);
+  // The approver's tier applies: an approved batch is still held to the per-recipient grant cap.
   return executeAdminUsersBulk(
     request,
     { id: req.user.id, selfIds, fullAdmin },
-    usersBulkExecuteDepsFor(approvalAuditWriter(req, approval), request.reason, req.logger)
+    {
+      ...usersBulkExecuteDepsFor(write, request.reason, req.logger),
+      capCreditGrant: usersBulkCreditGrantCap(req.user, write, request.reason),
+    }
   );
 };

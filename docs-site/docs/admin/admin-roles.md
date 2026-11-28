@@ -35,7 +35,7 @@ Open **Admin > Roles** and choose **Create from a template** to start from one o
 ## Managing roles
 
 - Only a full administrator can create, edit or delete a role, and only a full administrator can give a role to a user or take it away. Holding `settings:manage` is not enough.
-- Adding `credits:self_grant` or `credits:approve_self_grant` to a role, or giving such a role to a user, also needs you to hold that permission yourself. See [Credit grants to your own account](./delegated-permissions.md#credit-grants-to-your-own-account).
+- Adding `credits:self_grant` or `credits:approve_self_grant` to a role, or giving such a role to a user, also needs you to hold that permission yourself, and every account that would gain it must be on the deployment's senior granter list. See [Credit grants to your own account](./delegated-permissions.md#credit-grants-to-your-own-account).
 - Give or remove roles on the user's profile, in the same editor as their delegated permissions. See [Granting permissions](./delegated-permissions.md#granting-permissions).
 - Changing a role's permissions requires a reason. The audit log records the permissions granted and revoked, the reason, and how many members the change reached.
 - A role that still has members cannot be deleted. Remove it from each member first, so deleting a role never takes access away from anyone silently.

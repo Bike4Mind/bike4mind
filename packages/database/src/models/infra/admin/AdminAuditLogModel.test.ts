@@ -448,3 +448,170 @@ describe('AdminAuditLogRepository.sumCreditsGranted excludeApproved', () => {
     );
   });
 });
+
+describe('AdminAuditLogRepository.sumCreditsGrantedTo', () => {
+  setupMongoTest();
+
+  const otherAdmin = {
+    kind: 'user' as const,
+    scope: 'platform' as const,
+    userId: 'admin-2',
+    name: 'Other',
+    wasAdmin: true,
+  };
+
+  it('sums positive grants to one user from every admin, approved and subscription grants included', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    const at = new Date('2026-03-02T00:00:00Z');
+    await adminAuditLogRepository.append(entry({ action: 'user.credits.adjusted', details: { credits: 100 } }, at));
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.bulk.credits_adjusted', actor: otherAdmin, details: { credits: 200 } }, at)
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.subscription.granted', details: { credits: 400, approval: { id: 'approval-1' } } }, since)
+    );
+    // Not counted: a deduction, another user, an earlier grant, an org target and a non-grant action.
+    await adminAuditLogRepository.append(entry({ action: 'user.credits.adjusted', details: { credits: -50 } }, at));
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.credits.adjusted',
+          target: { kind: 'user', id: 'someone-else', displayName: 'x' },
+          details: { credits: 800 },
+        },
+        at
+      )
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.credits.adjusted', details: { credits: 1600 } }, new Date(since.getTime() - 1))
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'org.credits.granted',
+          target: { kind: 'organization', id: USER_ID, displayName: 'Org' },
+          details: { credits: 3200 },
+        },
+        at
+      )
+    );
+    await adminAuditLogRepository.append(entry({ action: 'user.credits.denied', details: { credits: 6400 } }, at));
+    // Nor an undo (reversing a Contain restores credits), a signup release, or a team grant (counts on the org).
+    await adminAuditLogRepository.append(entry({ action: 'user.bulk.undone', details: { credits: 12_800 } }, at));
+    await adminAuditLogRepository.append(
+      entry({ action: 'signup_domain_hold.released', details: { credits: 25_600 } }, at)
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.subscription.granted',
+          organizationId: 'org-1',
+          details: { credits: 51_200, subscriptionType: 'team' },
+        },
+        at
+      )
+    );
+
+    await expect(adminAuditLogRepository.sumCreditsGrantedTo(USER_ID, since)).resolves.toBe(700);
+    await expect(adminAuditLogRepository.sumCreditsGrantedTo('nobody', since)).resolves.toBe(0);
+  });
+});
+
+describe('AdminAuditLogRepository.listCreditGrantsTo', () => {
+  setupMongoTest();
+
+  it('lists the newest counted grants in the window first, up to the limit', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    const hour = (n: number) => new Date(since.getTime() + n * 60 * 60 * 1000);
+    for (const [credits, at] of [
+      [100, hour(1)],
+      [200, hour(4)],
+      [300, hour(2)],
+      [400, hour(3)],
+    ] as const) {
+      await adminAuditLogRepository.append(entry({ action: 'user.credits.adjusted', details: { credits } }, at));
+    }
+    // Not listed: before the window, a deduction, another user and a non-grant action.
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.credits.adjusted', details: { credits: 800 } }, new Date(since.getTime() - 1))
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.credits.adjusted', details: { credits: -50 } }, hour(5))
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.credits.adjusted',
+          target: { kind: 'user', id: 'someone-else', displayName: 'x' },
+          details: { credits: 1600 },
+        },
+        hour(6)
+      )
+    );
+    await adminAuditLogRepository.append(entry({ action: 'user.credits.denied', details: { credits: 3200 } }, hour(7)));
+
+    const listed = await adminAuditLogRepository.listCreditGrantsTo(USER_ID, since, 3);
+
+    expect(listed.map(row => row.details?.credits)).toEqual([200, 400, 300]);
+    expect(listed[0]).toMatchObject({ occurredAt: hour(4), actor: { name: 'Admin' } });
+    await expect(adminAuditLogRepository.listCreditGrantsTo(USER_ID, hour(3), 3)).resolves.toHaveLength(2);
+  });
+});
+
+describe('AdminAuditLogRepository.sumCreditsGrantedToOrganization', () => {
+  setupMongoTest();
+
+  it('sums team grants to its members and grants targeting it, from every admin', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    const at = new Date('2026-03-02T00:00:00Z');
+    const memberB = new Types.ObjectId().toHexString();
+    const teamGrant = (credits: number, member: string) =>
+      entry(
+        {
+          action: 'user.subscription.granted',
+          target: { kind: 'user', id: member, displayName: 'member' },
+          organizationId: ORG_ID,
+          details: { subscriptionType: 'team', credits },
+        },
+        at
+      );
+    await adminAuditLogRepository.append(teamGrant(100, USER_ID));
+    await adminAuditLogRepository.append(teamGrant(200, memberB));
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'org.credits.granted',
+          target: { kind: 'organization', id: ORG_ID, displayName: 'Org' },
+          details: { credits: 400 },
+        },
+        at
+      )
+    );
+    // Not counted: an org deduction, another organization, an earlier grant, a user grant without the org.
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'org.credits.adjusted',
+          target: { kind: 'organization', id: ORG_ID, displayName: 'Org' },
+          details: { credits: -50 },
+        },
+        at
+      )
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.subscription.granted',
+          organizationId: new Types.ObjectId().toHexString(),
+          details: { credits: 800 },
+        },
+        at
+      )
+    );
+    await adminAuditLogRepository.append({ ...teamGrant(1600, USER_ID), occurredAt: new Date(since.getTime() - 1) });
+    await adminAuditLogRepository.append(entry({ action: 'user.credits.adjusted', details: { credits: 3200 } }, at));
+
+    await expect(adminAuditLogRepository.sumCreditsGrantedToOrganization(ORG_ID, since)).resolves.toBe(700);
+    await expect(adminAuditLogRepository.sumCreditsGrantedToOrganization('nobody', since)).resolves.toBe(0);
+  });
+});

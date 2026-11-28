@@ -3,6 +3,7 @@ import {
   ForbiddenError,
   NotFoundError,
   assertCanChangeExplicitOnlyPermissions,
+  isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminPermissions,
   type AdminPermissionId,
@@ -13,6 +14,7 @@ import {
 import type { IAdminRoleRepository } from '@bike4mind/database';
 import { parseAdminActionReason, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { assertListedForExplicitOnly, fenceExplicitOnlyPermissions } from '@server/admin/creditGrants/seniorGranters';
 
 /**
  * Admin role CRUD (pages/api/admin/admin-roles). Reads are open to support:read; every write is
@@ -27,6 +29,8 @@ export type AdminRolesDeps = {
   roles: IAdminRoleRepository;
   /** Users holding each role; a role nobody holds may be missing from the map. */
   memberCounts: (roleIds: readonly string[]) => Promise<Map<string, number>>;
+  /** Ids of the users holding the role. */
+  memberIds: (roleId: string) => Promise<string[]>;
   /** Drops the role from any user still holding it (an assignment that raced the delete); returns how many. */
   removeFromMembers: (roleId: string) => Promise<number>;
   audit: AdminAuditWriter;
@@ -77,7 +81,7 @@ export async function createAdminRole(
   deps: AdminRolesDeps
 ): Promise<AdminRoleWithMembers> {
   assertCanEditRoles(actor);
-  assertCanChangeExplicitOnlyPermissions(actor, [], input.permissions);
+  assertCanChangeExplicitOnlyPermissions(fenceExplicitOnlyPermissions(actor), [], input.permissions);
   return deps.transaction(async () => {
     let role: AdminRole;
     try {
@@ -111,7 +115,13 @@ export async function updateAdminRole(
     // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
     const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
     const requestedDiff = diff(before.permissions, requested);
-    assertCanChangeExplicitOnlyPermissions(actor, before.permissions, requested);
+    assertCanChangeExplicitOnlyPermissions(fenceExplicitOnlyPermissions(actor), before.permissions, requested);
+    // Every member gains an added explicit-only permission, so each must be on the senior granter list.
+    if (requested.some(id => isExplicitOnlyAdminPermission(id) && !before.permissions.includes(id))) {
+      for (const memberId of await deps.memberIds(roleId)) {
+        assertListedForExplicitOnly(memberId, before.permissions, requested);
+      }
+    }
     if (requestedDiff.granted.length > 0 || requestedDiff.revoked.length > 0) parseAdminActionReason(reason);
     if (requestedDiff.granted.length > 0) await deps.requireStepUp();
     let after: AdminRole | null;

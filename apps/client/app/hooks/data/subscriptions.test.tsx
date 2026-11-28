@@ -3,7 +3,12 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
-import { useCancelSubscription, useGetSubscriptionsByOwner, useSubscribePlan } from './subscriptions';
+import {
+  useCancelSubscription,
+  useGetSubscriptionsByOwner,
+  useGrantSubscription,
+  useSubscribePlan,
+} from './subscriptions';
 
 /**
  * The cancel route returns Stripe's own `status` so the cached row stops reading as a
@@ -18,7 +23,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: (...args: unknown[]) => apiPost(...args), put: vi.fn(), get: (...args: unknown[]) => apiGet(...args) },
 }));
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 const row = (overrides: Partial<IUserSubscription> = {}) =>
   ({
@@ -88,6 +93,39 @@ describe('useCancelSubscription', () => {
       expect(cached(queryClient).find(sub => sub.subscriptionId === 'sub_live')?.status).toBe('canceled')
     );
     expect(cached(queryClient).find(sub => sub.subscriptionId === 'sub_stale')?.status).toBe('past_due');
+  });
+});
+
+describe('useGrantSubscription', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+  });
+
+  const grant = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    Wrapper.displayName = 'TestQueryClientWrapper';
+    const { result } = renderHook(() => useGrantSubscription(), { wrapper: Wrapper });
+    result.current.mutate({ userId: 'user-1', subscriptionType: 'team', seats: 2, reason: 'Pilot onboarding' });
+    return invalidate;
+  };
+
+  it("refreshes the user's admin views, so the recent credit grants show the new grant", async () => {
+    apiPost.mockResolvedValue({ data: { success: true, message: 'Granted' } });
+    const invalidate = grant();
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'users', 'user-1'] }));
+  });
+
+  it('leaves them alone when the grant went for approval', async () => {
+    apiPost.mockResolvedValue({
+      data: { approvalId: 'approval-1', status: 'pending', expiresAt: '2026-06-16T00:00:00Z' },
+    });
+    const invalidate = grant();
+    await waitFor(() => expect(invalidate).toHaveBeenCalled());
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['admin', 'users', 'user-1'] });
   });
 });
 

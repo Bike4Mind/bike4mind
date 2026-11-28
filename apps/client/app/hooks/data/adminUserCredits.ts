@@ -4,6 +4,7 @@ import {
   ADMIN_LEDGER_PAGE_SIZE,
   type AdminCreditSummary,
   type AdminLedgerFilter,
+  type AdminRecentCreditGrants,
   type AdminLedgerPage,
   type AdminRevokeAllApiKeysResponse,
   type AdminRotateApiKeyResponse,
@@ -36,6 +37,17 @@ export const useAdminCreditLedger = (userId: string, filter: AdminLedgerFilter, 
     initialPageParam: undefined as string | undefined,
     staleTime: 1000 * 30,
     enabled,
+  });
+
+/** The user's admin grants in the grant cap window and the caller's immediate limit for them, for the grant dialogs. */
+export const useAdminRecentCreditGrants = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'recent-credit-grants'],
+    queryFn: async (): Promise<AdminRecentCreditGrants> => {
+      const response = await api.get<AdminRecentCreditGrants>(`${userPath(userId)}/recent-credit-grants`);
+      return response.data;
+    },
+    staleTime: 1000 * 30,
   });
 
 export const useAdminCreditSummary = (userId: string) =>

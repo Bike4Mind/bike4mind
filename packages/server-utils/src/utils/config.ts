@@ -149,6 +149,11 @@ const Config = {
   ),
   // JSON map of product slug -> Slack webhook for the QA status alarm (server/qa/evaluateAlarm.ts).
   QA_ALARM_SLACK_WEBHOOKS: readOptionalSecret('QA_ALARM_SLACK_WEBHOOKS', () => Resource.QA_ALARM_SLACK_WEBHOOKS.value),
+  // Comma-separated user ids of senior credit granters, parsed by
+  // apps/client/server/admin/creditGrants/seniorGranters.ts. Unset = nobody is senior.
+  ADMIN_SENIOR_GRANTER_IDS: unlessUnconfigured(
+    readOptionalSecret('ADMIN_SENIOR_GRANTER_IDS', () => Resource.ADMIN_SENIOR_GRANTER_IDS.value)
+  ),
   STAGE: Resource.App.stage,
 } as const;
 

@@ -9,8 +9,16 @@ import RemoveIcon from '@mui/icons-material/Remove';
 import React, { useState, useMemo } from 'react';
 import UserSelector from '@client/app/components/admin/shared/UserSelector';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import {
+  CreditGrantNotice,
+  isCreditGrantLimitError,
+  planCreditGrant,
+  planTypedConfirm,
+} from '@client/app/components/admin/shared/CreditGrantNotice';
 import { ChangePreview } from '@client/app/components/admin/shared/ChangePreview';
+import { RecentCreditGrants } from '@client/app/components/admin/shared/RecentCreditGrants';
 import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
+import { useAdminRecentCreditGrants } from '@client/app/hooks/data/adminUserCredits';
 
 interface GrantSubscriptionModalProps {
   user: AdminUserListItem;
@@ -33,6 +41,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const grantSubscription = useGrantSubscription();
   const plans = useGetSubscriptionPlans();
   const currentSubscriptions = useGetUserSubscriptions(user.id);
+  const recentGrants = useAdminRecentCreditGrants(user.id);
 
   const availableIndividualPlans = useMemo(() => {
     if (!plans.data) return [];
@@ -53,8 +62,30 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
     resetForm();
   };
 
+  const selectedPlan = availableIndividualPlans.find(plan => plan.priceId === priceId);
+  const grantedCredits = ((): number => {
+    if (subscriptionType === 'team') return seats * creditsPerSeat * durationMonths;
+    return selectedPlan ? selectedPlan.credits * durationMonths : 0;
+  })();
+  // A team grant creates a new organization, which has received nothing yet; the cap counts it there.
+  const figures =
+    recentGrants.data && subscriptionType === 'team' ? { ...recentGrants.data, receivedCredits: 0 } : recentGrants.data;
+  // Subscriptions are exempt from the hard limit: approval is their control.
+  const plan = planCreditGrant(grantedCredits, figures, { hardLimited: false });
+  const typedConfirm = planTypedConfirm(plan);
+  const largeGrant = typedConfirm ? { confirmLargeGrant: true } : {};
+
   // A rejection propagates to ActionDialog, which keeps the dialog open; the hook has already toasted.
   const handleConfirm = async (reason: string) => {
+    try {
+      await grant(reason);
+    } catch (error) {
+      if (isCreditGrantLimitError(error)) void recentGrants.refetch();
+      throw error;
+    }
+  };
+
+  const grant = async (reason: string) => {
     if (subscriptionType === 'individual') {
       if (!priceId) return;
       await grantSubscription.mutateAsync({
@@ -63,6 +94,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         priceId,
         durationMonths,
         reason,
+        ...largeGrant,
       });
     } else {
       if (!organizationName.trim()) return;
@@ -74,16 +106,11 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         durationMonths,
         billingOwnerId: billingOwnerId || undefined,
         reason,
+        ...largeGrant,
       });
     }
     handleClose();
   };
-
-  const selectedPlan = availableIndividualPlans.find(plan => plan.priceId === priceId);
-  const grantedCredits = ((): number => {
-    if (subscriptionType === 'team') return seats * creditsPerSeat * durationMonths;
-    return selectedPlan ? selectedPlan.credits * durationMonths : 0;
-  })();
 
   const blockedReason = ((): string | null => {
     if (subscriptionType === 'individual') return priceId ? null : 'Select a plan to grant.';
@@ -111,9 +138,14 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
       title={`Grant subscription to ${user.name}`}
       description="Creates an admin-granted subscription and adds its credits now. It is not billed through Stripe."
       reasonPresets={ADMIN_REASON_PRESETS.subscriptionGrant}
-      confirmLabel={`Grant ${durationMonths} month${durationMonths > 1 ? 's' : ''}`}
+      confirmLabel={
+        plan.kind === 'approval'
+          ? 'Submit for approval'
+          : `Grant ${durationMonths} month${durationMonths > 1 ? 's' : ''}`
+      }
       onConfirm={handleConfirm}
       blockedReason={blockedReason}
+      typedConfirm={typedConfirm}
       pending={grantSubscription.isPending}
       data-testid="grant-subscription-dialog"
       testIds={{ reason: 'grant-subscription-reason-input' }}
@@ -244,6 +276,8 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
           delta={{ label: `+${grantedCredits.toLocaleString()} credits`, tone: 'good' }}
           data-testid="grant-subscription-preview"
         />
+        <CreditGrantNotice credits={grantedCredits} plan={plan} data-testid="grant-subscription-grant-value" />
+        <RecentCreditGrants userId={user.id} data-testid="grant-subscription-recent-grants" />
       </Stack>
     </ActionDialog>
   );

@@ -178,6 +178,7 @@ export async function previewAdminUsersBulk(
   let alreadyApplied = 0;
   let apiKeysToRevoke = 0;
   let creditsAdded = 0;
+  let creditsGranted = 0;
   for (const user of users) {
     const keys = liveKeys.get(user.id) ?? 0;
     if (isAlreadyApplied(action, user, keys)) {
@@ -185,7 +186,9 @@ export async function previewAdminUsersBulk(
       continue;
     }
     if (revokesKeys(action, user)) apiKeysToRevoke += keys;
-    creditsAdded += creditDeltaFor(action, user.currentCredits);
+    const delta = creditDeltaFor(action, user.currentCredits);
+    creditsAdded += delta;
+    creditsGranted += Math.max(0, delta);
   }
   return {
     matched: cohort.matched,
@@ -196,6 +199,7 @@ export async function previewAdminUsersBulk(
     apiKeysToRevoke,
     // The contract reports removal as positive.
     creditsDelta: 0 - creditsAdded,
+    creditsGranted,
     creditsOverCap: exceedsCreditTotal(netCreditsAdded(action, users)),
     cohortHash: cohortHashOf(users),
     // Over every eligible user, already contained or not: their domains are still blocked.

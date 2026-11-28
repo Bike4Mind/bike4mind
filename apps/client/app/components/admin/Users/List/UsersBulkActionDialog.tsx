@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog } from '../../shared/ActionDialog';
+import { CreditGrantNotice } from '../../shared/CreditGrantNotice';
 import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';
 import { SegmentedControl } from '../../shared/SegmentedControl';
 import { useUsersBulkResult } from './useUsersBulkResult';
@@ -323,6 +324,11 @@ export function UsersBulkActionDialog({
             label="Also block their email domains for new signups"
             slotProps={{ input: { 'data-testid': 'admin-users-bulk-block-domains-checkbox' } }}
           />
+        )}
+        {current && type === 'adjustCredits' && (
+          // A batch cannot ask for approval or the typed phrase: a user it would take past the admin's
+          // immediate limit is refused on its own row by the server (tierCap.ts usersBulkCreditGrantCap).
+          <CreditGrantNotice credits={current.creditsGranted} data-testid="admin-users-bulk-grant-value" />
         )}
         {current ? (
           <DryRunSummary preview={current} type={type} />

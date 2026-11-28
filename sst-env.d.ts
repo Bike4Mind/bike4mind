@@ -6,6 +6,10 @@
 
 declare module "sst" {
   export interface Resource {
+    "ADMIN_SENIOR_GRANTER_IDS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "ANTHROPIC_ADMIN_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string

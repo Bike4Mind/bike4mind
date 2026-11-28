@@ -143,11 +143,27 @@ describe('previewAdminUsersBulk', () => {
       overCap: false,
       apiKeysToRevoke: 3,
       creditsDelta: 140,
+      creditsGranted: 0,
       creditsOverCap: false,
       cohortHash: cohortHashOf(users),
       emailDomains: null,
       sample: users.map(row => ({ id: row.id, name: row.name, email: row.email })),
     });
+  });
+
+  it('prices only the users a set raises, not offset by the users it lowers', async () => {
+    const users = [
+      user(1, { currentCredits: 0 }),
+      user(2, { currentCredits: 1_500 }),
+      user(3, { currentCredits: 200 }),
+    ];
+    const preview = await previewAdminUsersBulk(
+      { matched: 3, eligible: users, excluded: { self: 0, admins: 0 }, overCap: false },
+      { type: 'adjustCredits', mode: 'set', amount: 1_000 },
+      { countLiveApiKeys: async () => new Map(), blockedEmailDomains: vi.fn() }
+    );
+    expect(preview.creditsGranted).toBe(1_800);
+    expect(preview.creditsDelta).toBe(-1_300);
   });
 
   it('counts the keys a suspend disables only for users it would ban', async () => {

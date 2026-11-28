@@ -161,6 +161,23 @@ describe('ActionDialog', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it('lets a secondary commit skip the typed confirmation, never the reason', async () => {
+    const onSecondary = vi.fn();
+    const confirm = openDialog({
+      typedConfirm: { expected: 'I UNDERSTAND', noun: 'phrase' },
+      secondaryAction: { label: 'Grant 70,000 now', onConfirm: onSecondary, skipTypedConfirm: true },
+    });
+    const secondary = screen.getByTestId('adjust-dialog-secondary-btn');
+
+    expect(secondary).toBeDisabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    expect(confirm).toBeDisabled();
+    expect(secondary).toBeEnabled();
+    fireEvent.click(secondary);
+
+    await waitFor(() => expect(onSecondary).toHaveBeenCalledWith('Goodwill credit'));
+  });
+
   it('combines a preset and a note as "Preset: note"', async () => {
     const onConfirm = vi.fn();
     const confirm = openDialog({ onConfirm });

@@ -30,6 +30,12 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
+const grantCap = vi.hoisted(() => ({
+  received: vi.fn(async (..._args: unknown[]) => 0),
+  orgReceived: vi.fn(async (..._args: unknown[]) => 0),
+  rows: new Map<string, { subjectId: string; kind: string; amount: number }>(),
+}));
+
 let inTransaction = false;
 let insideTransactionAtAudit: boolean | undefined;
 const mockUserFindById = vi.fn();
@@ -39,6 +45,23 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
+  // The real grant cap (server/admin/creditGrants/tierCap.ts) runs over these.
+  adminAuditLogRepository: {
+    sumCreditsGrantedTo: (...a: unknown[]) => grantCap.received(...a),
+    sumCreditsGrantedToOrganization: (...a: unknown[]) => grantCap.orgReceived(...a),
+  },
+  adminGateReservationRepository: {
+    reserve: async (subjectId: string, kind: string, amount: number) => {
+      const id = String(grantCap.rows.size + 1);
+      grantCap.rows.set(id, { subjectId, kind, amount });
+      return id;
+    },
+    sumReserved: async (subjectId: string, kind: string) =>
+      [...grantCap.rows.values()]
+        .filter(row => row.subjectId === subjectId && row.kind === kind)
+        .reduce((total, row) => total + row.amount, 0),
+    release: async (id: string) => void grantCap.rows.delete(id),
+  },
   withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
     inTransaction = true;
     try {
@@ -81,6 +104,8 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   };
 });
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
+// Every account counts as listed here; the senior granter list is covered by seniorGranters.test.ts and tierCap.test.ts.
+vi.mock('@server/admin/creditGrants/seniorGranters', () => ({ fenceExplicitOnlyPermissions: <T>(actor: T) => actor }));
 
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -91,7 +116,9 @@ const approvalMocks = vi.hoisted(() => ({
   gateOptions: vi.fn(),
 }));
 const DISABLED_POLICY = { enabled: false, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
-vi.mock('@server/admin/creditGrants/gate', () => ({
+vi.mock('@server/admin/creditGrants/gate', async importOriginal => ({
+  // The grant cap reserves through the real reserveWithinWindow.
+  ...(await importOriginal<typeof import('@server/admin/creditGrants/gate')>()),
   // Like the real gate, a held self-grant gets the policy even with approvals disabled.
   creditGrantNeedsApproval: async (credits: number, _actorId: string, opts?: { heldSelfGrant?: boolean }) => {
     approvalMocks.gateOptions(opts);
@@ -112,6 +139,12 @@ import type { AdminApproval } from '@bike4mind/common';
 import { grantSubscription } from '@server/admin/creditGrants/grantSubscription';
 
 const REASON = 'Comped for the design partner pilot';
+
+beforeEach(() => {
+  grantCap.received.mockReset().mockResolvedValue(0);
+  grantCap.orgReceived.mockReset().mockResolvedValue(0);
+  grantCap.rows.clear();
+});
 
 function call(seats: number) {
   const { req, res } = createMocks({
@@ -354,21 +387,14 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
       );
     });
 
-    it('holds a grant to the account an impersonating admin impersonates from, even with credits:self_grant', async () => {
-      approvalMocks.request.mockResolvedValue(PENDING);
-      const user = {
-        isAdmin: true,
-        id: 'admin-2',
-        email: 'b@example.com',
-        adminPermissions: ['credits:self_grant'],
-        impersonatedBy: 'admin-1',
-      };
+    it('runs a grant up to 100,000 to the account an impersonating admin impersonates from, flagged', async () => {
+      const user = { isAdmin: true, id: 'admin-2', email: 'b@example.com', impersonatedBy: 'admin-1' };
       await callWith({ ...body, reason: REASON }, 'admin-1', user)();
-      expect(mockAddCredits).not.toHaveBeenCalled();
-      expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect(approvalMocks.request).not.toHaveBeenCalled();
+      expect(mockAddCredits).toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ requiredPermission: 'credits:approve_self_grant' }),
-        expect.anything()
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: true }) })
       );
     });
 
@@ -435,25 +461,40 @@ describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', ()
     );
   });
 
-  it.each([
-    ['direct', undefined],
-    ['impersonated', { impersonatedBy: 'admin-2', adminPermissions: ['credits:self_grant'] }],
-  ])('holds a %s self-grant with approvals disabled and answers 202', async (_label, extra) => {
+  it('runs a self-grant up to 100,000 at once with approvals disabled', async () => {
     mockUserFindById.mockResolvedValue({ id: 'admin-1', email: 'a@example.com' });
     const { req, res } = createMocks({
       method: 'POST',
       query: { userId: 'admin-1' },
       body: { subscriptionType: 'team', organizationName: 'Acme', seats: 5, reason: REASON },
     });
-    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1', ...extra };
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1' };
     (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
-    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith(undefined);
+    expect(res._getStatusCode()).toBe(200);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+    expect(mockSubCreate).toHaveBeenCalled();
+  });
+
+  it('queues a self-grant that takes the admin past 100,000 for a listed approver, whatever the approval settings', async () => {
+    grantCap.received.mockResolvedValue(100_000);
+    mockUserFindById.mockResolvedValue({ id: 'admin-1', email: 'a@example.com' });
+    const plan = SUBSCRIPTION_PLANS[0];
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { userId: 'admin-1' },
+      body: { subscriptionType: 'individual', priceId: plan.priceId, reason: REASON, confirmLargeGrant: true },
+    });
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1' };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
     expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.policy).not.toHaveBeenCalled();
     expect(approvalMocks.request).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
-      DISABLED_POLICY
+      undefined
     );
     expect(mockSubCreate).not.toHaveBeenCalled();
   });
@@ -509,18 +550,29 @@ describe('team grant crediting an organization the admin belongs to', () => {
       'a new organization billed to the admin',
       { ...existingOrgBody, organizationId: undefined, organizationName: 'Acme', billingOwnerId: 'admin-1' },
     ],
-  ])('holds a grant to %s for credits:approve_self_grant', async (_label, body) => {
+  ])('runs a grant up to 100,000 to %s at once, flagged as a self-grant', async (_label, body) => {
     const { res, run } = callAs(body);
     await run();
-    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(res._getStatusCode()).toBe(200);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+    expect(mockAddCredits).toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ details: expect.objectContaining({ selfGrant: true }) })
+    );
+  });
+
+  it('holds such a grant for credits:approve_self_grant when the approval settings hold it', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = callAs(existingOrgBody);
+    await run();
     expect(res._getStatusCode()).toBe(202);
     expect(approvalMocks.request).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
-      DISABLED_POLICY
+      POLICY
     );
     expect(mockAddCredits).not.toHaveBeenCalled();
-    expect(mockSubCreate).not.toHaveBeenCalled();
   });
 
   it('runs the grant for an admin holding credits:self_grant and flags it in the audit entry', async () => {
@@ -538,11 +590,10 @@ describe('team grant crediting an organization the admin belongs to', () => {
     );
   });
 
-  it('runs a grant to an organization the admin is not part of without holding it', async () => {
+  it('runs a grant to an organization the admin is not part of without flagging it', async () => {
     mockOrgFindById.mockResolvedValue({ ...ORG, users: [{ userId: 'user-1' }] });
     const { res, run } = callAs(existingOrgBody);
     await run();
-    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: false });
     expect(res._getStatusCode()).toBe(200);
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -603,6 +654,171 @@ describe('team grant crediting an organization the admin belongs to', () => {
         grantSubscription(approverReq({ id: 'admin-2', isAdmin: true }), newOrgParams, approval)
       ).rejects.toThrow('You cannot approve credits for an organization you belong to');
       expect(mockOrgCreate).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('POST /api/admin/users/[userId]/grant-subscription - per-recipient grant cap', () => {
+  const ORG = { id: 'org-9', name: 'Acme', userId: 'owner-1', seats: 10, users: [{ userId: 'user-1' }] };
+  const teamBody = { subscriptionType: 'team', organizationId: 'org-9', seats: 5, reason: REASON };
+  const APPROVER = { id: 'admin-3', adminPermissions: ['credits:adjust', 'credits:approve_self_grant'] };
+  const deniedEntries = () =>
+    vi.mocked(recordAdminActionFromRequest).mock.calls.filter(([, input]) => input.action === 'user.credits.denied');
+
+  function callAs(body: Record<string, unknown>, user: Record<string, unknown> = { isAdmin: true, id: 'admin-1' }) {
+    const { req, res } = createMocks({ method: 'POST', query: { userId: 'user-1' }, body });
+    Object.assign(req, { user, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
+    mockOrgFindById.mockResolvedValue(ORG);
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockFindUserSub.mockResolvedValue(null);
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('refuses a team grant past 100,000 on the organization without the typed phrase, queueing nothing', async () => {
+    grantCap.orgReceived.mockResolvedValue(98_000);
+
+    await expect(callAs(teamBody).run()).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: expect.objectContaining({ subject: 'organization', reason: 'confirmation_required' }),
+    });
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(deniedEntries()[0][1]).toMatchObject({
+      organizationId: 'org-9',
+      details: { attemptedAction: 'user.subscription.granted', limitedBy: 'organization', receivedCredits: 98_000 },
+    });
+  });
+
+  it('queues the whole grant for a listed approver with the phrase, whatever the approval settings', async () => {
+    grantCap.orgReceived.mockResolvedValue(98_000);
+
+    const { res, run } = callAs({ ...teamBody, confirmLargeGrant: true });
+    await run();
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.policy).not.toHaveBeenCalled();
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscription.grant',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+        params: expect.objectContaining({ confirmLargeGrant: true, creditsAtRequest: 5000 }),
+      }),
+      undefined
+    );
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  it('counts a team grant against the organization, not the member', async () => {
+    grantCap.received.mockResolvedValue(600_000);
+
+    const { res, run } = callAs(teamBody);
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(grantCap.received).not.toHaveBeenCalled();
+    expect(grantCap.orgReceived).toHaveBeenCalledWith('org-9', expect.any(Date));
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  it('counts an individual grant against the user', async () => {
+    const plan = SUBSCRIPTION_PLANS[0];
+    grantCap.received.mockResolvedValue(100_000);
+
+    const body = { subscriptionType: 'individual', priceId: plan.priceId, reason: REASON, confirmLargeGrant: true };
+    const { res, run } = callAs(body);
+    await run();
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(grantCap.received).toHaveBeenCalledWith('user-1', expect.any(Date));
+  });
+
+  it('lets a listed approver grant others past 100,000 at once with the phrase', async () => {
+    grantCap.orgReceived.mockResolvedValue(98_000);
+
+    const { res, run } = callAs({ ...teamBody, confirmLargeGrant: true }, APPROVER);
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5000 }), expect.anything());
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  describe('approval executor', () => {
+    const params = {
+      subscriptionType: 'team' as const,
+      organizationId: 'org-9',
+      seats: 5,
+      durationMonths: 1,
+      userId: 'user-1',
+      reason: REASON,
+      confirmLargeGrant: true,
+      creditsAtRequest: 5000,
+    };
+    const approverReq = { user: { id: 'admin-2', isAdmin: true }, logger: { info: vi.fn() } } as unknown as Request;
+    const approval = (requiredPermission: string) =>
+      ({
+        id: 'approval-1',
+        requiredPermission,
+        requestedBy: { id: 'admin-1', name: 'Ada', selfIds: ['admin-1'] },
+      }) as unknown as AdminApproval;
+
+    it('runs a large-grant approval past the 500,000 hard limit, which subscriptions are exempt from', async () => {
+      grantCap.orgReceived.mockResolvedValue(700_000);
+
+      await grantSubscription(approverReq, params, approval('credits:approve_self_grant'));
+
+      expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5000 }), expect.anything());
+      expect(grantCap.rows.size).toBe(0);
+    });
+
+    it.each([
+      [
+        'an individual grant to the approver',
+        { subscriptionType: 'individual' as const, userId: 'admin-2' },
+        'You cannot approve credits for your own account',
+      ],
+      [
+        'a team grant to an organization the approver belongs to',
+        { subscriptionType: 'team' as const, userId: 'user-1' },
+        'You cannot approve credits for an organization you belong to',
+      ],
+    ])('refuses a large-grant approval of %s, crediting nothing', async (_label, target, message) => {
+      mockUserFindById.mockResolvedValue({ id: target.userId, email: 'b@example.com' });
+      mockOrgFindById.mockResolvedValue({ ...ORG, users: [{ userId: 'user-1' }, { userId: 'admin-2' }] });
+      const plan = SUBSCRIPTION_PLANS[0];
+      const individual = { ...params, ...target, priceId: plan.priceId, creditsAtRequest: undefined };
+
+      await expect(
+        grantSubscription(
+          approverReq,
+          target.subscriptionType === 'team' ? params : individual,
+          approval('credits:approve_self_grant')
+        )
+      ).rejects.toMatchObject({ statusCode: 403, message });
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(mockSubCreate).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ordinary approval that would take the organization past the approver limit, pointing at it', async () => {
+      grantCap.orgReceived.mockResolvedValue(98_000);
+
+      await expect(grantSubscription(approverReq, params, approval('credits:adjust'))).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: expect.objectContaining({ reason: 'approval_unavailable' }),
+      });
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(mockSubCreate).not.toHaveBeenCalled();
+      expect(deniedEntries()[0][1]).toMatchObject({ details: { approval: { id: 'approval-1' } } });
     });
   });
 });

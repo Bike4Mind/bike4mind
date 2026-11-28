@@ -36,6 +36,12 @@ const {
   // session-end snapshot to the write's own transaction instead of a stale read before it.
   txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
 }));
+const grantCap = vi.hoisted(() => ({
+  received: vi.fn(async (..._args: unknown[]) => 0),
+  rows: new Map<string, { recipientId: string; kind: string; amount: number }>(),
+  // Whether each reservation was written while the change callback (the write's transaction) was running.
+  reservedInChange: [] as boolean[],
+}));
 
 // Runs the change and the session-end decision exactly as the real helper does (its transaction
 // and revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
@@ -93,6 +99,7 @@ vi.mock('@bike4mind/services', async orig => ({
     accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
     entersSuspension: (await orig<typeof import('@bike4mind/services')>()).userService.entersSuspension,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+    adminCreditGrant: (await orig<typeof import('@bike4mind/services')>()).userService.adminCreditGrant,
     MODERATION_UPDATE_FIELDS: (await orig<typeof import('@bike4mind/services')>()).userService.MODERATION_UPDATE_FIELDS,
     setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
@@ -166,8 +173,39 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   Organization: {},
   withTransaction: (fn: () => unknown) => fn(),
+  // Leaves the change callback for the duration of fn, as the real helper leaves its transaction.
+  outsideTransaction: async (fn: () => Promise<unknown>) => {
+    const inChange = txnState.changeRunning;
+    txnState.changeRunning = false;
+    try {
+      return await fn();
+    } finally {
+      txnState.changeRunning = inChange;
+    }
+  },
   TelemetryAuditLogModel: { create: vi.fn().mockResolvedValue(undefined) },
+  // The real grant cap (server/admin/creditGrants/tierCap.ts) runs over these.
+  adminAuditLogRepository: { sumCreditsGrantedTo: (...a: unknown[]) => grantCap.received(...a) },
+  adminGateReservationRepository: {
+    reserve: async (recipientId: string, kind: string, amount: number) => {
+      grantCap.reservedInChange.push(txnState.changeRunning);
+      const id = String(grantCap.rows.size + 1);
+      grantCap.rows.set(id, { recipientId, kind, amount });
+      return id;
+    },
+    sumReserved: async (recipientId: string, kind: string) =>
+      [...grantCap.rows.values()]
+        .filter(row => row.recipientId === recipientId && row.kind === kind)
+        .reduce((total, row) => total + row.amount, 0),
+    release: async (id: string) => void grantCap.rows.delete(id),
+  },
 }));
+// Fake id. The real list check (seniorGranters.ts) runs over this list; every other Config value stays real.
+const { SENIOR_ID } = vi.hoisted(() => ({ SENIOR_ID: 'a00000000000000000000001' }));
+vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>();
+  return { ...actual, Config: Object.create(actual.Config, { ADMIN_SENIOR_GRANTER_IDS: { value: SENIOR_ID } }) };
+});
 
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 
@@ -175,12 +213,16 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
+  requestAuditWriter: (req: unknown) => (input: unknown) => mockRecord(req, input),
   denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
 }));
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
-vi.mock('@server/admin/approvals/service', () => ({ requestApproval: mockRequestApproval }));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: mockRequestApproval,
+  getApprovalPolicy: vi.fn(),
+}));
 // The setting gate and the mail are covered in server/users/suspensionNoticeEmail.test.ts; here only the call.
 vi.mock('@server/users/suspensionNoticeEmail', () => ({ emailSuspensionNoticeIfEnabled: mockEmailSuspensionNotice }));
 vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
@@ -238,6 +280,373 @@ beforeEach(() => {
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
   mockPropagateAccountRisk.mockReset().mockResolvedValue({ locked: [], review: [] });
   mockCancelAccountSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
+  grantCap.received.mockReset().mockResolvedValue(0);
+  grantCap.rows.clear();
+  grantCap.reservedInChange = [];
+});
+
+describe('PUT /api/users/:id/update - admin grant cap', () => {
+  const REASON = 'Enterprise pilot onboarding grant';
+  const APPROVER = { id: SENIOR_ID, isAdmin: true, adminPermissions: ['credits:approve_self_grant'] };
+  const recipient = (currentCredits = 0) => ({ id: 'other-user', name: 'Other', isAdmin: false, currentCredits });
+  const grant = (user: unknown, body: Record<string, unknown>) =>
+    run({ user, userId: 'other-user', body: { creditReason: REASON, ...body } });
+  const deniedEntries = () => mockRecord.mock.calls.filter(([, input]) => input.action === 'user.credits.denied');
+  const PENDING = { approvalId: 'approval1', status: 'pending', expiresAt: new Date(0) };
+  type Deps = { confirmCreditGrant?: (credits: number) => Promise<void> };
+
+  it('runs a grant up to 100,000 at once, holding it against the recipient until the write settles', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+    let heldDuringWrite: unknown[] = [];
+    mockAdminUpdateUser.mockImplementation(async () => {
+      heldDuringWrite = [...grantCap.rows.values()];
+      return { user: recipient(100_000), creditAdjustment: undefined };
+    });
+
+    const { res, promise } = grant(ADMIN, { creditDelta: 100_000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(heldDuringWrite).toEqual([{ recipientId: 'other-user', kind: 'recipientCredits', amount: 100_000 }]);
+    expect(grantCap.rows.size).toBe(0);
+    expect(deniedEntries()).toHaveLength(0);
+  });
+
+  it('refuses a grant past 100,000 without the typed phrase, stating what runs now and writing nothing', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+    grantCap.received.mockResolvedValue(30_000);
+
+    await expect(grant(ADMIN, { creditDelta: 80_000 }).promise).rejects.toMatchObject({
+      statusCode: 403,
+      message:
+        "This user has received 30,000 admin-granted credits in the last 24 hours. Above 100,000 the whole grant needs a senior granter's approval: type the confirmation and give a reason to submit it, or grant up to 70,000 now.",
+      additionalInfo: { code: 'admin_grant_limit', reason: 'confirmation_required', remainingCredits: 70_000 },
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+    expect(deniedEntries()[0][1]).toMatchObject({
+      target: { kind: 'user', id: 'other-user' },
+      details: { attemptedAction: 'user.credits.adjusted', requestedCredits: 80_000, refusal: 'confirmation_required' },
+    });
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  it('turns the whole grant past 100,000 into one approval request for a listed approver', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+    mockRequestApproval.mockResolvedValue(PENDING);
+
+    const { res, promise } = grant(ADMIN, { creditDelta: 150_000, confirmLargeGrant: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.credits.grant',
+        params: { userId: 'other-user', creditDelta: 150_000, creditReason: REASON },
+        reason: REASON,
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      })
+    );
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  it('refuses a grant that needs approval sent with other changes', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+    await expect(
+      grant(ADMIN, { name: 'Renamed', creditDelta: 150_000, confirmLargeGrant: true }).promise
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'A credit grant that needs approval must be sent on its own. Also sent: name',
+    });
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+  });
+
+  it('counts an absolute currentCredits as new minus old balance', async () => {
+    mockUserFindById.mockReturnValue(recipient(100_000));
+
+    await expect(grant(ADMIN, { currentCredits: 200_001 }).promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+
+    const allowed = grant(ADMIN, { currentCredits: 200_000 });
+    await allowed.promise;
+    expect(allowed.res._getStatusCode()).toBe(200);
+  });
+
+  it.each([['yes'], [1], [null]])('rejects a confirmLargeGrant of %j before any read or write', async value => {
+    mockUserFindById.mockReturnValue(recipient());
+    await expect(grant(APPROVER, { creditDelta: 300_000, confirmLargeGrant: value }).promise).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'confirmLargeGrant must be true or false.',
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  describe('a listed approver', () => {
+    it('grants another user up to 500,000 at once with the phrase and a reason', async () => {
+      mockUserFindById.mockReturnValue(recipient());
+      const { res, promise } = grant(APPROVER, { creditDelta: 300_000, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockAdminUpdateUser).toHaveBeenCalled();
+    });
+
+    it('is refused past 100,000 without the phrase, or with it but no reason', async () => {
+      mockUserFindById.mockReturnValue(recipient());
+      await expect(grant(APPROVER, { creditDelta: 300_000 }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        message: expect.stringContaining('needs the typed confirmation and a reason'),
+      });
+      await expect(
+        run({ user: APPROVER, userId: 'other-user', body: { creditDelta: 300_000, confirmLargeGrant: true } }).promise
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('is never let past 500,000 in 24 hours', async () => {
+      mockUserFindById.mockReturnValue(recipient());
+      grantCap.received.mockResolvedValue(300_000);
+
+      await expect(grant(APPROVER, { creditDelta: 200_001, confirmLargeGrant: true }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        message:
+          'This user has received 300,000 admin-granted credits in the last 24 hours. No grant can take it above 500,000 in 24 hours, approved or not, so at most 200,000 more can be granted.',
+      });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('is a standard admin when not on the list', async () => {
+      mockUserFindById.mockReturnValue(recipient());
+      mockRequestApproval.mockResolvedValue(PENDING);
+      const unlisted = { ...APPROVER, id: 'admin1' };
+
+      const { res, promise } = grant(unlisted, { creditDelta: 300_000, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a balance that moved before the write', () => {
+    it('re-runs the cap on the grant the in-transaction balance makes, holding the larger figure', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      let heldDuringWrite: unknown[] = [];
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        // Spend took the balance from 100,000 to 60,000, so Set to 150,000 now grants 90,000.
+        await deps.confirmCreditGrant?.(90_000);
+        heldDuringWrite = [...grantCap.rows.values()];
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      const { res, promise } = grant(ADMIN, { currentCredits: 150_000 });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(heldDuringWrite).toEqual([{ recipientId: 'other-user', kind: 'recipientCredits', amount: 90_000 }]);
+      expect(grantCap.rows.size).toBe(0);
+    });
+
+    it('refuses when that grant would need approval, which a write in progress cannot ask for', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(130_000);
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await expect(grant(ADMIN, { currentCredits: 150_000 }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { reason: 'approval_unavailable' },
+      });
+      expect(grantCap.rows.size).toBe(0);
+    });
+
+    it('reserves the raised grant outside the write transaction, so concurrent grants see it at once', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(90_000);
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await grant(ADMIN, { currentCredits: 150_000 }).promise;
+
+      // The first hold is taken before the change runs, the raised one during it.
+      expect(grantCap.reservedInChange).toEqual([false, false]);
+    });
+
+    it('writes the refusal audit outside the write transaction, so its rollback keeps the entry', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      let deniedInChange: boolean | undefined;
+      mockRecord.mockImplementation(async (_req: unknown, input: { action: string }) => {
+        if (input.action === 'user.credits.denied') deniedInChange = txnState.changeRunning;
+      });
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(130_000);
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await expect(grant(ADMIN, { currentCredits: 150_000 }).promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(deniedInChange).toBe(false);
+    });
+
+    it('keeps the raised hold through a retried transaction, which confirms the same grant again', async () => {
+      mockUserFindById.mockReturnValue(recipient(100_000));
+      let heldOnRetry: unknown[] = [];
+      mockAdminUpdateUser.mockImplementation(async (_actor: unknown, _body: unknown, deps: Deps) => {
+        await deps.confirmCreditGrant?.(90_000);
+        // A transient-error retry runs the callback again; the hold was never part of the rolled-back attempt.
+        await deps.confirmCreditGrant?.(90_000);
+        heldOnRetry = [...grantCap.rows.values()];
+        return { user: recipient(150_000), creditAdjustment: undefined };
+      });
+
+      await grant(ADMIN, { currentCredits: 150_000 }).promise;
+
+      expect(heldOnRetry).toEqual([{ recipientId: 'other-user', kind: 'recipientCredits', amount: 90_000 }]);
+      expect(grantCap.reservedInChange).toHaveLength(2);
+      expect(grantCap.rows.size).toBe(0);
+    });
+  });
+
+  it('checks every reason before reserving, so a 400 leaves no hold on the recipient', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+
+    await expect(grant(ADMIN, { creditDelta: 100_000, throttleTier: 'shadow' }).promise).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(grantCap.reservedInChange).toEqual([]);
+    expect(grantCap.rows.size).toBe(0);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a negative creditDelta', { creditDelta: -900_000 }, 1_000_000],
+    ['a currentCredits below the balance', { currentCredits: 0 }, 1_000_000],
+  ])('never refuses a deduction: %s', async (_label, body, balance) => {
+    mockUserFindById.mockReturnValue(recipient(balance));
+    grantCap.received.mockResolvedValue(10_000_000);
+
+    const { res, promise } = grant(ADMIN, body);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(grantCap.received).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold when the write fails', async () => {
+    mockUserFindById.mockReturnValue(recipient());
+    mockAdminUpdateUser.mockRejectedValue(new Error('write failed'));
+
+    await expect(grant(ADMIN, { creditDelta: 1000 }).promise).rejects.toThrow('write failed');
+    expect(grantCap.rows.size).toBe(0);
+  });
+
+  describe('a grant to the admin own account', () => {
+    const own = (user: { id: string }, body: Record<string, unknown>) =>
+      run({ user, userId: user.id, body: { creditReason: REASON, ...body } });
+
+    it('runs a self-grant of 100,000 at once, flagged and held against the admin until the write settles', async () => {
+      mockUserFindById.mockReturnValue({ ...recipient(), id: ADMIN.id });
+      let heldDuringWrite: unknown[] = [];
+      mockAdminUpdateUser.mockImplementation(async () => {
+        heldDuringWrite = [...grantCap.rows.values()];
+        return { user: { ...recipient(100_000), id: ADMIN.id }, creditAdjustment: undefined };
+      });
+
+      const { res, promise } = own(ADMIN, { creditDelta: 100_000 });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(heldDuringWrite).toEqual([{ recipientId: ADMIN.id, kind: 'recipientCredits', amount: 100_000 }]);
+      expect(grantCap.rows.size).toBe(0);
+    });
+
+    it('needs the phrase for a self-grant of 100,001, then queues it whole for another listed approver', async () => {
+      mockUserFindById.mockReturnValue({ ...recipient(), id: ADMIN.id });
+      mockRequestApproval.mockResolvedValue(PENDING);
+
+      await expect(own(ADMIN, { creditDelta: 100_001 }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { reason: 'confirmation_required' },
+      });
+      const { res, promise } = own(ADMIN, { creditDelta: 100_001, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockRequestApproval).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.credits.self_grant',
+          params: { userId: ADMIN.id, creditDelta: 100_001, creditReason: REASON },
+          requiredPermission: 'credits:approve_self_grant',
+          requiresFullAdmin: false,
+        })
+      );
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(grantCap.rows.size).toBe(0);
+    });
+
+    it('queues a listed approver self-grant of 150,000, which their own limit does not cover', async () => {
+      mockUserFindById.mockReturnValue({ ...recipient(), id: SENIOR_ID });
+      mockRequestApproval.mockResolvedValue(PENDING);
+
+      const { res, promise } = own(APPROVER, { creditDelta: 150_000, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockRequestApproval).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.self_grant', requiredPermission: 'credits:approve_self_grant' })
+      );
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('runs a listed credits:self_grant holder self-grant of 150,000 at once with the phrase', async () => {
+      const holder = { id: SENIOR_ID, isAdmin: true, adminPermissions: ['credits:self_grant'] };
+      mockUserFindById.mockReturnValue({ ...recipient(), id: SENIOR_ID });
+
+      await expect(own(holder, { creditDelta: 150_000 }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { reason: 'confirmation_required' },
+      });
+      const { res, promise } = own(holder, { creditDelta: 150_000, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockAdminUpdateUser).toHaveBeenCalled();
+    });
+
+    it('never lets a listed credits:self_grant holder past 500,000 in 24 hours', async () => {
+      const holder = { id: SENIOR_ID, isAdmin: true, adminPermissions: ['credits:self_grant'] };
+      mockUserFindById.mockReturnValue({ ...recipient(), id: SENIOR_ID });
+      grantCap.received.mockResolvedValue(300_000);
+
+      await expect(own(holder, { creditDelta: 200_001, confirmLargeGrant: true }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { reason: 'hard_limit' },
+      });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('treats an unlisted credits:self_grant holder as a standard admin: past 100,000 goes for approval', async () => {
+      const holder = { ...ADMIN, adminPermissions: ['credits:self_grant'] };
+      mockUserFindById.mockReturnValue({ ...recipient(), id: ADMIN.id });
+      mockRequestApproval.mockResolvedValue(PENDING);
+
+      const { res, promise } = own(holder, { creditDelta: 150_000, confirmLargeGrant: true });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -1166,14 +1575,12 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
-    const PENDING = { approvalId: 'approval1', status: 'pending', expiresAt: new Date(0) };
-
     it.each([
       ['creditDelta', { creditDelta: 50 }],
       ['a raised currentCredits', { currentCredits: 150 }],
-    ])('holds a self credit grant sent as %s for another full admin', async (_label, credits) => {
+    ])('applies a self credit grant sent as %s at once for a full admin, flagged', async (_label, credits) => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id, currentCredits: 100 }));
-      mockRequestApproval.mockResolvedValue(PENDING);
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
       const { res, promise } = run({
         user: ADMIN,
         userId: ADMIN.id,
@@ -1181,23 +1588,17 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       });
       await promise;
 
-      expect(res._getStatusCode()).toBe(202);
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-      expect(mockRequestApproval).toHaveBeenCalledWith(
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({
-          action: 'user.credits.self_grant',
-          params: { userId: ADMIN.id, creditDelta: 50, creditReason: CREDIT_REASON },
-          reason: CREDIT_REASON,
-          requiredPermission: 'credits:approve_self_grant',
-          requiresFullAdmin: false,
-        })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
     });
 
-    it('holds a credit grant to the account an impersonating admin impersonates from', async () => {
+    it('applies a credit grant to the account an impersonating admin impersonates from at once, flagged', async () => {
       mockUserFindById.mockReturnValue(target({ id: 'A' }));
-      mockRequestApproval.mockResolvedValue(PENDING);
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: 'A' }), creditAdjustment: adjustment(50) });
       const { res, promise } = run({
         user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
         userId: 'A',
@@ -1205,27 +1606,33 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       });
       await promise;
 
-      expect(res._getStatusCode()).toBe(202);
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
+      );
     });
 
-    it('refuses a held self-grant sent with other changes, writing nothing', async () => {
+    it('refuses a self-grant that needs approval sent with other changes, writing nothing', async () => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      await expect(
-        run({ user: ADMIN, userId: ADMIN.id, body: { name: 'Renamed', creditDelta: 50, creditReason: CREDIT_REASON } })
-          .promise
-      ).rejects.toMatchObject({ statusCode: 400 });
+      const body = { name: 'Renamed', creditDelta: 150_000, confirmLargeGrant: true, creditReason: CREDIT_REASON };
+      await expect(run({ user: ADMIN, userId: ADMIN.id, body }).promise).rejects.toMatchObject({
+        statusCode: 400,
+        message:
+          "A credit grant to your own account waits for another admin's approval, so send it on its own. Also sent: name",
+      });
       expect(mockRequestApproval).not.toHaveBeenCalled();
       expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
-    it('applies a self credit grant at once for an admin holding credits:self_grant, still flagged', async () => {
-      const exempt = { ...ADMIN, adminPermissions: ['credits:self_grant'] };
-      mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+    it('applies a self credit grant at once for a listed admin holding credits:self_grant, still flagged', async () => {
+      const exempt = { id: SENIOR_ID, isAdmin: true, adminPermissions: ['credits:self_grant'] };
+      mockUserFindById.mockReturnValue(target({ id: SENIOR_ID }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: SENIOR_ID }), creditAdjustment: adjustment(50) });
       const { res, promise } = run({
         user: exempt,
-        userId: ADMIN.id,
+        userId: SENIOR_ID,
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
       await promise;

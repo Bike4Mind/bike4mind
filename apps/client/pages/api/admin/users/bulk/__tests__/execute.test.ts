@@ -32,6 +32,12 @@ vi.mock('@server/admin/usersBulk/approvalGate', () => ({
   },
 }));
 
+const CAP = vi.fn();
+const mockGrantCap = vi.fn((..._args: unknown[]) => CAP);
+vi.mock('@server/admin/creditGrants/tierCap', () => ({
+  usersBulkCreditGrantCap: (...a: unknown[]) => mockGrantCap(...a),
+}));
+
 import handler from '../execute';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
@@ -99,7 +105,7 @@ describe('POST /api/admin/users/bulk/execute', () => {
     expect(mockExecute).toHaveBeenCalledWith(
       expect.anything(),
       { id: ADMIN.id, selfIds: [ADMIN.id], fullAdmin: false },
-      { deps: true }
+      { deps: true, capCreditGrant: CAP }
     );
   });
 
@@ -122,8 +128,14 @@ describe('POST /api/admin/users/bulk/execute', () => {
     expect(mockExecute).toHaveBeenCalledWith(
       expect.objectContaining({ action: { type: 'contain' }, expectedCount: 1, cohortHash: BODY.cohortHash }),
       { id: ADMIN.id, selfIds: [ADMIN.id], fullAdmin: true },
-      { deps: true }
+      { deps: true, capCreditGrant: CAP }
     );
+  });
+
+  it('holds each recipient to the per-recipient grant cap as the calling admin', async () => {
+    await call({ ...BODY, action: { type: 'adjustCredits', mode: 'add', amount: 100 } });
+    expect(mockGrantCap).toHaveBeenCalledWith(ADMIN, expect.any(Function), BODY.reason);
+    expect(mockExecute.mock.calls[0][2]).toMatchObject({ capCreditGrant: CAP });
   });
 
   it('passes the gated credit balances to the executor', async () => {
