@@ -1,5 +1,6 @@
 import { DescribeKeyCommand, GenerateDataKeyWithoutPlaintextCommand, type KMSClient } from '@aws-sdk/client-kms';
 import { describe, expect, it, vi } from 'vitest';
+import { SECRETS_AT_REST_PURPOSE } from '@bike4mind/common';
 import {
   createSstSecretStore,
   createWrappedStageDataKey,
@@ -122,28 +123,76 @@ describe('createSstSecretStore', () => {
   });
 });
 
-describe('parseCliOptions', () => {
+function cliHarness(enabled = true, blob: Uint8Array | null = BLOB) {
+  const exec = vi.fn((_cmd: string, argv: string[]) => (argv[2] === 'list' ? '# x/dev\n' : ''));
+  const send = vi.fn(async (command: DescribeKeyCommand | GenerateDataKeyWithoutPlaintextCommand) =>
+    command instanceof DescribeKeyCommand
+      ? { KeyMetadata: { Enabled: enabled, Arn: 'arn:key' } }
+      : { CiphertextBlob: blob ?? undefined }
+  );
+  return { exec, send, kms: { send } as unknown as Pick<KMSClient, 'send'> };
+}
+
+describe('runCli', () => {
   it.each([
     [['--stage', 'dev', '--app', 'flag-app'], { SEED_APP_NAME: 'env-app' }, 'flag-app'],
     [['--stage', 'dev'], { SEED_APP_NAME: 'env-app' }, 'env-app'],
     [['--stage', 'dev'], {}, 'bike4mind'],
   ])('builds the key alias and the sst store from one app name (%j, %j)', async (args, env, app) => {
-    const exec = vi.fn((_cmd: string, argv: string[]) => (argv[2] === 'list' ? '# x/dev\n' : ''));
-    const send = vi.fn(async (command: DescribeKeyCommand | GenerateDataKeyWithoutPlaintextCommand) =>
-      command instanceof DescribeKeyCommand
-        ? { KeyMetadata: { Enabled: true, Arn: 'arn:key' } }
-        : { CiphertextBlob: BLOB }
-    );
+    const { exec, send, kms } = cliHarness();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    expect(await runCli(args, env, { exec, kms: { send } as unknown as Pick<KMSClient, 'send'> })).toBe('created');
-    expect(send.mock.calls[0][0].input.KeyId).toBe(`alias/${app}-dev-secrets-at-rest`);
-    expect(exec).toHaveBeenCalledTimes(2);
-    for (const call of exec.mock.calls as unknown as [string, string[], { env: NodeJS.ProcessEnv }][]) {
-      expect(call[2].env.SEED_APP_NAME).toBe(app);
+    try {
+      expect(await runCli(args, env, { exec, kms })).toBe('created');
+      const alias = `alias/${app}-dev-secrets-at-rest`;
+      expect(send.mock.calls[0][0].input.KeyId).toBe(alias);
+      const generate = send.mock.calls[1][0];
+      expect(generate).toBeInstanceOf(GenerateDataKeyWithoutPlaintextCommand);
+      expect(generate.input).toEqual({
+        KeyId: alias,
+        KeySpec: 'AES_256',
+        EncryptionContext: { purpose: SECRETS_AT_REST_PURPOSE, stage: 'dev' },
+      });
+      expect(exec).toHaveBeenCalledTimes(2);
+      for (const call of exec.mock.calls as unknown as [string, string[], { env: NodeJS.ProcessEnv }][]) {
+        expect(call[2].env.SEED_APP_NAME).toBe(app);
+      }
+    } finally {
+      log.mockRestore();
     }
-    log.mockRestore();
   });
 
+  it('sends --key to both KMS calls', async () => {
+    const { exec, send, kms } = cliHarness();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await runCli(['--stage', 'pr1', '--key', 'alias/x'], {}, { exec, kms })).toBe('created');
+      expect(send.mock.calls.map(([command]) => command.input.KeyId)).toEqual(['alias/x', 'alias/x']);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('wrapped under arn:key'));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('refuses a disabled key without generating or setting anything', async () => {
+    const { exec, send, kms } = cliHarness(false);
+    await expect(runCli(['--stage', 'dev'], {}, { exec, kms })).rejects.toThrow('is not enabled');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an empty ciphertext blob without setting the secret', async () => {
+    const { exec, kms } = cliHarness(true, null);
+    await expect(runCli(['--stage', 'dev'], {}, { exec, kms })).rejects.toThrow('no ciphertext blob');
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a flag error into a rejection the entry can catch', async () => {
+    const { exec, kms } = cliHarness();
+    await expect(runCli([], {}, { exec, kms })).rejects.toThrow('--stage is required');
+  });
+});
+
+describe('parseCliOptions', () => {
   it('requires --stage and flags preview stages', () => {
     expect(() => parseCliOptions([], {})).toThrow('--stage is required');
     expect(parseCliOptions(['--stage', 'pr1'], {}).isPreview).toBe(true);

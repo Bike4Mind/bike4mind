@@ -143,7 +143,7 @@ export async function createWrappedStageDataKey(
  * The CLI entry's whole composition: parse flags, then build the KMS calls and the sst store from the
  * same options. Kept here, not in the entry file, so tests exercise the wiring the operator runs.
  */
-export function runCli(
+export async function runCli(
   args: string[],
   env: NodeJS.ProcessEnv,
   { exec, kms = new KMSClient({}) }: { exec?: Exec; kms?: Pick<KMSClient, 'send'> } = {}
