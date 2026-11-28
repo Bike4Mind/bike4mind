@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // baseApi's chain, reduced to what the route uses: .use() for the rate limit, .post() for the
@@ -42,6 +42,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl:
 vi.mock('@bike4mind/database', () => ({ analyticsHopRepository: { create: (...a: unknown[]) => mockCreate(...a) } }));
 
 import handler from '../hops';
+import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { ApiKeyScope, OverwatchAnalyticsEventSchema } from '@bike4mind/common';
 import { deriveHopKey, verifyHopToken } from '@server/analytics/hopToken';
 
@@ -216,5 +217,68 @@ describe('POST /api/overwatch/v1/hops', () => {
     await threw.run();
     expect(status(threw.res)).toBe(201);
     expect(mockEmitMetric).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a key bound to an id that is not a product id', async () => {
+    const { res, run } = call({
+      apiKeyInfo: { scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'a.b', keyId: 'k' },
+    });
+    await run();
+    expect(status(res)).toBe(403);
+    expect(json(res).error).toBe('Key bound to an invalid product id');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  // The redeemed `hop` carries the source as `src` through emitProductEvent's metadata allowlist. A
+  // source the mint accepts but the allowlist drops is a hop Overwatch refuses, so the two must agree
+  // on every id. Both sides run for real here, so a rule that drifts on either side fails.
+  describe('agrees with the hop event metadata allowlist on the source product id', () => {
+    const mockFetch = vi.fn();
+
+    beforeEach(() => {
+      Object.assign(config, {
+        B4M_ANALYTICS_ENABLED: 'true',
+        OVERWATCH_INGEST_URL: 'https://ingest.example.com/api/overwatch/v1/events',
+        OVERWATCH_INGEST_KEY: 'test-ingest-key',
+      });
+      vi.stubGlobal('fetch', mockFetch);
+      mockFetch.mockResolvedValue({ status: 200 });
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      delete config.B4M_ANALYTICS_ENABLED;
+      delete config.OVERWATCH_INGEST_URL;
+      delete config.OVERWATCH_INGEST_KEY;
+    });
+
+    async function emittedSrc(src: string): Promise<unknown> {
+      mockFetch.mockClear();
+      await emitProductEvent({ productId: 'bike4mind', event: 'hop', metadata: { src } });
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        event: { metadata?: Record<string, unknown> };
+      };
+      return body.event.metadata?.src;
+    }
+
+    it.each([
+      ['source-product', true],
+      ['Source', true],
+      ['source_product', true],
+      ['1source', true],
+      ['a'.repeat(64), true],
+      ['a'.repeat(65), false],
+      ['a.b', false],
+      ['a b', false],
+      ['a/b', false],
+    ] as const)('%s (mints: %s)', async (productId, mints) => {
+      const { res, run } = call({
+        apiKeyInfo: { scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId, keyId: 'k' },
+      });
+      await run();
+      const minted = status(res) === 201;
+      expect(minted).toBe(mints);
+      expect(await emittedSrc(productId)).toBe(minted ? productId : undefined);
+    });
   });
 });

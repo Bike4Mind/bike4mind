@@ -5,6 +5,7 @@ import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendBatchToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { INGEST_FAILURE_METRIC } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import { productIdSchema } from '@bike4mind/server-utils/analytics/productId';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HopMintBodySchema, hopMintedEvent, mintHop } from '@server/analytics/hops';
 
@@ -68,6 +69,11 @@ const handler = baseApi({
 
     if (!productId) {
       return res.status(403).json({ error: 'Key not bound to a product' });
+    }
+
+    // The redeemed `hop` names this id as its `src`, through the same rule (analytics/productId.ts).
+    if (!productIdSchema.safeParse(productId).success) {
+      return res.status(403).json({ error: 'Key bound to an invalid product id' });
     }
 
     const parsed = HopMintBodySchema.safeParse(req.body);

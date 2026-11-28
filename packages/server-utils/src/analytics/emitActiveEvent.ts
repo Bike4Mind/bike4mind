@@ -12,6 +12,7 @@ import { Config } from '../utils/config';
 import { emitMetric } from '../utils/cloudwatch';
 import { laneMetadata } from './lane';
 import { pseudonymizeUserId } from './pseudonymize';
+import { productIdSchema } from './productId';
 import { Logger } from '@bike4mind/observability';
 
 const NOT_CONFIGURED = 'not-configured';
@@ -173,7 +174,6 @@ export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void
   });
 }
 
-const productIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 // These marks have the same meaning for every product. A product-owned schema cannot redefine them.
 const sharedProductMetadataFields = {
   userType: z.enum(['subscriber', 'free']).optional(),

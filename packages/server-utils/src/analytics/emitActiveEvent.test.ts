@@ -484,6 +484,27 @@ describe('emitProductEvent', () => {
     warn.mockRestore();
   });
 
+  it.each(['src', 'dest', 'srcProductId'] as const)('keeps a %s that the product registry allows', async key => {
+    resetConfig();
+    const ids = ['acme', 'Acme', 'acme_widgets', '1acme', 'a'.repeat(64)];
+    for (const id of ids) {
+      mockFetch.mockClear();
+      await emitProductEvent({ productId: 'widgets', event: 'e', metadata: { [key]: id } });
+      expect(sent().metadata).toEqual({ [key]: id });
+    }
+  });
+
+  it.each(['src', 'dest', 'srcProductId'] as const)('drops a %s that is not a product id', async key => {
+    resetConfig();
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    for (const id of ['', 'a.b', 'a b', 'a/b', 'a'.repeat(65)]) {
+      mockFetch.mockClear();
+      await emitProductEvent({ productId: 'widgets', event: 'e', metadata: { [key]: id } });
+      expect(sent().metadata).toBeUndefined();
+    }
+    warn.mockRestore();
+  });
+
   it.each([
     ['plan', 'Enterprise'],
     ['direction', 'sideways'],
