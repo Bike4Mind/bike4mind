@@ -1,10 +1,10 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "private": true,
   "scripts": {
     "typecheck:tsc": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
-    "typecheck":"tsgo --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "WORKERS_TEST_LANE=integration vitest run"

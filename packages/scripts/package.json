@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.114",
+  "version": "0.1.115",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -20,7 +20,7 @@
     "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "premigrate": "node ../../apps/client/scripts/generate-premium-glue.mjs > /dev/null",
     "migrate": "tsx migrate/index.ts",
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",

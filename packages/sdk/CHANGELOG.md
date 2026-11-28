@@ -1,5 +1,25 @@
 # @bike4mind/sdk
 
+## 6.4.0
+
+### Minor Changes
+
+- [#8724](https://github.com/Bike4Mind/bike4mind/pull/8724) [`dfecf69`](https://github.com/Bike4Mind/bike4mind/commit/dfecf69cdfe3df0de6970f3328d97c22940320e1) Thanks [@onoya](https://github.com/onoya)! - add a turns endpoint that adds a turn to a notebook and streams it
+
+- [#8766](https://github.com/Bike4Mind/bike4mind/pull/8766) [`7dd7b37`](https://github.com/Bike4Mind/bike4mind/commit/7dd7b377eed6f68b380f4ac6e21fa776b0df2278) Thanks [@maconard](https://github.com/maconard)! - add a functions page, an admin-only platform label, and async cancel
+
+- [#8772](https://github.com/Bike4Mind/bike4mind/pull/8772) [`8e4a569`](https://github.com/Bike4Mind/bike4mind/commit/8e4a569357272d671b762be3c59c93277747b014) Thanks [@maconard](https://github.com/maconard)! - add public authoring routes under a functions:author key scope
+
+- [#8780](https://github.com/Bike4Mind/bike4mind/pull/8780) [`4f9efe5`](https://github.com/Bike4Mind/bike4mind/commit/4f9efe5271c043a3df6c16324cadb3068a243bb2) Thanks [@maconard](https://github.com/maconard)! - let a recipient list, read, and review a shared function over the API
+
+- [#8783](https://github.com/Bike4Mind/bike4mind/pull/8783) [`1329bd2`](https://github.com/Bike4Mind/bike4mind/commit/1329bd23f5444fa7b44c2c4e73a9ad907a478e1f) Thanks [@maconard](https://github.com/maconard)! - add a signed-in audience and OAuth functions scopes
+
+### Patch Changes
+
+- [#8797](https://github.com/Bike4Mind/bike4mind/pull/8797) [`4d28840`](https://github.com/Bike4Mind/bike4mind/commit/4d2884014b15a29fceb01bcf32ed094bb83133e4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - read contributed tool names as open strings
+
+- [#8909](https://github.com/Bike4Mind/bike4mind/pull/8909) [`446367a`](https://github.com/Bike4Mind/bike4mind/commit/446367a2d0a6874d4ee28784e3f1f83b23b26633) Thanks [@vinchi777](https://github.com/vinchi777)! - show the connector target and full request on the approval card
+
 ## 6.3.0
 
 ### Minor Changes

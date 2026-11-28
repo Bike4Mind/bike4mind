@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.4.38",
+  "version": "0.4.39",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -53,7 +53,7 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",

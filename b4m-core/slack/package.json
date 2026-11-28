@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/slack",
-  "version": "8.0.6",
+  "version": "8.0.7",
   "publishConfig": {
     "access": "restricted"
   },
@@ -33,7 +33,7 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "dev": "tsdown --watch",
     "test": "vitest run"
   },

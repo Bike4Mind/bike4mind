@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/core",
-  "version": "0.4.57",
+  "version": "0.4.58",
   "publishConfig": {
     "access": "restricted"
   },
@@ -29,7 +29,7 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },

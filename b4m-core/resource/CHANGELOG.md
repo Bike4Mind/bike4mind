@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.7.0
+
+### Minor Changes
+
+- [#8593](https://github.com/Bike4Mind/bike4mind/pull/8593) [`bcc44a5`](https://github.com/Bike4Mind/bike4mind/commit/bcc44a579d5086fb9491ac5da88081eb76d0a892) Thanks [@jjmarfa](https://github.com/jjmarfa)! - add a previous master key slot and a rewrap command for memory keys
+
 ## 3.6.0
 
 ### Minor Changes
