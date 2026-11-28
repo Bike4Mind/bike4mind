@@ -34,6 +34,7 @@ import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport
 import { normalizeGeneration, type GenerationSettings } from '@shared/generation';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
+import type { ChatAllowanceStore, StoredChatAllowances } from './tools/chatAllowances';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import type { LocalUsageScope } from '@shared/usage';
 import {
@@ -148,6 +149,8 @@ const SUMMARY_INDEX = '.summary-index';
 const SUMMARY_INDEX_VERSION = 8;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
+/** Per-session "Allow in this chat" records (see tools/chatAllowances), likewise skipped by `list`. */
+const CHAT_ALLOWANCES = '.chat-allowances';
 const LIST_READ_CONCURRENCY = 16;
 
 interface IndexedSummary {
@@ -331,7 +334,7 @@ export interface PromptCacheTtlMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore implements SessionWritesStore {
+export class SessionStore implements SessionWritesStore, ChatAllowanceStore {
   private readonly studioFamilies = new StudioFamilyStore();
 
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
@@ -1540,6 +1543,36 @@ export class SessionStore implements SessionWritesStore {
 
   private sessionWritesPath(directory: string, id: string): string {
     return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
+  }
+
+  async loadChatAllowances(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.chatAllowancesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveChatAllowances(id: string, allowances: StoredChatAllowances): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.chatAllowancesPath(directory, id);
+    await mkdir(join(directory, CHAT_ALLOWANCES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(allowances), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteChatAllowances(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.chatAllowancesPath(directory, id), { force: true });
+  }
+
+  private chatAllowancesPath(directory: string, id: string): string {
+    return join(directory, CHAT_ALLOWANCES, basename(this.filePath(directory, id)));
   }
 
   /**

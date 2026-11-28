@@ -167,8 +167,9 @@ async function resolveOps(input: Record<string, unknown>, context: ToolContext):
 
   const resolved: ResolvedOp[] = [];
   for (const op of ops) {
-    const target = await resolveWritablePath(op.path, context);
-    const moveTarget = op.kind === 'update' && op.moveTo ? await resolveWritablePath(op.moveTo, context) : undefined;
+    const target = await resolveWritablePath(op.path, context, { temp: true });
+    const moveTarget =
+      op.kind === 'update' && op.moveTo ? await resolveWritablePath(op.moveTo, context, { temp: true }) : undefined;
     resolved.push({ op, target, ...(moveTarget ? { moveTarget } : {}) });
   }
   return resolved;

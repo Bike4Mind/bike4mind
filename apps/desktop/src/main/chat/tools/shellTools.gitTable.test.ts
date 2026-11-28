@@ -161,17 +161,17 @@ const ROWS: [string, string, string][] = [
   ['git branch -m other renamed', '', 'rrrr'],
   ['git merge other', '', 'rrrr'],
   ["git merge --no-ff other -m 'merge other'", '', 'rrrr'],
-  ['git merge --abort', '', 'aaaa'],
+  ['git merge --abort', '', 'rrrr'],
   ['git rebase main', '', 'rrrr'],
   ['git rebase origin/main', '', 'rrrr'],
-  ['git rebase --abort', '', 'aaaa'],
+  ['git rebase --abort', '', 'rrrr'],
   ['git cherry-pick other', '', 'rrrr'],
-  ['git cherry-pick --abort', '', 'aaaa'],
+  ['git cherry-pick --abort', '', 'rrrr'],
   ['git revert --no-edit HEAD', '', 'aaaa'],
   ['git stash', '', 'rrrr'],
   ["git stash push -m 'wip'", '', 'rrrr'],
-  ['git stash pop', '', 'aaaa'],
-  ['git stash apply', '', 'aaaa'],
+  ['git stash pop', '', 'rrrr'],
+  ['git stash apply', '', 'rrrr'],
   ['git stash drop', '', 'rrrr'],
   ['git stash -u', '', 'rrrr'],
   ['git tag v2', '', 'rrrr'],
@@ -212,11 +212,48 @@ const ROWS: [string, string, string][] = [
   ['git fetch && git status', '', 'rrrr'],
   ["git add -A && git commit -m 'x' && git push", '', 'rrrr'],
   ['git ls-tree --name-only $(git merge-base origin/main HEAD)', '', 'rrrr'],
-  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'aaaa'],
+  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
   ['git diff $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
   ['git log --oneline "$(cat msg.txt)"', '', 'aaaa'],
   ['git log --$X', '', 'aaaa'],
   ['git branch -D "$(cat msg.txt)"', '', 'aaaa'],
+  // A run-time word git reads as an operand: a quoted variable the script sets to no value an option parse reads, or a
+  // query printing a ref name; never a remote, and never a value the script builds at run time.
+  ['git push origin "$(git branch --show-current)"', '', 'rrrr'],
+  ['git push -u origin $(git branch --show-current)', '', 'rrrr'],
+  ['git push origin "$BRANCH"', '', 'rrrr'],
+  // A rule never covers a script that sets a variable, as every later command inherits it.
+  ['BRANCH=topic && git push origin "$BRANCH"', '', 'arrr'],
+  // A word may open with an expansion that comes out empty, so what follows it must not supply a leading `-`.
+  ['X=--output=.claude/settings.json; git log "$NOPE$X" -1', '', 'aaaa'],
+  ['X=--receive-pack=./x.sh; git push origin "${NOPE}${X}"', '', 'aaaa'],
+  ['git log "$(git branch --show-current)$(cat msg.txt)" -1', '', 'aaaa'],
+  ['git push origin "$NOPE"--receive-pack=./x.sh', '', 'aaaa'],
+  ['git push origin "$(git branch --show-current)"-x', '', 'aaaa'],
+  ['git fetch origin "$REF"', '', 'rrrr'],
+  ['git ls-remote --heads origin "${BRANCH}"', '', 'rrrr'],
+  ["git log --format='%h %s' $(git merge-base origin/main HEAD)..HEAD", '', 'rrrr'],
+  ['git push origin $BRANCH', '', 'aaaa'],
+  ['git push "$REMOTE" main', '', 'aaaa'],
+  ['git push origin "$_"', '', 'aaaa'],
+  ['git push origin "${BRANCH:-main}"', '', 'aaaa'],
+  ['X=$(cat msg.txt) && git push origin "$X"', '', 'aaaa'],
+  ['X=--upload-pack=x; git push origin "$X"', '', 'aaaa'],
+  ['read B < msg.txt; git push origin "$B"', '', 'aaaa'],
+  ['eval true; git push origin "$B"', '', 'aaaa'],
+  ['git push origin "$(git rev-parse --sq-quote --upload-pack=x)"', '', 'aaaa'],
+  ['git log --format=%G? "$B"', '', 'aaaa'],
+  ['git checkout "$B"', '', 'aaaa'],
+  // A step of a merge, rebase or cherry-pick with none in progress, and a target naming no commit, stop git first.
+  ['git rebase --continue', '', 'rrrr'],
+  ['git rebase --skip', '', 'rrrr'],
+  ['git rebase --quit', '', 'rrrr'],
+  ['git merge --continue', '', 'rrrr'],
+  ['git cherry-pick --continue', '', 'rrrr'],
+  ['git revert --skip', '', 'rrrr'],
+  ['git rebase --continue --abort', '', 'aaaa'],
+  ['git merge no-such-branch', '', 'rrrr'],
+  ['git cherry-pick 0000000', '', 'rrrr'],
   ['git filter-branch --tree-filter true HEAD', '', 'aaaa'],
   ['git filter-repo --path src', '', 'aaaa'],
   ['git instaweb --httpd=./x.sh', '', 'aaaa'],
@@ -340,6 +377,16 @@ describe('shell approval of common agent git commands', () => {
 
   it.concurrent.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
+  });
+
+  it('asks in every mode when the value bash inherits for a quoted name may be an option', async () => {
+    vi.stubEnv('B4M_TEST_REF', '--upload-pack=x');
+    try {
+      expect(await cells('git fetch origin "$B4M_TEST_REF"', '')).toBe('aaaa');
+    } finally {
+      vi.stubEnv('B4M_TEST_REF', 'topic');
+    }
+    expect(await cells('git fetch origin "$B4M_TEST_REF"', '')).toBe('rrrr');
   });
 
   it.each(['git branch -D -- "$(cat msg.txt)"', 'git branch --merged | xargs git branch -d --'])(
