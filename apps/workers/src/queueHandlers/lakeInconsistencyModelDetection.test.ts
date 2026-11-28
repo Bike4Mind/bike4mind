@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   recordLakeFindings: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   listGrantsByLake: vi.fn(),
+  findUserById: vi.fn(),
+  createCompletionMeter: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
@@ -24,6 +26,9 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
         warn: h.loggerWarn,
         error: h.loggerError,
       }),
+}));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: h.createCompletionMeter,
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -55,8 +60,11 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileChunkRepository: {},
   fabFileRepository: {},
+  userRepository: { findById: h.findUserById },
 }));
 
+import { ForbiddenError } from '@bike4mind/utils';
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { dispatch } from './lakeInconsistencyModelDetection';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme', createdByUserId: 'owner1' };
@@ -91,6 +99,8 @@ beforeEach(() => {
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.getEffectiveLLMApiKeys.mockResolvedValue({});
   h.listGrantsByLake.mockResolvedValue([]);
+  h.findUserById.mockImplementation(async (id: string) => ({ id }));
+  h.createCompletionMeter.mockReturnValue('owner-meter');
 });
 
 describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
@@ -113,6 +123,56 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
     expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('newOwner');
   });
 
+  it("meters every model call against the effective owner's credits", async () => {
+    h.listGrantsByLake.mockResolvedValue([{ principalType: 'user', principalId: 'newOwner', role: 'owner' }]);
+
+    await invoke();
+
+    expect(h.createCompletionMeter).toHaveBeenCalledExactlyOnceWith(
+      { id: 'newOwner' },
+      expect.anything(),
+      'data lake inconsistency detection',
+      { systemModel: true }
+    );
+    expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].meter).toBe('owner-meter');
+  });
+
+  it('drops the run, releasing the lease, when the owner account is gone', async () => {
+    h.findUserById.mockResolvedValue(null);
+
+    await invoke();
+
+    expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.createCompletionMeter).not.toHaveBeenCalled();
+    expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+  });
+
+  it('consumes the message when the owner cannot pay, instead of retrying into the DLQ', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(
+      Object.assign(new Error('no credits'), { additionalInfo: { errorCode: 'insufficient_credits' } })
+    );
+
+    await expect(invoke()).resolves.toBeUndefined();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('lake owner refused'));
+  });
+
+  it('consumes the message when the owner may not use AI, instead of retrying into the DLQ', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+
+    await expect(invoke()).resolves.toBeUndefined();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('lake owner refused'));
+  });
+
+  it('still retries a 403 that is not an AI-access refusal', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(new ForbiddenError('some other forbidden'));
+
+    await expect(invoke()).rejects.toThrow('some other forbidden');
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+  });
+
   it('bills the creator when the lake carries no owner grant', async () => {
     await invoke();
 
@@ -120,15 +180,16 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
     expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('owner1');
   });
 
-  it('falls back to the creator rather than stranding a claimed lease when the grant read fails', async () => {
-    // The lease is already held by this point, so throwing here would cost the lake its whole lease
-    // window for a lookup whose own fallback is the creator anyway.
+  it('fails the run before any reservation when the grant read fails, rather than billing the creator', async () => {
+    // A failed read says nothing about who owns the lake now; the creator may have transferred it away.
     h.listGrantsByLake.mockRejectedValue(new Error('mongo blip'));
 
-    await invoke();
-
-    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('owner1', expect.anything(), expect.anything());
-    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('could not read lake grants'), expect.anything());
+    await expect(invoke()).rejects.toThrow('mongo blip');
+    expect(h.findUserById).not.toHaveBeenCalled();
+    expect(h.createCompletionMeter).not.toHaveBeenCalled();
+    expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
   });
 
   it('re-checks the kill-switch at consume time, not just at enqueue time', async () => {

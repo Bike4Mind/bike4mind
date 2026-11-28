@@ -1,5 +1,7 @@
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { dataLakeService, apiKeyService } from '@bike4mind/services';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -8,9 +10,14 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { MODEL_INCONSISTENCY_RUN_LEASE_MS, type IDataLakeDocument } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import {
+  isTerminalCreditRefusal,
+  MODEL_INCONSISTENCY_RUN_LEASE_MS,
+  type IDataLakeDocument,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -26,25 +33,16 @@ const LakeInconsistencyModelPayload = z.object({
  * `resolveLakeSpendAddressees` uses, so the party billed for a run is the party notified about lake
  * spend; a lake transferred away from its creator would otherwise keep billing them forever.
  *
- * Degrades to the creator rather than throwing. The lease is already claimed by the time this runs,
- * so a transient grants read failure would otherwise cost the lake its whole lease window for a
- * lookup whose own fallback is the creator anyway.
+ * A failed grants read throws rather than falling back to the creator: it cannot tell whether the
+ * lake was transferred, so the only safe payer is none, and SQS retries the message.
  */
-async function resolveSpendOwnerId(lake: IDataLakeDocument, logger: Logger): Promise<string> {
-  try {
-    const grants = (await dataLakeAccessGrantRepository.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
-      principalType: g.principalType,
-      principalId: g.principalId,
-      role: g.role,
-    }));
-    return dataLakeService.resolveEffectiveOwnerIds(lake, grants)[0] ?? lake.createdByUserId;
-  } catch (error) {
-    logger.warn('[lakeInconsistencyModel] could not read lake grants; billing the creator', {
-      dataLakeId: lake.id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return lake.createdByUserId;
-  }
+async function resolveSpendOwnerId(lake: IDataLakeDocument): Promise<string> {
+  const grants = (await dataLakeAccessGrantRepository.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
+    principalType: g.principalType,
+    principalId: g.principalId,
+    role: g.role,
+  }));
+  return dataLakeService.resolveEffectiveOwnerIds(lake, grants)[0] ?? lake.createdByUserId;
 }
 
 /**
@@ -112,10 +110,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // The EFFECTIVE owner, not the creator. `resolveEffectiveOwnerIds` prefers an explicit user
       // owner-role grant and falls back to `createdByUserId`, which is the same resolver
       // `resolveLakeSpendAddressees` uses to answer who pays for lake work - a transferred lake must
-      // not bill the person it was transferred away from. Falls back to the creator when the grant
-      // read fails: a transient grants blip must not strand a run that has already claimed the lease,
-      // and the creator is exactly what the resolver itself falls back to.
-      const ownerUserId = await resolveSpendOwnerId(lake, logger);
+      // not bill the person it was transferred away from. A failed grant read throws before any
+      // reservation; the finally below releases the lease so the SQS retry can claim it.
+      const ownerUserId = await resolveSpendOwnerId(lake);
+      const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
+      if (!owner) {
+        logger.warn('[lakeInconsistencyModel] lake owner not found; nobody to bill, dropping run', {
+          dataLakeId: lake.id,
+        });
+        return;
+      }
 
       // The LAKE OWNER's keys, not the caller's - the cost belongs to the lake's resource, matching
       // extractLakeMemoryForBatch's attribution. `endUserId` carries the same owner to the provider.
@@ -134,6 +138,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         },
         apiKeyTable,
         endUserId: ownerUserId,
+        meter: createCompletionMeter(owner, logger, 'data lake inconsistency detection', { systemModel: true }),
         // Persist each batch as it lands rather than once at the end, so a run killed part-way keeps
         // what it already paid for. The detector absorbs a throw here into `batchesUnpersisted`.
         onBatchFindings: findings =>
@@ -186,6 +191,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
     }
   } catch (err) {
+    // The owner cannot pay (or may not use AI): a retry is refused the same way, so consume the message.
+    if (isTerminalCreditRefusal(err) || isAiAccessRefusal(err)) {
+      logger.warn(`[lakeInconsistencyModel] lake owner refused; stopping run: ${(err as Error).message}`);
+      return;
+    }
     // Permanently-invalid message (malformed payload) - retrying cannot fix it.
     if (err instanceof ZodError || err instanceof SyntaxError) {
       logger.warn(`Skipping lake model inconsistency message: ${err instanceof Error ? err.message : String(err)}`);

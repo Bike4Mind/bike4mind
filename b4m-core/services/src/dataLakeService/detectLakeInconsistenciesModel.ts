@@ -9,6 +9,7 @@ import {
   type InconsistencyFinding,
 } from '@bike4mind/common';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
+import type { CompletionMeter } from '../billing/completionMeter';
 import {
   LakeContradictionReadingService,
   type ContradictionCandidateDocument,
@@ -113,6 +114,11 @@ export interface DetectLakeInconsistenciesModelAdapters {
   /** Lake owner, threaded through to the LLM call for provider abuse attribution. */
   endUserId?: string;
   /**
+   * Bills every batch call to the lake owner. A terminal credit refusal throws out of the run: every later
+   * batch would be refused too, and batches already paid for were persisted through `onBatchFindings`.
+   */
+  meter?: CompletionMeter;
+  /**
    * Persist the findings one batch created or CHANGED, called after EACH batch rather than once at
    * the end. Findings are deduped by `kind+subject` across the whole run, so a batch that names a
    * subject an earlier batch already found hands over the MERGED finding, not that batch's raw view
@@ -193,6 +199,7 @@ export async function detectLakeInconsistenciesModel(
     db,
     apiKeyTable,
     endUserId,
+    meter,
     onBatchFindings,
     getRemainingTimeInMillis,
     logger,
@@ -318,7 +325,7 @@ export async function detectLakeInconsistenciesModel(
 
     const batch = documents.slice(i, i + MODEL_INCONSISTENCY_BATCH_SIZE);
     batchesRun += 1;
-    const contradictions = await reader.evaluate({ apiKeyTable, documents: batch, endUserId });
+    const contradictions = await reader.evaluate({ apiKeyTable, documents: batch, endUserId, meter });
 
     if (contradictions === null) {
       batchesFailed += 1;

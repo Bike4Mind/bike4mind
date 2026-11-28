@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   QuestMasterPlan,
   Quest,
@@ -7,8 +8,15 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
+import { createBoundedZeroCreditOperationalUsageStore } from '@bike4mind/database/zero-credit-operational-usage';
 import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  isLlmTimeoutError,
+  SafetyRefusalError,
+  type CompletionInfo,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
@@ -17,7 +25,13 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { generatedKeyFromProxyPath } from '@bike4mind/server-utils/utils/appFileProxy';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  latchUsage,
+  priceCompletionUsage,
+  timedOutCompletionUsageFields,
+  type CompletionUsage,
+} from '@bike4mind/services/billing/completionMeter';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   ChatModels,
@@ -25,6 +39,7 @@ import {
   ORG_FEEDBACK_SUMMARY_JOB_TYPE,
   stripSearchResultCardFences,
   type CitableSource,
+  type IUserDocument,
 } from '@bike4mind/common';
 import {
   OrgFeedbackSummaryPayload,
@@ -37,6 +52,9 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
 import path from 'path';
+
+const USAGE_LOOKUP_TIMEOUT_MS = 10_000;
+const USAGE_WRITE_TIMEOUT_MS = 20_000;
 
 const QuestExportPayload = z.object({
   exportJobId: z.string(),
@@ -64,6 +82,8 @@ const SUMMARY_MODEL = ChatModels.CLAUDE_4_5_HAIKU_BEDROCK;
 const SUMMARY_MAX_INPUT_CHARS = 100000; // ~25K tokens - enough for most content
 const SUMMARY_MAX_TOKENS = 2000; // Output limit for summary
 const SUMMARY_TIMEOUT_MS = 60000; // 1 minute timeout
+
+type SummaryUsage = CompletionUsage & Pick<CompletionInfo, 'cacheWrite1hInputTokens' | 'stopReason'>;
 
 async function sendProgress(
   userId: string,
@@ -219,12 +239,16 @@ function slugify(text: string): string {
 /**
  * Generates an executive summary of the quest plan using an LLM.
  * Truncates input if too large to fit in context.
+ *
+ * The call runs on the platform key, so its usage is recorded against the requester (and their
+ * organization) without a credit debit - the same record-only treatment as the org feedback summary
+ * that shares this queue.
  */
-async function generateSummary(
+export async function generateSummary(
   markdown: string,
   goal: string,
   logger: Logger,
-  userId?: string
+  requester: IUserDocument
 ): Promise<string | null> {
   try {
     // Truncate if too large
@@ -261,7 +285,7 @@ async function generateSummary(
     }
 
     // Initialize LLM
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: userId });
+    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: requester.id });
     if (!llm) {
       logger.warn('Failed to initialize LLM for summary, skipping');
       return null;
@@ -292,29 +316,98 @@ ${content}`;
     ];
 
     let responseText = '';
-
-    await Promise.race([
-      llm.complete(
+    // Cancel rather than race the deadline: an abandoned call keeps billing, and its usage would be lost.
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timeoutError = new Error(`Summary generation timeout after ${SUMMARY_TIMEOUT_MS}ms`);
+    const deadline = setTimeout(() => controller.abort(timeoutError), SUMMARY_TIMEOUT_MS);
+    const usage: SummaryUsage = {};
+    let failed = false;
+    let timedOut = false;
+    try {
+      await llm.complete(
         SUMMARY_MODEL,
         messages,
         {
           temperature: 0.3, // Lower temperature for more consistent output
           maxTokens: SUMMARY_MAX_TOKENS,
           stream: false,
+          retryMode: 'abort-aware',
+          abortSignal: controller.signal,
         },
-        async (texts: (string | null | undefined)[]) => {
-          if (texts && texts.length > 0) {
-            responseText += texts.filter(Boolean).join('');
+        async (texts, info) => {
+          latchUsage(usage, info);
+          if (info?.cacheWrite1hInputTokens !== undefined) usage.cacheWrite1hInputTokens = info.cacheWrite1hInputTokens;
+          if (info?.stopReason !== undefined) usage.stopReason = info.stopReason;
+          if (!controller.signal.aborted && texts?.length) responseText += texts.filter(Boolean).join('');
+        }
+      );
+      controller.signal.throwIfAborted();
+    } catch (error) {
+      failed = true;
+      const adapterTimeout = isLlmTimeoutError(error);
+      timedOut = controller.signal.aborted || adapterTimeout;
+      if ((adapterTimeout || error instanceof SafetyRefusalError) && error.usage) {
+        const { turnUsage, ...counts } = error.usage;
+        latchUsage(usage, { ...counts, turnUsage: turnUsage?.slice() });
+      }
+      if (error instanceof SafetyRefusalError) usage.stopReason = 'refusal';
+      throw controller.signal.aborted ? timeoutError : error;
+    } finally {
+      clearTimeout(deadline);
+      const usageStore = createBoundedZeroCreditOperationalUsageStore({
+        lookupTimeoutMS: USAGE_LOOKUP_TIMEOUT_MS,
+        writeTimeoutMS: USAGE_WRITE_TIMEOUT_MS,
+      });
+      const priced = priceCompletionUsage(modelInfo, usage);
+      const reported = priced.inputTokens + priced.outputTokens + priced.cachedInputTokens + priced.cacheWriteTokens;
+      try {
+        if (reported <= 0) {
+          logger.warn('Quest export summary provider did not report token usage', { model: modelInfo.id });
+        } else {
+          // An org member's usage belongs to the org; when that lookup fails, skip rather than book it personally.
+          const organization = requester.organizationId
+            ? await usageStore.findOrganizationById(requester.organizationId)
+            : undefined;
+          if (organization === null) {
+            logger.warn('Quest export summary usage organization is missing; usage not recorded');
+          } else {
+            if (failed) logger.warn('Recording reported usage after quest export summary provider failure');
+            await recordOperationalUsage(
+              {
+                requestId: randomUUID(),
+                user: requester,
+                organization,
+                feature: 'operations',
+                source: 'system',
+                bypassCreditBilling: true,
+                provider: modelInfo.backend,
+                model: modelInfo.id,
+                ...priced,
+                finishReason: usage.stopReason,
+                latencyMs: Math.round(performance.now() - startedAt),
+              },
+              {
+                db: {
+                  adminSettings: adminSettingsRepository,
+                  usageEvents: {
+                    // A timed-out call keeps the provider's counts as COGS but out of the local token columns.
+                    record: event =>
+                      usageStore.usageEvents.record({
+                        ...event,
+                        ...(timedOut ? timedOutCompletionUsageFields(priced) : {}),
+                      }),
+                  },
+                },
+                logger,
+              }
+            );
           }
         }
-      ),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Summary generation timeout after ${SUMMARY_TIMEOUT_MS}ms`)),
-          SUMMARY_TIMEOUT_MS
-        )
-      ),
-    ]);
+      } catch (error) {
+        logger.warn('Could not record quest export summary usage', error);
+      }
+    }
 
     if (!responseText.trim()) {
       logger.warn('Empty summary response from LLM');
@@ -633,7 +726,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const requester = userId ? await userRepository.findById(userId) : null;
     const summary =
       requester && !aiAccessDeniedMessage(requester)
-        ? await generateSummary(markdown, plan.goal, logger, userId)
+        ? await generateSummary(markdown, plan.goal, logger, requester)
         : null;
     if (summary) {
       logger.info('Executive summary generated successfully');

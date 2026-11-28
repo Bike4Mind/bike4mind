@@ -72,6 +72,39 @@ describe('detectLakeInconsistenciesModel', () => {
     });
   });
 
+  it("hands the owner's meter to every batch call", async () => {
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
+    const meter = vi.fn();
+
+    await detectLakeInconsistenciesModel(lake, { ...adapters, meter } as never);
+
+    expect(evaluateMock).toHaveBeenCalledOnce();
+    expect(evaluateMock.mock.calls[0][0]).toMatchObject({ meter });
+  });
+
+  it('ends the run on a credit refusal instead of reading the next batch', async () => {
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 3 }, (_, i) => memberRow(`f${i}`));
+    const adapters = makeAdapters(members);
+    const refusal = Object.assign(new Error('no credits'), { additionalInfo: { errorCode: 'insufficient_credits' } });
+    evaluateMock
+      .mockResolvedValueOnce([
+        {
+          subject: 'refund window',
+          documents: [
+            { fabFileId: 'f0', excerpt: 'e1' },
+            { fabFileId: 'f1', excerpt: 'e2' },
+          ],
+        },
+      ])
+      .mockRejectedValueOnce(refusal);
+    const onBatchFindings = vi.fn().mockResolvedValue(undefined);
+
+    await expect(detectLakeInconsistenciesModel(lake, { ...adapters, onBatchFindings } as never)).rejects.toBe(refusal);
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(onBatchFindings).toHaveBeenCalledOnce();
+    expect(onBatchFindings.mock.calls[0][0]).toHaveLength(1);
+  });
+
   it('reads chunk text with its own, deeper bound than the lexical pass', async () => {
     const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
 
