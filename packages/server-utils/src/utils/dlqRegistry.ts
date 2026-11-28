@@ -306,10 +306,10 @@ const DLQ_REGISTRY = [
     displayName: 'Quest Export',
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
-    description: 'Builds a downloadable ZIP export of a quest.',
+    description: 'Builds an organization feedback summary. The quest plan ZIP export it used to run is retired.',
     replay: 'side-effects',
     replayNote:
-      'If the ZIP already exists only the completed event is re-sent; otherwise the ZIP is rebuilt, which can call the summary model again.',
+      'A completed summary only re-sends its notification; otherwise the summary is rebuilt, which calls the summary model again. A retired plan export message is discarded.',
     owner: 'Chat',
     describe: firstEntity(entityAt('Export job', 'exportJobId'), entityAt('Feedback summary job', 'summaryJobId')),
   },

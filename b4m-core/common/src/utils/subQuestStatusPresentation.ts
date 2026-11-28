@@ -1,8 +1,8 @@
 import type { SubQuestStatus } from '../types/entities/QuestTypes';
 
 /**
- * The one glyph/label vocabulary for a sub-quest status, shared by the queued server-side export
- * (apps/workers/src/queueHandlers/questExport.ts) and the markdown serializer in questMarkdown.ts.
+ * The one glyph/label vocabulary for a sub-quest status, used by the markdown serializer in
+ * questMarkdown.ts (the queued server-side plan export that shared it is retired).
  * It lives in @bike4mind/common so the serializer can use it without depending on server-utils;
  * @bike4mind/server-utils/shared/subQuestStatusPresentation re-exports it for existing importers.
  *
