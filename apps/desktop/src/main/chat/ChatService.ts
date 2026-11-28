@@ -25,6 +25,7 @@ import {
   type TaskDecisionAnswer,
   type WorkerTask,
 } from '@shared/orchestration';
+import { isAutomaticOrchestrator, settledOrchestratorLabel } from '@shared/orchestratorLabels';
 import { randomUUID } from 'node:crypto';
 import { assertEvaluationTool, evaluationContext, filterEvaluationTools } from './evaluationBudget';
 import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
@@ -70,6 +71,7 @@ import type {
   ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionSummary,
+  OrchestratorLabel,
   RaiseRunBudgetResult,
   ChatSpawnSuggestion,
   ChatStreamEvent,
@@ -356,6 +358,7 @@ import {
   type ScreenContext,
   type ModelContext,
   type ModelViewPort,
+  type OrchestratorLabelOutcome,
   type SimulatorContext,
   type SimulatorDriver,
   type ToolContext,
@@ -2119,6 +2122,33 @@ export class ChatService {
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.liveSummary(this.deps.store.setPinned(sessionId, pinned));
+  }
+
+  /** Emits the summary too, so an open Code draft and other windows see the change at once. */
+  async setSessionOrchestratorLabel(sessionId: string, label: OrchestratorLabel): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.setOrchestratorLabel(sessionId, label);
+    if (updated) this.emitSummary(updated);
+    return this.liveSummary(updated);
+  }
+
+  /**
+   * The orchestrator_label tool's write. A wanted label that matches the automatic rule is stored
+   * as 'auto', as the row menu does, so it never pins the icon. 'off' is refused while agents run.
+   */
+  private async setOrchestratorLabelForAgent(
+    sessionId: string,
+    wanted: OrchestratorLabel
+  ): Promise<OrchestratorLabelOutcome> {
+    const sessions = await this.deps.store.list();
+    const self = sessions.find(session => session.id === sessionId);
+    if (!self) return { ok: false, reason: 'gone' };
+    const agents = sessions.filter(session => session.origin?.parentSessionId === sessionId && isAgentSession(session));
+    if (wanted === 'off' && agents.some(agent => !agent.archived)) return { ok: false, reason: 'live-agents' };
+    const label = settledOrchestratorLabel(wanted, isAutomaticOrchestrator(self, agents.length > 0));
+    const updated = await this.deps.store.setOrchestratorLabel(sessionId, label);
+    if (!updated) return { ok: false, reason: 'gone' };
+    this.emitSummary(updated);
+    return { ok: true };
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
@@ -6644,6 +6674,14 @@ export class ChatService {
                 pullRequests: {
                   bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
                   clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
+          // Attended only, like pullRequests: 'off' hides the Agents button even while agents run.
+          ...(attended
+            ? {
+                orchestratorLabel: {
+                  set: (label: OrchestratorLabel) => this.setOrchestratorLabelForAgent(sessionId, label),
                 },
               }
             : {}),

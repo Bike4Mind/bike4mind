@@ -32,6 +32,7 @@ import {
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { loopTool } from './loopTool';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { orchestratorLabelTool } from './orchestratorLabelTool';
 import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
@@ -149,6 +150,7 @@ const BY_NAME = new Map(
   [
     ...localTools(false),
     todoWrite,
+    orchestratorLabelTool,
     applyPatch,
     exploreTool,
     ...MEDIA_TOOLS,
@@ -309,6 +311,8 @@ export function toolsForRequest(options: {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
     todoWrite,
+    // Needs no folder or project: it labels this conversation's own sidebar row.
+    orchestratorLabelTool,
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     // Writes into the project, so it needs a granted folder as well as a session that generated something.

@@ -21,6 +21,7 @@ import {
   type WebContents,
 } from 'electron';
 import { isPromptCacheTtl } from '@bike4mind/common';
+import { isOrchestratorLabel } from '@shared/chat';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -820,6 +821,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionOrchestratorLabel, (_event, sessionId: string, label: unknown) => {
+    if (!isOrchestratorLabel(label)) throw new Error(`Unknown orchestrator label: ${String(label)}`);
+    return service.setSessionOrchestratorLabel(sessionId, label);
+  });
   registerSessionOrchestrateIpc(ipcMain, service);
   registerOrchestrationIpc(ipcMain, service);
   // Decisions asked before a restart badge the dock and notify even before a window asks for them.

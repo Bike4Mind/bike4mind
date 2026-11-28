@@ -277,6 +277,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Renamed ${n} sessions`,
     active: 'Renaming a session...',
   },
+  orchestrator_label: {
+    didAlone: 'Set the orchestrator mark',
+    toAlone: 'set the orchestrator mark',
+    many: n => `Set the orchestrator mark ${n} times`,
+    active: 'Setting the orchestrator mark...',
+  },
   session_delete: {
     didAlone: 'Deleted a session',
     toAlone: 'delete a session',

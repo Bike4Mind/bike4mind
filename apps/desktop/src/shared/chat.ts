@@ -1066,6 +1066,14 @@ export function isOrchestratorSession(session: Pick<ChatSessionMeta, 'orchestrat
   return session.orchestrate === true || session.orchestrator === true;
 }
 
+/** A user's per-session override of the sidebar's orchestrator label; 'auto' clears it. */
+export type OrchestratorLabel = 'auto' | 'on' | 'off';
+export type OrchestratorLabelOverride = Exclude<OrchestratorLabel, 'auto'>;
+
+export function isOrchestratorLabel(value: unknown): value is OrchestratorLabel {
+  return value === 'auto' || value === 'on' || value === 'off';
+}
+
 /** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
 export function isLocalModel(id: string): boolean {
   return id.startsWith('local:');
@@ -1538,6 +1546,11 @@ interface ChatSessionMeta {
    * turn it off, so it outlives both the launch and the agents. Read it through isOrchestratorSession.
    */
   orchestrator?: boolean;
+  /**
+   * The user's override of the sidebar's orchestrator label (orchestratorLabels): 'on' or 'off' wins
+   * over the automatic rule, absent follows it. Display only: it never turns Orchestrate on or off.
+   */
+  orchestratorLabel?: OrchestratorLabelOverride;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
   /** Set on a session imported from Claude; see ChatImportOrigin. */

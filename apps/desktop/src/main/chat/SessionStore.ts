@@ -25,6 +25,7 @@ import type {
   ChatSessionOrigin,
   ChatSessionSummary,
   ChatSpawnSuggestion,
+  OrchestratorLabel,
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
@@ -1244,6 +1245,18 @@ export class SessionStore implements SessionWritesStore, ChatAllowanceStore {
   }
 
   /**
+   * Override the sidebar's orchestrator label, or hand it back to the automatic rule with 'auto'.
+   * Display only, so it leaves Orchestrate and `updatedAt` alone, as pinning does.
+   */
+  async setOrchestratorLabel(id: string, label: OrchestratorLabel): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (label === 'auto') delete session.orchestratorLabel;
+      else session.orchestratorLabel = label;
+      return true;
+    });
+  }
+
+  /**
    * Archive or restore a conversation.
    *
    * Leaves `updatedAt` alone, as pinning does: this moves a row between sidebar sections and
@@ -1847,6 +1860,9 @@ export class SessionStore implements SessionWritesStore, ChatAllowanceStore {
         : {}),
       // A file from before `orchestrator` existed still says it was orchestrating when it was last written.
       ...(parsed.orchestrator === true || parsed.orchestrate === true ? { orchestrator: true } : {}),
+      ...(parsed.orchestratorLabel === 'on' || parsed.orchestratorLabel === 'off'
+        ? { orchestratorLabel: parsed.orchestratorLabel }
+        : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(orchestrationPolicy.success && !(orchestrateExpired && !origin)

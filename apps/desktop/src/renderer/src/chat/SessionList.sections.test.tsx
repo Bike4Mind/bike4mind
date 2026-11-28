@@ -115,6 +115,7 @@ function Harness({
       onDelete={onDelete}
       onTogglePin={() => {}}
       onToggleArchived={() => {}}
+      onSetOrchestratorLabel={() => {}}
       onRename={() => {}}
       onDownload={() => {}}
       userSections={sections}

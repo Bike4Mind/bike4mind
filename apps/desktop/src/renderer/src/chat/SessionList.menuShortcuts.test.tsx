@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionSummary, OrchestratorLabel } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -44,6 +44,7 @@ const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> =
 interface Handlers {
   onTogglePin: (s: ChatSessionSummary) => void;
   onToggleArchived: (s: ChatSessionSummary) => void;
+  onSetOrchestratorLabel: (s: ChatSessionSummary, label: OrchestratorLabel) => void;
   onDelete: (id: string) => void;
   onDownload: (s: ChatSessionSummary) => void;
   downloadError: string;
@@ -76,6 +77,7 @@ async function mount(sessions: ChatSessionSummary[], handlers: Partial<Handlers>
           onDelete={handlers.onDelete ?? (() => {})}
           onTogglePin={handlers.onTogglePin ?? (() => {})}
           onToggleArchived={handlers.onToggleArchived ?? (() => {})}
+          onSetOrchestratorLabel={handlers.onSetOrchestratorLabel ?? (() => {})}
           onRename={() => {}}
           onDownload={handlers.onDownload ?? (() => {})}
           downloadError={handlers.downloadError}
@@ -128,6 +130,7 @@ describe('SessionList row menu shortcuts', () => {
     expect(query('chat-rename-session-btn')?.getAttribute('aria-keyshortcuts')).toBe('R');
     expect(query('session-row-message-action')?.getAttribute('aria-keyshortcuts')).toBe('M');
     expect(query('chat-download-session-btn')?.getAttribute('aria-keyshortcuts')).toBe('L');
+    expect(query('chat-session-orchestrator-label-btn')?.getAttribute('aria-keyshortcuts')).toBe('O');
     expect(query('chat-archive-session-btn')?.getAttribute('aria-keyshortcuts')).toBe('A');
     expect(query('chat-delete-session-btn')?.getAttribute('aria-keyshortcuts')).toBe('D');
     expect(query('chat-move-session-btn')?.textContent).toBe('Move to section');
@@ -145,6 +148,16 @@ describe('SessionList row menu shortcuts', () => {
 
     await press('p');
     expect(onTogglePin).toHaveBeenCalledWith(session);
+  });
+
+  it('runs the orchestrator label toggle on O', async () => {
+    const onSetOrchestratorLabel = vi.fn();
+    const session = summary('a', 'Alpha');
+    await mount([session], { onSetOrchestratorLabel });
+    await openMenu();
+
+    await press('o');
+    expect(onSetOrchestratorLabel).toHaveBeenCalledWith(session, 'on');
   });
 
   it('runs Archive on A and Delete on D', async () => {

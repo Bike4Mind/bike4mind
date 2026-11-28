@@ -11,7 +11,10 @@ import { describeAgentStates, type AgentState } from './roster';
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
-  /** Agent View is available with no live agents (agentsSurfaceAvailable): Orchestrate on, an orchestrator, or archived agents. */
+  /**
+   * Whether Agent View is offered (agentsSurfaceAvailable). When given it decides alone, so an
+   * orchestratorLabel of 'off' hides the control even while agents run; omitted, live agents offer it.
+   */
   enabled?: boolean;
   /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
   parentNeedsYou?: boolean;
@@ -83,12 +86,12 @@ function Segment({
  */
 export function OrchestrateToggle({
   states,
-  enabled = false,
+  enabled,
   parentNeedsYou = false,
   surface,
   onSurfaceChange,
 }: OrchestrateToggleProps) {
-  const available = enabled || states.length > 0;
+  const available = enabled ?? states.length > 0;
 
   const select = (next: SessionSurface) => {
     if (next !== surface) onSurfaceChange(next);

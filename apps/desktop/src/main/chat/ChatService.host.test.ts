@@ -7,6 +7,7 @@ import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -34,6 +35,8 @@ describe('ChatService app-control tools', () => {
   let projectB: string;
   /** Every approval the gate raised, so a test can count the asks rather than infer them. */
   let asked: { approvalId: string; toolName: string }[];
+  /** Every summary the service pushed to the renderer, which is what redraws the sidebar row. */
+  let pushed: ChatSessionSummary[];
 
   beforeEach(async () => {
     projectA = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-a-')));
@@ -45,6 +48,8 @@ describe('ChatService app-control tools', () => {
     const opened: PassThrough[] = [];
     streams = opened;
     asked = [];
+    const summaries: ChatSessionSummary[] = [];
+    pushed = summaries;
     const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
       opened.push(stream);
@@ -58,12 +63,14 @@ describe('ChatService app-control tools', () => {
       access: { list: async () => [] } as unknown as AccessStore,
       approvals,
       logger: { debug: vi.fn(), warn: vi.fn() },
+      queue: new MessageQueue(() => undefined),
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
           getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
+      summaryChanged: summary => summaries.push(summary),
       emit: event => {
         emitted.push(event);
         // Stand in for the user, answering every ask the moment it is raised. 'always' is
@@ -155,6 +162,8 @@ describe('ChatService app-control tools', () => {
       entry => entry.toolSchema.name
     );
     expect(chatTools.filter(name => name.startsWith('session_'))).toEqual([]);
+    // The orchestrator label needs no project: it labels the caller's own row.
+    expect(chatTools).toContain('orchestrator_label');
 
     const code = await codeSession(projectA);
     await service.send(code.id, 'hello');
@@ -408,6 +417,118 @@ describe('ChatService app-control tools', () => {
     callTool(await awaitStreamOf('tidy up'), 'c2', 'session_archive', { session_id: other.id, archived: false });
     await vi.waitUntil(() => settled('session_archive').length === 2, { timeout: 5000, interval: 5 });
     expect((await store.get(other.id))?.archived).toBeUndefined();
+  });
+
+  describe('orchestrator_label', () => {
+    const outcomeOf = (index: number): string => JSON.stringify(settled('orchestrator_label')[index] ?? null);
+    const labelCall = async (prompt: string, id: string, args: Record<string, unknown>, count: number) => {
+      callTool(await awaitStreamOf(prompt), id, 'orchestrator_label', args);
+      await vi.waitUntil(() => settled('orchestrator_label').length === count, { timeout: 5000, interval: 5 });
+    };
+
+    it('sets and clears the label on the calling conversation, with no card, and pushes it to the sidebar', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'mark yourself');
+      await labelCall('mark yourself', 'c1', { label: 'on' }, 1);
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+      expect(pushed.findLast(summary => summary.id === mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+
+      await labelCall('mark yourself', 'c2', { label: 'auto' }, 2);
+      expect(await store.get(mine.id)).not.toHaveProperty('orchestratorLabel');
+      expect(pushed.findLast(summary => summary.id === mine.id)).not.toHaveProperty('orchestratorLabel');
+      expect(asked.filter(entry => entry.toolName === 'orchestrator_label')).toEqual([]);
+    });
+
+    it('stores a label that matches the automatic rule as auto, and pins one that differs', async () => {
+      const mine = await codeSession(projectA);
+      await store.setOrchestrate(mine.id, true);
+
+      await service.send(mine.id, 'mark yourself');
+      await labelCall('mark yourself', 'c1', { label: 'on' }, 1);
+      expect(await store.get(mine.id)).not.toHaveProperty('orchestratorLabel');
+
+      await labelCall('mark yourself', 'c2', { label: 'off' }, 2);
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'off' });
+    });
+
+    it("refuses 'off' while the conversation has running agents", async () => {
+      const mine = await codeSession(projectA);
+      await store.setOrchestratorLabel(mine.id, 'on');
+      await store.create(undefined, {
+        mode: 'code',
+        origin: { parentSessionId: mine.id, depth: 1, seedPrompt: 'child task' },
+      });
+
+      await service.send(mine.id, 'hide yourself');
+      await labelCall('hide yourself', 'c1', { label: 'off' }, 1);
+      expect(outcomeOf(0)).toMatch(/has running agents/);
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('pushes a row-menu change to the sidebar too', async () => {
+      const mine = await codeSession(projectA);
+      await service.setSessionOrchestratorLabel(mine.id, 'on');
+      expect(pushed.findLast(summary => summary.id === mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('works in a Chat session with no project', async () => {
+      const chat = await service.createSession();
+      await service.send(chat.id, 'mark the chat');
+      await labelCall('mark the chat', 'c1', { label: 'on' }, 1);
+      expect(await store.get(chat.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('never touches another conversation, even when one is named', async () => {
+      const mine = await codeSession(projectA);
+      const sibling = await codeSession(projectA);
+
+      await service.send(mine.id, 'mark the sibling');
+      await labelCall('mark the sibling', 'c1', { label: 'on', session_id: sibling.id }, 1);
+      expect(await store.get(sibling.id)).not.toHaveProperty('orchestratorLabel');
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('leaves Orchestrate and the spawn gate alone', async () => {
+      const mine = await codeSession(projectA);
+      const approvalMode = (await store.get(mine.id))?.approvalMode;
+
+      await service.send(mine.id, 'mark only');
+      await labelCall('mark only', 'c1', { label: 'on' }, 1);
+      const stored = await store.get(mine.id);
+      expect(stored).not.toHaveProperty('orchestrate');
+      expect(stored).not.toHaveProperty('orchestrator');
+      expect(stored?.approvalMode).toBe(approvalMode);
+      expect(outcomeOf(0)).toMatch(/Orchestrate mode and spawn approvals are unchanged/);
+    });
+
+    it('refuses in a turn the user did not type and leaves the label alone', async () => {
+      const mine = await codeSession(projectA);
+      await store.setOrchestratorLabel(mine.id, 'on');
+      const setLabel = vi.spyOn(store, 'setOrchestratorLabel');
+
+      const started = await service.startAutomaticTurn(mine.id, 'the build finished', {
+        kind: 'background-exit',
+        processIds: ['aaaa1111'],
+        summary: 'build exited 0',
+      });
+      expect(started).toEqual({ ok: true });
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 'c1', 'orchestrator_label', { label: 'off' });
+      await vi.waitUntil(() => settled('orchestrator_label').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/only be changed in a turn the user typed/);
+      expect(setLabel).not.toHaveBeenCalled();
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('refuses an unknown label', async () => {
+      const mine = await codeSession(projectA);
+      await service.send(mine.id, 'bad label');
+      await labelCall('bad label', 'c1', { label: 'maybe' }, 1);
+      expect(outcomeOf(0)).toMatch(/argument must be .*on.*off.*auto/);
+      expect(await store.get(mine.id)).not.toHaveProperty('orchestratorLabel');
+    });
   });
 
   describe('session_rename', () => {

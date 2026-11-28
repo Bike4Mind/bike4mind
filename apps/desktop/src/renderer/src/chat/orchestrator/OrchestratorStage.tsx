@@ -139,6 +139,11 @@ export interface OrchestratorStageProps {
   onFocusAgentConsumed?(): void;
   /** An example quest picked on the empty stage: put its prompt in the composer. */
   onExampleQuest?(prompt: string): void;
+  /**
+   * Whether this session could start an agent (ChatShell's orchestrateCapable). False when only the
+   * orchestratorLabel override offers Agent View, so the empty stage says why none can start.
+   */
+  canStartAgents?: boolean;
   /** The panes and the view in each (orchestratorLayout.ts); one pane is the stage as a single view. */
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -190,6 +195,7 @@ const pulse = keyframes`
 export function OrchestratorStage({
   agents: rosterAgents,
   archivedAgents = NO_ARCHIVED,
+  canStartAgents = true,
   selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
@@ -653,6 +659,7 @@ export function OrchestratorStage({
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
               prompt={archivedAgents.length > 0 ? stageCopy.emptyArchived : stageCopy.empty}
               archived={archivedAgents}
+              canStart={canStartAgents}
               presenting={presenting}
               onOpen={actions.open}
             />
@@ -711,9 +718,13 @@ interface EmptyStageProps {
   /** The scene's own line under it (its copy.stage.empty, or emptyArchived once agents were archived). */
   prompt: string;
   archived: readonly ArchivedAgent[];
+  canStart: boolean;
   presenting: boolean;
   onOpen(id: string): void;
 }
+
+const CANNOT_START_HINT =
+  'This session cannot start agents. That needs a project folder, a model that supports tools, and room below the sub-session depth limit.';
 
 /** The wording for a stage with no scene, which has no host to name. */
 function plainEmptyHint(archivedCount: number): string {
@@ -722,7 +733,7 @@ function plainEmptyHint(archivedCount: number): string {
     : 'No agents yet. Describe the work and it will be split across agents.';
 }
 
-function EmptyStage({ scene, prompt, archived, presenting, onOpen }: EmptyStageProps) {
+function EmptyStage({ scene, prompt, archived, canStart, presenting, onOpen }: EmptyStageProps) {
   const archivedList = archived.length > 0 && (
     <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
   );
@@ -735,7 +746,7 @@ function EmptyStage({ scene, prompt, archived, presenting, onOpen }: EmptyStageP
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {prompt}
+            {canStart ? prompt : CANNOT_START_HINT}
           </Typography>
           {archivedList}
         </Box>
@@ -756,7 +767,7 @@ function EmptyStage({ scene, prompt, archived, presenting, onOpen }: EmptyStageP
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        {plainEmptyHint(archived.length)}
+        {canStart ? plainEmptyHint(archived.length) : CANNOT_START_HINT}
       </Typography>
       {archivedList}
     </Box>

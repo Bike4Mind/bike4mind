@@ -23,6 +23,7 @@ import type {
   ChatSpawnSuggestion,
   ChatToolNotice,
   ChatUsage,
+  OrchestratorLabel,
   RelayRefusal,
   SpawnRefusal,
 } from '@shared/chat';
@@ -368,6 +369,13 @@ export interface ModelContext {
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
+export type OrchestratorLabelOutcome = { ok: true } | { ok: false; reason: 'gone' | 'live-agents' };
+
+/** Sets the calling session's orchestrator label override. */
+export interface OrchestratorLabelContext {
+  set(label: OrchestratorLabel): Promise<OrchestratorLabelOutcome>;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -454,6 +462,11 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /**
+   * The calling session's sidebar orchestrator label, bound to that session alone. Absent in tests
+   * and in a turn the user did not type; orchestrator_label then refuses.
+   */
+  orchestratorLabel?: OrchestratorLabelContext;
   /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
   loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */

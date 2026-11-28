@@ -19,8 +19,21 @@ const mcpSchema: ToolSchema = {
  * off must subtract only itself.
  */
 describe('toolsForRequest', () => {
-  it('declares only the plan tool when nothing else is available', () => {
-    expect(names({ roots: [], media: false, host: false })).toEqual(['todo_write']);
+  it('declares only the plan tool and the orchestrator label when nothing else is available', () => {
+    expect(names({ roots: [], media: false, host: false })).toEqual(['todo_write', 'orchestrator_label']);
+  });
+
+  // It labels the caller's own sidebar row, so it needs no folder, project or user present.
+  it('offers orchestrator_label in every non-Studio conversation, once', () => {
+    for (const options of [
+      { roots: [], media: false, host: false },
+      { roots: ['/tmp'], media: true, host: true, ask: true, delegates: true },
+    ]) {
+      expect(names(options).filter(name => name === 'orchestrator_label')).toEqual([
+        'orchestrator_label',
+      ]);
+    }
+    expect(names({ studio: true, roots: [], media: true, host: false })).not.toContain('orchestrator_label');
   });
 
   // A projectless Chat session has no roots; the plan lives in the transcript and needs none.
@@ -121,6 +134,7 @@ describe('toolsForRequest', () => {
     // an MCP server is theirs, and none of the other three preconditions is about it.
     expect(names({ roots: [], media: false, host: false, mcp: [mcpSchema] })).toEqual([
       'todo_write',
+      'orchestrator_label',
       'mcp__notion_search',
     ]);
   });
@@ -233,7 +247,10 @@ describe('toolsForRequest', () => {
     });
 
     it('offers no edit tool at all without a granted folder', () => {
-      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual(['todo_write']);
+      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual([
+        'todo_write',
+        'orchestrator_label',
+      ]);
     });
 
     it('finds every edit tool by name, and says which family a model was offered', () => {

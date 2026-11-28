@@ -1293,6 +1293,7 @@ describe('activityContract', () => {
       expect(toolCategory('mcp__github__create_issue')).toBe('mcp');
       expect(toolCategory('session_spawn')).toBe('agent');
       expect(toolCategory('generate_image')).toBe('other');
+      expect(toolCategory('orchestrator_label'), 'a display label, not delegation').toBe('other');
     });
   });
 

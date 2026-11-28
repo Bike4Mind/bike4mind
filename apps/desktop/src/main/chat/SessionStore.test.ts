@@ -364,6 +364,37 @@ describe('SessionStore', () => {
     });
   });
 
+  describe('setOrchestratorLabel', () => {
+    it('keeps the override across a relaunch, leaves Orchestrate alone, and clears it on auto', async () => {
+      const { id, updatedAt } = await store.create();
+      const off = await store.setOrchestratorLabel(id, 'off');
+      expect(off).toMatchObject({ orchestratorLabel: 'off', updatedAt });
+      expect(off).not.toHaveProperty('orchestrate');
+      expect(off).not.toHaveProperty('orchestrator');
+
+      const relaunched = new SessionStore(directory, MODEL, 'next-launch');
+      expect(await relaunched.get(id)).toMatchObject({ orchestratorLabel: 'off' });
+      expect((await relaunched.list())[0]).toMatchObject({ orchestratorLabel: 'off' });
+      expect(await relaunched.setOrchestratorLabel(id, 'on')).toMatchObject({ orchestratorLabel: 'on' });
+
+      expect(await relaunched.setOrchestratorLabel(id, 'auto')).not.toHaveProperty('orchestratorLabel');
+      expect(JSON.parse(await readFile(join(directory, `${id}.json`), 'utf8'))).not.toHaveProperty('orchestratorLabel');
+    });
+
+    it('reads a missing or unknown stored value as the automatic rule', async () => {
+      const { id } = await store.create();
+      const path = join(directory, `${id}.json`);
+      const stored = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...stored, orchestratorLabel: 'sometimes' }), 'utf8');
+
+      expect(await new SessionStore(directory, MODEL, 'next-launch').get(id)).not.toHaveProperty('orchestratorLabel');
+    });
+
+    it('returns null for a session that does not exist', async () => {
+      expect(await store.setOrchestratorLabel('00000000-0000-4000-8000-000000000000', 'on')).toBeNull();
+    });
+  });
+
   describe('reply stats', () => {
     const stats: ChatReplyStats = {
       totalMs: 5_000,

@@ -332,6 +332,7 @@ export function ChatShell({
     clearCodeError,
     remove,
     togglePin,
+    setOrchestratorLabel,
     toggleArchived,
     rename,
     renameError,
@@ -976,7 +977,6 @@ export function ChatShell({
     session: orchestrationSession,
     hasAgents,
     hasArchivedAgents,
-    orchestrateCapable,
   });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
@@ -1990,6 +1990,7 @@ export function ChatShell({
             onCreateInSection={sectionId => void onCreateInSection(sectionId)}
             onDelete={setDeleteSessionId}
             onTogglePin={session => void togglePin(session)}
+            onSetOrchestratorLabel={(session, label) => void setOrchestratorLabel(session, label)}
             onToggleArchived={session => void toggleArchived(session)}
             onRename={(session, title) => void rename(session, title)}
             onDownload={session => void exportSession(session)}
@@ -2278,6 +2279,7 @@ export function ChatShell({
                     preparing={preparing}
                     background={backgroundJobs}
                     prSummaries={prSummaries}
+                    canStartAgents={orchestrateCapable}
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}

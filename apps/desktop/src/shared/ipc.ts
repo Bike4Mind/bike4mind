@@ -64,6 +64,7 @@ import type {
   ChatSessionMode,
   ChatSessionExportResult,
   ChatSessionSummary,
+  OrchestratorLabel,
   RaiseRunBudgetResult,
   ChatVideoJob,
   ChatVideoLinkResult,
@@ -261,6 +262,7 @@ export const IPC_CHANNELS = {
   chatSetModelSettings: 'chat:set-model-settings',
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  chatSetSessionOrchestratorLabel: 'chat:set-session-orchestrator-label',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
   chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
@@ -1026,6 +1028,8 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    /** Override the sidebar's orchestrator label ('auto' clears it). Null when the session is gone. */
+    setSessionOrchestratorLabel(sessionId: string, label: OrchestratorLabel): Promise<ChatSessionSummary | null>;
     /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
     setSessionOrchestrate(
       sessionId: string,

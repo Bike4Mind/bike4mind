@@ -153,6 +153,7 @@ describe('ChatService generation tools', () => {
 
     expect(declaredTools()).toEqual([
       'todo_write',
+      'orchestrator_label',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',
@@ -183,7 +184,15 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual(['todo_write', 'web_search', 'web_fetch', 'ask_user', 'request_directory', 'loop']);
+    expect(declaredTools()).toEqual([
+      'todo_write',
+      'orchestrator_label',
+      'web_search',
+      'web_fetch',
+      'ask_user',
+      'request_directory',
+      'loop',
+    ]);
   });
 
   it('tells the model the output goes to the user and that it costs them', async () => {
@@ -315,6 +324,7 @@ describe('ChatService generation tools', () => {
     const request = local.mock.calls.find(([request]) => request.tools?.length)?.[0];
     expect(request?.tools?.map(entry => (entry.toolSchema as { name: string }).name)).toEqual([
       'todo_write',
+      'orchestrator_label',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',
