@@ -7,7 +7,7 @@ import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
 import { logLlmUsageSettled } from '@bike4mind/services/llm/llmUsageSettledLog';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
-import { batchAnthropicKeys, firstKeyHolding } from '@server/billing/batchAnthropicKeys';
+import { batchPollKeys, firstKeyHolding } from '@server/billing/batchAnthropicKeys';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
@@ -54,7 +54,7 @@ const handler = baseApi({
     });
   }
 
-  const keys = await batchAnthropicKeys();
+  const keys = await batchPollKeys();
   if (keys.length === 0) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }

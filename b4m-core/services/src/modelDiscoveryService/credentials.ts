@@ -13,12 +13,11 @@ export const EXPIRED_KEY_SENTINEL = 'expired';
 const ELEVENLABS_SETTING: IAdminSettings['settingName'] = 'elevenLabsServerApiKey';
 
 /**
- * Discovery-only env keys, preferred over the demo-key tier (sec 5.7). The `null`
- * user path reaches only AdminSettings demo keys, so a hosted deploy without one
- * silently stops watching its largest catalog surface; reading the secret
- * directly makes hosted discovery deterministic instead of dependent on a
- * setting that exists for a different purpose. Unlike `envKey`, this is NOT
- * gated on B4M_SELF_HOST - hosted is the case it exists for.
+ * Discovery-only env keys, preferred over the demo-key tier (sec 5.7). Unlike
+ * `envKey`, the gemini, xai, kimi and deepseek entries are NOT gated on
+ * B4M_SELF_HOST - hosted reads those linked secrets directly. The openai and
+ * anthropic entries are the exception (see PLATFORM_KEY_PROVIDERS): hosted
+ * resolves those from the admin-setting platform key, like platform completions.
  */
 export const DISCOVERY_ENV_KEYS = {
   openai: 'OPENAI_API_KEY',
@@ -28,6 +27,12 @@ export const DISCOVERY_ENV_KEYS = {
   kimi: 'MOONSHOT_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
 } as const;
+
+/**
+ * Providers whose hosted key is the admin-setting platform key, never the stage
+ * secret. Their env value counts on self-host only (.env.selfhost).
+ */
+const PLATFORM_KEY_PROVIDERS = ['openai', 'anthropic'] as const;
 
 export type LLMKeyResolver = typeof getEffectiveLLMApiKeys;
 
@@ -43,8 +48,8 @@ export interface DiscoveryCredentialAdapters extends GetEffectiveLLMApiKeysAdapt
 /**
  * A value that is absent, blank, the expiry sentinel, or any recognized
  * placeholder is not a credential. The placeholder matters most on the env tier:
- * DISCOVERY_ENV_KEYS is live on hosted, so on a stage where `sst secret set`
- * never ran the placeholder would beat the AdminSettings key and every request
+ * the hosted env keys (gemini, xai, kimi, deepseek) are live, so on a stage
+ * where `sst secret set` never ran the placeholder would beat the AdminSettings key and every request
  * would go out as `Bearer not-configured`. isPlaceholderApiKey rather than
  * isPlaceholderValue: it is the repo's documented superset, and the values a
  * half-filled .env actually carries (your-api-key, REPLACE_ME, dummy) are in the
@@ -78,14 +83,18 @@ export async function getDiscoveryCredentials(
   ]);
 
   const isSelfHost = env.B4M_SELF_HOST === 'true';
+  const envValue = (provider: keyof typeof DISCOVERY_ENV_KEYS) =>
+    !isSelfHost && (PLATFORM_KEY_PROVIDERS as readonly string[]).includes(provider)
+      ? null
+      : usable(env[DISCOVERY_ENV_KEYS[provider]]);
 
   return {
-    openai: usable(env[DISCOVERY_ENV_KEYS.openai]) ?? usable(keys.openai),
-    anthropic: usable(env[DISCOVERY_ENV_KEYS.anthropic]) ?? usable(keys.anthropic),
-    gemini: usable(env[DISCOVERY_ENV_KEYS.gemini]) ?? usable(keys.gemini),
-    xai: usable(env[DISCOVERY_ENV_KEYS.xai]) ?? usable(keys.xai),
-    kimi: usable(env[DISCOVERY_ENV_KEYS.kimi]) ?? usable(keys.kimi),
-    deepseek: usable(env[DISCOVERY_ENV_KEYS.deepseek]) ?? usable(keys.deepseek),
+    openai: envValue('openai') ?? usable(keys.openai),
+    anthropic: envValue('anthropic') ?? usable(keys.anthropic),
+    gemini: envValue('gemini') ?? usable(keys.gemini),
+    xai: envValue('xai') ?? usable(keys.xai),
+    kimi: envValue('kimi') ?? usable(keys.kimi),
+    deepseek: envValue('deepseek') ?? usable(keys.deepseek),
     bfl: usable(keys.bfl),
     voyageai: usable(keys.voyageai),
     ollama: usable(keys.ollama),

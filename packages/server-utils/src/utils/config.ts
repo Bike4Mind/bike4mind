@@ -97,7 +97,8 @@ const Config = {
   MAIL_PORT: Resource.MAIL_PORT.value,
   MAIL_USERNAME: Resource.MAIL_USERNAME.value,
   MAIL_PASSWORD: Resource.MAIL_PASSWORD.value,
-  ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
+  // Read only to drain in-flight batches (batchAnthropicKeys); platform completions use the admin-setting key.
+  ANTHROPIC_API_KEY: readOptionalSecret('ANTHROPIC_API_KEY', () => Resource.ANTHROPIC_API_KEY.value),
   ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
   TURNSTILE_SECRET_KEY: readOptionalSecret('TURNSTILE_SECRET_KEY', () => Resource.TURNSTILE_SECRET_KEY.value),
   OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),

@@ -10,7 +10,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: m.resolve } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: m.config }));
 
-const { batchAnthropicKeys, firstKeyHolding } = await import('./batchAnthropicKeys');
+const { batchSubmitKey, batchPollKeys, firstKeyHolding } = await import('./batchAnthropicKeys');
 
 const notFound = Object.assign(new Error('not found'), { status: 404 });
 
@@ -20,34 +20,46 @@ beforeEach(() => {
   m.resolve.mockResolvedValue({ anthropic: 'sk-platform' });
 });
 
-describe('batchAnthropicKeys', () => {
-  it('prefers the platform key and keeps the deployment secret as the second choice', async () => {
-    expect(await batchAnthropicKeys()).toEqual(['sk-platform', 'sk-deployment']);
+describe('batchSubmitKey', () => {
+  it('submits under the platform key, never the deployment secret', async () => {
+    expect(await batchSubmitKey()).toBe('sk-platform');
+  });
+
+  it('has no key when none is stored, even though the deployment secret is set', async () => {
+    m.resolve.mockResolvedValue({ anthropic: null });
+
+    expect(await batchSubmitKey()).toBeUndefined();
+  });
+
+  it('rejects a placeholder platform key', async () => {
+    m.resolve.mockResolvedValue({ anthropic: 'not-configured' });
+
+    expect(await batchSubmitKey()).toBeUndefined();
   });
 
   it('resolves platform keys only, never a user key', async () => {
-    await batchAnthropicKeys();
+    await batchSubmitKey();
 
     expect(m.resolve).toHaveBeenCalledWith(null, expect.anything());
   });
+});
 
-  it('falls back to the deployment secret when no platform key is stored', async () => {
-    m.resolve.mockResolvedValue({ anthropic: null });
-
-    expect(await batchAnthropicKeys()).toEqual(['sk-deployment']);
+describe('batchPollKeys', () => {
+  it('prefers the platform key and keeps the deployment secret as a drain-only second choice', async () => {
+    expect(await batchPollKeys()).toEqual(['sk-platform', 'sk-deployment']);
   });
 
   it('lists one key when both sources hold the same value', async () => {
     m.resolve.mockResolvedValue({ anthropic: 'sk-deployment' });
 
-    expect(await batchAnthropicKeys()).toEqual(['sk-deployment']);
+    expect(await batchPollKeys()).toEqual(['sk-deployment']);
   });
 
   it('drops placeholder values, leaving nothing when neither source is configured', async () => {
     m.resolve.mockResolvedValue({ anthropic: null });
     m.config.ANTHROPIC_API_KEY = 'not-configured';
 
-    expect(await batchAnthropicKeys()).toEqual([]);
+    expect(await batchPollKeys()).toEqual([]);
   });
 });
 

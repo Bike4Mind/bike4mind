@@ -76,7 +76,15 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 
-const { buildModelDiscoveryAdapters } = await import('./adapters');
+vi.mock('sst', () => ({
+  Resource: {
+    OPENAI_API_KEY: { value: 'stage-secret-sentinel' },
+    ANTHROPIC_API_KEY: { value: 'stage-secret-sentinel' },
+    GEMINI_API_KEY: { value: 'gemini-linked' },
+  },
+}));
+
+const { buildModelDiscoveryAdapters, discoveryEnv } = await import('./adapters');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -319,5 +327,30 @@ describe('model-list refresh wiring', () => {
     await onModelListChanged!();
 
     expect(bumpModelListRevision).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('discoveryEnv', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('does not bridge the OpenAI or Anthropic stage secrets into the discovery env', () => {
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const env = discoveryEnv();
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('still bridges the other linked provider secrets', () => {
+    vi.stubEnv('GEMINI_API_KEY', '');
+    delete process.env.GEMINI_API_KEY;
+
+    expect(discoveryEnv().GEMINI_API_KEY).toBe('gemini-linked');
   });
 });
