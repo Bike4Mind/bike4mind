@@ -356,6 +356,7 @@ final class SignOutReasonTests: XCTestCase {
   func testSignOutCarriesTheGivenReason() async throws {
     let auth = AuthController(
       environment: .production, tokenStore: InMemoryTokenStore(refreshToken: "r"),
+      sessionEndCleanup: { _ in },
       transport: FakeTransport { _ in (200, Data()) })
     auth.restore()
     await auth.signOut(reason: .accountDeletionRequested)

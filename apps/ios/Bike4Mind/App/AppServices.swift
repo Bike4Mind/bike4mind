@@ -25,7 +25,9 @@ final class AppServices {
     let stepUp: StepUpClient
   }
 
+  @ObservationIgnored private let captureDestinations: any DestinationStore
   @ObservationIgnored private let auth: AuthController
+  @ObservationIgnored private let sessionLogger = Logger(subsystem: "com.bike4mind.app", category: "session")
   @ObservationIgnored private var built: Graph?
 
   let navigator = AppNavigator()
@@ -78,8 +80,9 @@ final class AppServices {
   let voiceCatalog: VoiceCatalogModel
   let voiceAPI: any VoiceAPI
 
-  init(auth: AuthController) {
+  init(auth: AuthController, captureDestinations: any DestinationStore = UserDefaultsDestinationStore()) {
     self.auth = auth
+    self.captureDestinations = captureDestinations
     clientUpgrade = ClientUpgradeStatus { [auth] in
       try await ClientVersionProbe(baseURL: auth.environment.baseURL).check()
     }
@@ -291,21 +294,33 @@ final class AppServices {
   /// Ends the session everywhere the app can reach: Live Activities, agent run polling, the push token and
   /// finally the tokens. The unregister call needs a live session, so it runs before the session is torn down.
   func signOutEverywhere(reason: AuthController.SignOutReason = .userInitiated) async {
-    await questActivities.sessionWillEnd()
+    let scope: AuthController.SessionEndScope
+    do { scope = try auth.sessionEndScope() } catch {
+      sessionLogger.error("Preparing sign-out failed: \(error, privacy: .public)")
+      return
+    }
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
+    await questActivities.sessionWillEnd()
+    guard auth.isCurrentSession(scope) else { return }
     await agentRunMonitor.stopAll()
+    guard auth.isCurrentSession(scope) else { return }
     await push.unregisterBeforeSignOut()
-    await auth.signOut(reason: reason)
+    await auth.signOut(reason: reason, scope: scope)
   }
 
-  /// Session end, whether the user signed out or the server ended it: Studio tiles and queued captures belong
-  /// to the account that made them, so the next one must not see or send them.
-  func discardAccountContent() async {
+  /// Capture disk cleanup has completed under the identity lock. Capture the old graph before any await.
+  func discardAccountContent() {
+    let oldGraph = built
+    let termination = auth.completedTermination
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
-    UserDefaultsGenerationStore(environment: auth.environment).save([])
-    await capture.signOut()
+    if let environment = oldGraph?.environment {
+      UserDefaultsGenerationStore(environment: environment).save([])
+    }
+    if let identity = termination?.identity, let engine = oldGraph?.capture.engine {
+      Task { await engine.releaseOwner(expectedIdentity: identity) }
+    }
   }
 
   var sessionListCache: any SessionListCache { current.cache }
@@ -528,7 +543,7 @@ final class AppServices {
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
       capture: .live(
         baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app,
-        didSendToSession: { id in await transcriptCache.remove(sessionID: id) }),
+        destinationStore: captureDestinations, didSendToSession: { id in await transcriptCache.remove(sessionID: id) }),
       account: AccountClient(baseURL: environment.baseURL, tokens: auth),
       stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)
     )

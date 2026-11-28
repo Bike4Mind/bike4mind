@@ -6,8 +6,10 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
 import com.bike4mind.kit.auth.PendingRevocation
+import com.bike4mind.kit.auth.PendingRevocationCodec
 import com.bike4mind.kit.auth.TokenStore
 import com.bike4mind.kit.auth.Tokens
+import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -16,6 +18,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -23,7 +27,10 @@ import org.json.JSONObject
  * The token pair, AES-GCM encrypted under a non-exportable Android Keystore key (the Android counterpart of
  * the iOS keychain item). A blob that no longer decrypts (key wiped, app restored elsewhere) reads as signed out.
  */
-class KeystoreTokenStore(context: Context) : TokenStore {
+class KeystoreTokenStore(
+    context: Context,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) : TokenStore {
     private val prefs = context.getSharedPreferences("b4m.tokens", Context.MODE_PRIVATE)
 
     override suspend fun load(): Tokens? = withContext(Dispatchers.IO) {
@@ -43,30 +50,35 @@ class KeystoreTokenStore(context: Context) : TokenStore {
     }
 
     override suspend fun loadPendingRevocations(): List<PendingRevocation> = withContext(Dispatchers.IO) {
-        val array = open(PENDING)?.let { runCatching { JSONArray(it) }.getOrNull() } ?: return@withContext emptyList()
-        (0 until array.length()).mapNotNull { index ->
-            val item = array.optJSONObject(index) ?: return@mapNotNull null
-            val baseUrl = item.optString(BASE_URL).ifEmpty { return@mapNotNull null }
-            val refresh = item.optString(REFRESH).ifEmpty { return@mapNotNull null }
-            PendingRevocation(baseUrl, refresh, item.optLong(CREATED_AT))
+        pendingStorageLock.withLock {
+            val encoded = open(PENDING)
+            PendingRevocationCodec.load(
+                encoded,
+                nowMillis(),
+                persist = { migrated -> seal(PENDING, migrated, durable = true) },
+                confirmPersisted = {
+                    if (!prefs.edit().commit()) throw IOException("Pending revocations could not be confirmed")
+                },
+            )
         }
     }
 
     override suspend fun savePendingRevocations(revocations: List<PendingRevocation>) = withContext(Dispatchers.IO) {
-        if (revocations.isEmpty()) {
-            prefs.edit { remove(PENDING) }
-            return@withContext
+        pendingStorageLock.withLock {
+            if (revocations.isEmpty()) {
+                if (!prefs.edit().remove(PENDING).commit()) throw IOException("Pending revocations could not be cleared")
+                return@withLock
+            }
+            val array = JSONArray()
+            revocations.forEach {
+                array.put(
+                    JSONObject().put(BASE_URL, it.baseUrl).put(REFRESH, it.refreshToken).put(CREATED_AT, it.createdAtMillis),
+                )
+            }
+            seal(PENDING, array.toString(), durable = true)
         }
-        val array = JSONArray()
-        revocations.forEach {
-            array.put(
-                JSONObject().put(BASE_URL, it.baseUrl).put(REFRESH, it.refreshToken).put(CREATED_AT, it.createdAtMillis),
-            )
-        }
-        seal(PENDING, array.toString())
     }
 
-    /** The decrypted value under [name], or null; a blob that no longer decrypts is dropped. */
     private fun open(name: String): String? {
         val blob = prefs.getString(name, null) ?: return null
         return try {
@@ -83,11 +95,16 @@ class KeystoreTokenStore(context: Context) : TokenStore {
         }
     }
 
-    private fun seal(name: String, plain: String) {
+    private fun seal(name: String, plain: String, durable: Boolean = false) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val sealed = cipher.iv + cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
-        prefs.edit { putString(name, Base64.encodeToString(sealed, Base64.NO_WRAP)) }
+        val encoded = Base64.encodeToString(sealed, Base64.NO_WRAP)
+        if (durable) {
+            if (!prefs.edit().putString(name, encoded).commit()) throw IOException("Pending revocations could not be saved")
+        } else {
+            prefs.edit { putString(name, encoded) }
+        }
     }
 
     private fun key(): SecretKey {
@@ -105,6 +122,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
     }
 
     private companion object {
+        private val pendingStorageLock = Mutex()
         const val KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "b4m.tokens.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"

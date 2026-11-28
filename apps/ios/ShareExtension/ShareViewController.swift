@@ -52,11 +52,15 @@ final class ShareViewController: UIViewController {
     #else
       let environment = ServerEnvironment.production
     #endif
+    let destinations = UserDefaultsDestinationStore()
+    let captureCleanup = CaptureSessionCleanup(destinations: destinations)
     let auth = AuthController(
-      environment: environment, tokenStore: KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved()))
+      environment: environment, tokenStore: KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved()),
+      sessionEndCleanup: captureCleanup.perform)
     auth.restore()
     return .live(
-      baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.shareExtension)
+      baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.shareExtension,
+      destinationStore: destinations)
   }
 
   private func show(_ content: AnyView) {

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import type { ISessionDocument } from '@bike4mind/common';
 import { useSessionCacheMigration } from '../useSessionCacheMigration';
 import { useChatInput } from '@client/app/hooks/useChatInput';
+import { setSignedInUserId } from '@client/app/utils/identityScopedStorage';
 
 const TMP_ID = 'optimistic-session-123';
 const REAL_ID = 'real-session-456';
@@ -30,6 +31,7 @@ describe('useSessionCacheMigration', () => {
 
   beforeEach(() => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    setSignedInUserId('user-a');
     useChatInput.setState({ drafts: {}, programmaticLaunch: null });
   });
 

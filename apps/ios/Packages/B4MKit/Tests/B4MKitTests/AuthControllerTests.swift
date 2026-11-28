@@ -24,6 +24,7 @@ final class AuthControllerTests: XCTestCase {
     return AuthController(
       environment: .production,
       tokenStore: store,
+      sessionEndCleanup: { _ in },
       transport: transport,
       biometricGate: FakeBiometricGate(succeeds: appLockSucceeds),
       preferences: Fixtures.isolatedDefaults(),
@@ -206,11 +207,13 @@ final class AuthControllerTests: XCTestCase {
     // rejects our stale token, and the freshly stored one must be tried exactly once.
     try store.setRefreshToken("sid.0")
     let store = self.store!
+    let peer = try XCTUnwrap(SharedSessionCoordinator(tokenStore: store, baseURL: ServerEnvironment.production.baseURL))
     let accessToken = freshAccessToken()
     await transport.respond { request in
       let presented = Fixtures.jsonBody(of: request)["token"] as? String
       if presented == "sid.0" {
-        try store.setRefreshToken("sid.1")
+        let snapshot = try XCTUnwrap(peer.restore())
+        _ = try peer.refresh(expected: snapshot, token: "sid.1", userID: snapshot.record.userID)
         return (401, Data())
       }
       return (200, Fixtures.json(["accessToken": accessToken, "refreshToken": "sid.2"]))
@@ -230,9 +233,11 @@ final class AuthControllerTests: XCTestCase {
   func testRepeatedRejectionAfterCrossProcessRetrySignsOut() async throws {
     try store.setRefreshToken("sid.0")
     let store = self.store!
+    let peer = try XCTUnwrap(SharedSessionCoordinator(tokenStore: store, baseURL: ServerEnvironment.production.baseURL))
     await transport.respond { request in
       if Fixtures.jsonBody(of: request)["token"] as? String == "sid.0" {
-        try store.setRefreshToken("sid.1")
+        let snapshot = try XCTUnwrap(peer.restore())
+        _ = try peer.refresh(expected: snapshot, token: "sid.1", userID: snapshot.record.userID)
       }
       return (401, Data())
     }
@@ -368,7 +373,7 @@ final class AuthControllerTests: XCTestCase {
       )
     }
     let auth = AuthController(
-      environment: .production, tokenStore: store, transport: transport,
+      environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: transport,
       oauthConfiguration: OAuthConfiguration.debugBuild(for:),
       biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults())
     auth.restore()
@@ -655,7 +660,7 @@ final class AuthControllerTests: XCTestCase {
     try store.setRefreshToken("sid.0")
     let gate = CountingBiometricGate()
     let auth = AuthController(
-      environment: .production, tokenStore: store, transport: transport,
+      environment: .production, tokenStore: store, sessionEndCleanup: { _ in }, transport: transport,
       biometricGate: gate, preferences: Fixtures.isolatedDefaults())
     auth.restore()
     auth.isAppLockEnabled = true

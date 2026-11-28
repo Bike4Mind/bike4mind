@@ -23,6 +23,25 @@ public struct PendingRevocation: Codable, Equatable, Sendable {
   }
 }
 
+enum PendingRevocationCodec {
+  private struct Stored: Decodable {
+    let baseURL: URL
+    let refreshToken: String
+    let createdAt: Date?
+  }
+
+  static func load(_ data: Data, now: Date, persist: (Data) throws -> Void) throws -> [PendingRevocation] {
+    let stored = try JSONDecoder().decode([Stored].self, from: data)
+    let values = stored.map {
+      PendingRevocation(baseURL: $0.baseURL, refreshToken: $0.refreshToken, createdAt: $0.createdAt ?? now)
+    }
+    if stored.contains(where: { $0.createdAt == nil }) {
+      try persist(JSONEncoder().encode(values))
+    }
+    return values
+  }
+}
+
 /// Durable home of the refresh token. The access token is never persisted.
 public protocol TokenStore: Sendable {
   func refreshToken() throws -> String?
@@ -33,9 +52,11 @@ public protocol TokenStore: Sendable {
   func setPendingRevocations(_ revocations: [PendingRevocation]) throws
 }
 
-public final class InMemoryTokenStore: TokenStore {
+public final class InMemoryTokenStore: SharedSessionStorage {
   private let storage: OSAllocatedUnfairLock<String?>
   private let pending = OSAllocatedUnfairLock<[PendingRevocation]>(initialState: [])
+  private let sessionRecord = OSAllocatedUnfairLock<Data?>(initialState: nil)
+  private let sessionLock = NSLock()
 
   public init(refreshToken: String? = nil) {
     storage = OSAllocatedUnfairLock(initialState: refreshToken)
@@ -55,5 +76,19 @@ public final class InMemoryTokenStore: TokenStore {
 
   public func setPendingRevocations(_ revocations: [PendingRevocation]) throws {
     pending.withLock { $0 = revocations }
+  }
+
+  public func sharedSessionRecord() throws -> Data? {
+    sessionRecord.withLock { $0 }
+  }
+
+  public func setSharedSessionRecord(_ data: Data?) throws {
+    sessionRecord.withLock { $0 = data }
+  }
+
+  public func withSharedSessionLock<Result>(_ operation: () throws -> Result) throws -> Result {
+    sessionLock.lock()
+    defer { sessionLock.unlock() }
+    return try operation()
   }
 }

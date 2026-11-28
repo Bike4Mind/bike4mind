@@ -7,6 +7,7 @@ import { userIsCustomer, userIsDeveloper } from '../utils/user';
 import { api, isPublicPath, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { setFunnelSyntheticUser } from '@client/app/utils/funnelEvents';
+import { setSignedInUserId } from '@client/app/utils/identityScopedStorage';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
 import { useGetIdentify } from '@client/app/hooks/data/user';
@@ -342,6 +343,9 @@ export const useUser = create<UserContextProps>()(
 
 // Keeps synthetic test personas out of client funnel events (funnelEvents.ts).
 useUser.subscribe(state => setFunnelSyntheticUser(!!state.currentUser?.isSynthetic));
+
+setSignedInUserId(useUser.getState().currentUser?.id);
+useUser.subscribe(state => setSignedInUserId(state.currentUser?.id));
 
 // The api request guard (accountDeletionInterceptor.ts) reads this; seeded from the rehydrated user.
 setDeletionGuardUser(useUser.getState().currentUser);

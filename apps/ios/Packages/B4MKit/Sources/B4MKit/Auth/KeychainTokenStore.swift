@@ -17,15 +17,20 @@ public struct KeychainError: Error, Equatable, Sendable {
 
 /// Generic-password Keychain item, readable after first unlock so background refreshes
 /// (and, later, the share extension via `accessGroup`) work while the device is locked.
-public struct KeychainTokenStore: TokenStore {
+public struct KeychainTokenStore: SharedSessionStorage {
   private let service: String
   private let account: String
   private let accessGroup: String?
+  private let now: @Sendable () -> Date
 
-  public init(service: String = "com.bike4mind.auth", account: String = "refreshToken", accessGroup: String? = nil) {
+  public init(
+    service: String = "com.bike4mind.auth", account: String = "refreshToken", accessGroup: String? = nil,
+    now: @escaping @Sendable () -> Date = Date.init
+  ) {
     self.service = service
     self.account = account
     self.accessGroup = accessGroup
+    self.now = now
   }
 
   /// Whether a failed operation against the shared access group should be retried app-private: only when a
@@ -52,18 +57,41 @@ public struct KeychainTokenStore: TokenStore {
     KeychainTokenStore(service: service, account: "\(account).pendingRevocations", accessGroup: accessGroup)
   }
 
+  private var sessionIdentityItem: KeychainTokenStore {
+    KeychainTokenStore(service: service, account: "\(account).sessionIdentity", accessGroup: accessGroup)
+  }
+
+  public func sharedSessionRecord() throws -> Data? {
+    try sessionIdentityItem.refreshToken().map { Data($0.utf8) }
+  }
+
+  public func setSharedSessionRecord(_ data: Data?) throws {
+    try sessionIdentityItem.setRefreshToken(data.map { String(decoding: $0, as: UTF8.self) })
+  }
+
+  public func withSharedSessionLock<Result>(_ operation: () throws -> Result) throws -> Result {
+    try SharedSessionFileLock(url: SharedContainer.directory().appending(path: "AuthSession.lock"))
+      .withLock(operation)
+  }
+
   public func pendingRevocations() throws -> [PendingRevocation] {
-    guard let json = try pendingRevocationItem.refreshToken() else { return [] }
-    return (try? JSONDecoder().decode([PendingRevocation].self, from: Data(json.utf8))) ?? []
+    try withSharedSessionLock {
+      guard let json = try pendingRevocationItem.refreshToken() else { return [] }
+      return try PendingRevocationCodec.load(Data(json.utf8), now: now()) { data in
+        try pendingRevocationItem.setRefreshToken(String(decoding: data, as: UTF8.self))
+      }
+    }
   }
 
   public func setPendingRevocations(_ revocations: [PendingRevocation]) throws {
-    guard !revocations.isEmpty else {
-      try pendingRevocationItem.setRefreshToken(nil)
-      return
+    try withSharedSessionLock {
+      guard !revocations.isEmpty else {
+        try pendingRevocationItem.setRefreshToken(nil)
+        return
+      }
+      let json = String(decoding: try JSONEncoder().encode(revocations), as: UTF8.self)
+      try pendingRevocationItem.setRefreshToken(json)
     }
-    let json = String(decoding: try JSONEncoder().encode(revocations), as: UTF8.self)
-    try pendingRevocationItem.setRefreshToken(json)
   }
 
   public func refreshToken() throws -> String? {
