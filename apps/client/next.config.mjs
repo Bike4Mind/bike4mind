@@ -132,8 +132,8 @@ const nextConfig = {
   // contract behind it. These entries make that a declaration. Under Turbopack the tracer is
   // Turbopack's own rather than nft, whose collect-build-traces is gated off - and since that
   // module is also the only JS-side reader of this key, the includes here are live only because
-  // Turbopack applies them natively. The excludes below are dormant either way; see the note on
-  // them. help-embeddings.json/.bin exist only when an embedding key was present at build time (see
+  // Turbopack applies them natively, as it does the excludes below; see the note on them.
+  // help-embeddings.json/.bin exist only when an embedding key was present at build time (see
   // .gitignore), and an include matching no file is a silent no-op, so declaring it costs a
   // keyless build nothing.
   outputFileTracingIncludes: {
