@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildAuthSuccessUrl, omitAuthToken } from '../../e2e/helpers/auth-seed';
+import { redactAuthError } from '../../e2e/helpers/error-text';
+import type { TestError } from '@playwright/test/reporter';
 
 const auth = { accessToken: 'aaa.bbb-ccc_ddd.eee', userId: 'user1' };
 
@@ -25,5 +27,28 @@ describe('omitAuthToken', () => {
     const text = 'expect(locator).toBeVisible() failed: tokens=3, id_token: none';
 
     expect(omitAuthToken(text)).toBe(text);
+  });
+});
+
+describe('redactAuthError', () => {
+  it('retains diagnostics while scrubbing messages, stacks, thrown values and causes', () => {
+    const error: TestError = {
+      message: `Timeout /auth/success#token=${auth.accessToken}`,
+      stack: `at /auth/success#token=${auth.accessToken}`,
+      value: `/auth/success#token=${auth.accessToken}`,
+      cause: { message: `Cause /auth/success#token=${auth.accessToken}` },
+    };
+    redactAuthError(error);
+    expect(JSON.stringify(error)).not.toContain(auth.accessToken);
+    expect(error.message).toBe('Timeout /auth/success#token=[omitted]');
+    expect(error.cause?.message).toBe('Cause /auth/success#token=[omitted]');
+  });
+
+  it('leaves token-free diagnostics unchanged and terminates on a repeated cause', () => {
+    const error: TestError = { message: 'Useful diagnostic' };
+    error.cause = error;
+    redactAuthError(error);
+    expect(error.message).toBe('Useful diagnostic');
+    expect(error.cause).toBe(error);
   });
 });
