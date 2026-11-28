@@ -40,6 +40,8 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: {
     isCurrentOrgMember: (org: { userId: string; users: { userId: string }[] }, id: string) =>
       org.userId === id || org.users.some(m => m.userId === id),
+    wasRemovedFromOrganization: (org: { removedUserIds?: string[] }, id: string) =>
+      (org.removedUserIds ?? []).includes(id),
   },
 }));
 

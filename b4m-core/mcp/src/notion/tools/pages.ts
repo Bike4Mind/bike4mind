@@ -7,6 +7,7 @@
  * Write operations (create_page, append_blocks) are gated by:
  * - NOTION_WRITE_ENABLED env var (must be "true")
  * - NOTION_ROOT_PAGE_ID env var (all writes scoped to this page tree via ancestry validation)
+ * - a confirm click: without the host-set `_executeFromButton` they return a preview, not a write
  */
 
 import { z } from 'zod';
@@ -22,6 +23,8 @@ import type {
 import { notionRequest } from '../client.js';
 import { getConfig } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
+import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
+import { confirmationParams } from '../../shared/schemas.js';
 import { notionPageIdSchema, notionDatabaseIdSchema, startCursorSchema } from '../helpers/schemas.js';
 import {
   normalizeId,
@@ -312,8 +315,9 @@ export function registerPageTools(server: McpServer): void {
       parentDatabaseId: notionDatabaseIdSchema
         .optional()
         .describe('Optional parent database ID (UUID). If provided, the page is created as a database row/page.'),
+      ...confirmationParams,
     },
-    async ({ title, content, parentPageId, parentDatabaseId }) => {
+    async ({ title, content, parentPageId, parentDatabaseId, _executeFromButton }) => {
       try {
         debug('create_page invoked', { title, hasContent: !!content, parentPageId, parentDatabaseId });
         // Gate write access (legacy toggle + root page)
@@ -357,6 +361,15 @@ export function registerPageTools(server: McpServer): void {
         const parent: NotionPageParent = parentDatabaseId
           ? { database_id: parentDatabaseId }
           : { page_id: parentPageId || rootPageId };
+
+        if (_executeFromButton !== true) {
+          return createPreviewResponse(
+            'Preview: Notion page to be created',
+            { title, parent, contentPreview: content ?? null },
+            'page',
+            { tool: TOOL_NOTION_CREATE_PAGE, params: { title, content, parentPageId, parentDatabaseId } }
+          );
+        }
 
         const body: Record<string, unknown> = {
           parent,
@@ -424,8 +437,9 @@ export function registerPageTools(server: McpServer): void {
             'Supported types: paragraph, heading_1, heading_2, heading_3, ' +
             'bulleted_list_item, numbered_list_item, to_do, toggle, quote, callout, code, divider.'
         ),
+      ...confirmationParams,
     },
-    async ({ blockId, blocks }) => {
+    async ({ blockId, blocks, _executeFromButton }) => {
       try {
         debug('append_blocks invoked', { blockId, blockCount: blocks.length });
         // Gate write access (legacy toggle + root page)
@@ -446,6 +460,15 @@ export function registerPageTools(server: McpServer): void {
               `Target ${blockId} is not within the configured root page tree. ` +
                 'Content can only be appended to pages under the designated Notion root page.'
             )
+          );
+        }
+
+        if (_executeFromButton !== true) {
+          return createPreviewResponse(
+            'Preview: blocks to be appended to a Notion page',
+            { blockId, blockCount: blocks.length, blocks },
+            'blocks',
+            { tool: TOOL_NOTION_APPEND_BLOCKS, params: { blockId, blocks } }
           );
         }
 

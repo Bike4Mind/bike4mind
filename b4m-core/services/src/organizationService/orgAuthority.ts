@@ -35,3 +35,8 @@ export function isCurrentOrgMember(organization: OrgMembershipRoster, userId: st
   if (organization.userId === userId) return true;
   return (organization.users ?? []).some(member => member.userId?.toString() === userId);
 }
+
+/** An administrator removed this user; self-service joins must refuse them (see IOrganization.removedUserIds). */
+export function wasRemovedFromOrganization(organization: { removedUserIds?: string[] }, userId: string): boolean {
+  return (organization.removedUserIds ?? []).includes(userId);
+}

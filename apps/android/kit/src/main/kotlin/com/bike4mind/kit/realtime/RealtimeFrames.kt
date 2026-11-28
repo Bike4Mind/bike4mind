@@ -2,10 +2,12 @@ package com.bike4mind.kit.realtime
 
 import com.bike4mind.client.B4MClientJson
 import com.bike4mind.kit.sessions.PendingAction
+import com.bike4mind.kit.sessions.PendingActionConnector
 import com.bike4mind.kit.sessions.Quest
 import com.bike4mind.kit.sessions.QuestStatus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -54,11 +56,18 @@ object RealtimeFrames {
         )
     }
 
-    /** `{tool, params, ts}`; null when the tool or `ts` is missing, so a malformed action never shows a card. */
+    /**
+     * `{tool, params, ts, customConnector?}`; null when the tool or `ts` is missing, or a custom connector does not
+     * name itself and its host, so a card never asks for approval without saying where the call goes.
+     */
     private fun pendingAction(action: JsonObject): PendingAction? {
         val tool = action.string("tool") ?: return null
         val ts = (action["ts"] as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.toLong() ?: return null
-        return PendingAction(tool, PendingAction.display(action["params"] as? JsonObject ?: emptyMap()), ts)
+        val connector = action["customConnector"]?.takeIf { it !is JsonNull }?.let { raw ->
+            val ref = raw as? JsonObject ?: return null
+            PendingActionConnector(ref.string("displayName") ?: return null, ref.string("urlHost") ?: return null)
+        }
+        return PendingAction(tool, PendingAction.display(action["params"] as? JsonObject ?: emptyMap()), ts, connector)
     }
 
     private fun JsonElement.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

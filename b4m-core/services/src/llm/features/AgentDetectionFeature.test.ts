@@ -12,7 +12,10 @@ import type { ChatCompletionContext } from '../ChatCompletionFeatures';
  * argument breaks and persona summons silently lose delegation.
  */
 // `readableBy` maps a user id to the agent ids that user can still read; absent means every agent.
-const buildContext = (agents: Array<{ id: string; name: string }>, readableBy?: Record<string, string[]>) => {
+const buildContext = (
+  agents: Array<{ id: string; name: string; userId?: string }>,
+  readableBy?: Record<string, string[]>
+) => {
   const attachAgent = vi.fn().mockResolvedValue(undefined);
   const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
   const findAllAccessibleByIds = vi.fn(async (user: { id: string }, ids: string[]) =>
@@ -57,13 +60,23 @@ const runDetection = async (
 
 describe('AgentDetectionFeature session attachment', () => {
   it('writes a resolved persona mention onto the caller session object in place', async () => {
-    const { context, attachAgent } = buildContext([{ id: 'agent-1', name: 'coffee-bot' }]);
+    const { context, attachAgent } = buildContext([{ id: 'agent-1', name: 'coffee-bot', userId: 'user-1' }]);
     const session = { id: 'session-1', agentIds: [] as string[] };
 
     await runDetection(context, session, '@coffee-bot what should I order');
 
     expect(attachAgent).toHaveBeenCalledWith('session-1', 'agent-1');
     expect(session.agentIds).toEqual(['agent-1']);
+  });
+
+  it("does not summon another user's agent shared with the caller", async () => {
+    const { context, attachAgent } = buildContext([{ id: 'agent-2', name: 'help', userId: 'other-user' }]);
+    const session = { id: 'session-1', agentIds: [] as string[] };
+
+    await runDetection(context, session, '@help with this');
+
+    expect(attachAgent).not.toHaveBeenCalled();
+    expect(session.agentIds).toEqual([]);
   });
 
   it('leaves the session untouched when the mention resolves to no agent', async () => {

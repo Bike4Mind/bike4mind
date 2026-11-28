@@ -214,8 +214,7 @@ const openaiSpec: BackendSpec = {
   name: 'OpenAIBackend',
   model: 'gpt-4o',
   build: () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    const backend = new OpenAIBackend('test-key');
     let calls = 0;
     let sequence: unknown[][] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1059,8 +1058,7 @@ const openaiNonStreamSpec: NonStreamBackendSpec = {
   name: 'OpenAIBackend',
   model: 'gpt-4o',
   build: turns => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    const backend = new OpenAIBackend('test-key');
     let calls = 0;
     (backend as unknown as { _api: { chat: { completions: { create: () => Promise<unknown> } } } })._api = {
       chat: {

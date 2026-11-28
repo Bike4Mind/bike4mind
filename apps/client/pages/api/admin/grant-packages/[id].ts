@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
 import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
+import { assertCanChangeLakeGateTagsBetween } from '@server/admin/lakeGateTags';
 import { z } from 'zod';
 
 const handler = adminApi({
@@ -54,6 +55,7 @@ const handler = adminApi({
       if ('tags' in data) {
         const current = await grantPackageRepository.findById(id);
         assertCanChangeManagedTags(req.user, current?.tags, data.tags);
+        await assertCanChangeLakeGateTagsBetween(req.user, current?.tags, data.tags);
       }
       const pkg = await grantPackageRepository.updatePackage(id, reason ? { ...data, reason } : data);
       if (!pkg) throw new NotFoundError('Grant package not found');

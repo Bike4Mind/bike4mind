@@ -84,7 +84,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
-  getEffectiveLLMApiKeys: vi.fn(),
+  getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}),
   sharedAdminKeyProviders: vi.fn(),
   userKeyProviders: vi.fn(() => new Set()),
   getOpenWeatherKey: vi.fn().mockResolvedValue(undefined),

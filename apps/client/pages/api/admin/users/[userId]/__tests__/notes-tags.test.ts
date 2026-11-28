@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
   update: vi.fn(),
   audit: vi.fn(),
+  gates: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: { allowedMethods: string[] }) => {
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   AdminUserNoteRevisionModel: {},
   toAdminUserNote: vi.fn(),
   toAdminUserNoteRevision: vi.fn(),
+  dataLakeRepository: { findGateValues: mocks.gates },
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
 await import('../notes');
@@ -64,6 +66,7 @@ beforeEach(() => {
   mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ isAdmin: false, tags: ['old'] }) }) });
   mocks.update.mockResolvedValue({ matchedCount: 1 });
   mocks.audit.mockResolvedValue({});
+  mocks.gates.mockResolvedValue({ userTags: ['Partner-Beta'], entitlements: ['acme:pro'] });
 });
 describe('notes and tags route boundaries', () => {
   it('declares first-party JWT-only authentication', () => {
@@ -180,5 +183,36 @@ describe('notes and tags route boundaries', () => {
       'settings:manage',
     ]);
     expect(res._getJSONData()).toEqual({ tags: ['Developer', 'pilot'] });
+  });
+  it.each(['partner-beta', 'ACME:PRO'])('refuses a delegate adding a lake gate tag: %s', async tag => {
+    await expect(
+      call('PATCH', 'PATCH', { before: ['old'], tags: ['old', tag] }, ['settings:manage'])
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('refuses a delegate removing a lake gate tag even with a forged before snapshot', async () => {
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: ['Partner-Beta', 'old'] }) }) });
+    await expect(call('PATCH', 'PATCH', { before: ['old'], tags: ['old'] }, ['settings:manage'])).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('lets a delegate edit other tags while a stored lake gate tag stays', async () => {
+    const before = ['Partner-Beta', 'old'];
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: before }) }) });
+    const res = await call('PATCH', 'PATCH', { before, tags: ['Partner-Beta', 'pilot'] }, ['settings:manage']);
+    expect(res._getJSONData()).toEqual({ tags: ['Partner-Beta', 'pilot'] });
+  });
+  it('refuses a delegate re-spelling a padded stored lake gate tag', async () => {
+    const before = [' partner-beta '];
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: before }) }) });
+    await expect(call('PATCH', 'PATCH', { before, tags: ['partner-beta'] }, ['settings:manage'])).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('lets a full admin add and remove lake gate tags', async () => {
+    const res = await call('PATCH', 'PATCH', { before: ['old'], tags: ['partner-beta'] }, [], true);
+    expect(res._getJSONData()).toEqual({ tags: ['partner-beta'] });
   });
 });

@@ -13,6 +13,7 @@ import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { localHostControl } from './host/localHostControl';
 import { registerHostConnections } from './host/registerHostConnections';
+import { registerSshHosts } from './host/remote/registerSshHosts';
 import { electronSystemSignals } from './host/systemSignals';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
@@ -252,6 +253,14 @@ void app.whenReady().then(async () => {
     version: currentVersion(),
     signals: electronSystemSignals(),
   });
+  const sshHosts = registerSshHosts(hostConnections, {
+    dataDirectory: app.getPath('userData'),
+    version: currentVersion(),
+    artifactSource: app.isPackaged
+      ? { packaged: true, resourcesPath: process.resourcesPath }
+      : { packaged: false, appPath: app.getAppPath() },
+    log: message => host.logger.warn(message),
+  });
   const models = registerModels(
     modelServers,
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
@@ -414,6 +423,7 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    sshHosts.dispose();
     hostConnections.dispose();
     stopModelServers();
     claudeImport.dispose();

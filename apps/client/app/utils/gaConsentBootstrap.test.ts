@@ -65,12 +65,12 @@ describe('gaBootstrapScript', () => {
   it('sets the consent default before config sends the page_view', () => {
     const commands = runScript(['G-ABC123']);
     const names = commands.map(c => c[0]);
-    expect(names).toEqual(['consent', 'js', 'config']);
-    expect(commands[2]).toEqual(['config', 'G-ABC123']);
+    expect(names).toEqual(['consent', 'js', 'set', 'config']);
+    expect(commands[3]).toEqual(['config', 'G-ABC123']);
   });
 
   it('passes the cookie domain to config when one is pinned', () => {
-    expect(runScript(['G-ABC123'], 'bike4mind.com')[2]).toEqual([
+    expect(runScript(['G-ABC123'], 'bike4mind.com')[3]).toEqual([
       'config',
       'G-ABC123',
       { cookie_domain: 'bike4mind.com' },
@@ -81,18 +81,57 @@ describe('gaBootstrapScript', () => {
   // consent default, and only one client id exists if both write the same cookie.
   it('configures every property after the consent default, each with the pinned cookie domain', () => {
     const commands = runScript(['G-APP0000001', 'G-SITE000001'], 'bike4mind.com');
-    expect(commands.map(c => c[0])).toEqual(['consent', 'js', 'config', 'config']);
-    expect(commands.slice(2)).toEqual([
+    expect(commands.map(c => c[0])).toEqual(['consent', 'js', 'set', 'config', 'config']);
+    expect(commands.slice(3)).toEqual([
       ['config', 'G-APP0000001', { cookie_domain: 'bike4mind.com' }],
       ['config', 'G-SITE000001', { cookie_domain: 'bike4mind.com' }],
     ]);
   });
 
   it('configures every property without a cookie domain when none is pinned', () => {
-    expect(runScript(['G-APP0000001', 'G-SITE000001']).slice(2)).toEqual([
+    expect(runScript(['G-APP0000001', 'G-SITE000001']).slice(3)).toEqual([
       ['config', 'G-APP0000001'],
       ['config', 'G-SITE000001'],
     ]);
+  });
+});
+
+describe('gaBootstrapScript page_location', () => {
+  const pushState = history.pushState;
+  const replaceState = history.replaceState;
+  const pageLocations = () =>
+    ((window as unknown as { dataLayer: IArguments[] }).dataLayer ?? [])
+      .map(args => Array.from(args))
+      .filter(c => c[0] === 'set')
+      .map(c => (c[1] as { page_location: string }).page_location);
+
+  afterEach(() => {
+    history.pushState = pushState;
+    history.replaceState = replaceState;
+    history.replaceState(null, '', '/');
+  });
+
+  it('records the landing page without its fragment, before config sends the page_view', () => {
+    history.replaceState(null, '', '/x/shared?ref=a#secret-token');
+    const commands = runScript(['G-ABC123']);
+
+    expect(commands.findIndex(c => c[0] === 'set')).toBeLessThan(commands.findIndex(c => c[0] === 'config'));
+    expect(pageLocations()).toEqual([`${window.location.origin}/x/shared?ref=a`]);
+    expect(window.location.hash).toBe('#secret-token');
+  });
+
+  it('keeps the fragment out after in-app navigation, back/forward and fragment changes', () => {
+    runScript(['G-ABC123']);
+    const latest = () => pageLocations().at(-1);
+
+    history.pushState(null, '', '/x/shared#token-b');
+    expect(latest()).toBe(`${window.location.origin}/x/shared`);
+    history.replaceState(null, '', '/other?q=1#token-c');
+    expect(latest()).toBe(`${window.location.origin}/other?q=1`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    expect(latest()).toBe(`${window.location.origin}/other?q=1`);
+    expect(pageLocations().every(location => !location.includes('#'))).toBe(true);
   });
 });
 

@@ -1,3 +1,4 @@
+import { contextLabel } from '../promptBuilder';
 import { EntityMentionSource } from '../types';
 import { EntityExtractor, ExtractionResult } from './types';
 
@@ -47,6 +48,7 @@ export class ConfluenceExtractor implements EntityExtractor {
             // Fallback if URL is malformed
             title = encodedTitle.replace(/\+/g, ' ');
           }
+          title = contextLabel(title) || `Page ${pageId}`;
         }
         entities.push({
           entity: {

@@ -23,6 +23,7 @@
 
 package com.bike4mind.client.models
 
+import com.bike4mind.client.models.ListSessionQuestsResponse200DataInnerPendingActionCustomConnector
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -34,6 +35,7 @@ import kotlinx.serialization.Contextual
  * @param tool The tool awaiting approval.
  * @param params The arguments the tool would run with.
  * @param ts When the approval was requested, in Unix milliseconds. It lapses after 15 minutes.
+ * @param customConnector
  */
 @Serializable
 
@@ -49,7 +51,10 @@ data class ListSessionQuestsResponse200DataInnerPendingAction (
 
     /* When the approval was requested, in Unix milliseconds. It lapses after 15 minutes. */
     @Contextual @SerialName(value = "ts")
-    val ts: com.bike4mind.client.Decimal
+    val ts: com.bike4mind.client.Decimal,
+
+    @SerialName(value = "customConnector")
+    val customConnector: ListSessionQuestsResponse200DataInnerPendingActionCustomConnector? = null
 
 ) {
 

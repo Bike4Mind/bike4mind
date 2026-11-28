@@ -6,9 +6,13 @@ import {
   type OrganizationAuditAction,
 } from '@bike4mind/database/infra';
 
+// Readers match organizationId by exact string, so an ObjectId spelled in upper-case hex would file
+// the event where the org's own audit view never looks.
+const canonicalOrganizationId = (id: string) => (/^[0-9a-f]{24}$/i.test(id) ? id.toLowerCase() : id);
+
 export const organizationAuditInputSchema = z
   .object({
-    organizationId: z.string().min(1).max(128),
+    organizationId: z.string().min(1).max(128).transform(canonicalOrganizationId),
     actorUserId: z.string().min(1).max(128),
     action: z.enum(ORGANIZATION_AUDIT_ACTIONS),
     targetId: z.string().min(1).max(128).optional(),

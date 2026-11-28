@@ -45,3 +45,29 @@ describe('orgDisallowedTools', () => {
     expect(orgDisallowedTools(['web_search'], null)).toEqual([]);
   });
 });
+
+describe('contributed tool names', () => {
+  const contributed = new Set(['contributed_alpha']);
+  const list = [tool('web_search'), tool('contributed_alpha'), tool('srv__x')];
+
+  it('passes a contributed tool when no contributed set is given', () => {
+    expect(names(applyOrgToolPolicy(list, policy([])).tools)).toEqual(['contributed_alpha', 'srv__x']);
+  });
+
+  it('strips a contributed tool the policy does not allow', () => {
+    const result = applyOrgToolPolicy(list, policy([]), contributed);
+    expect(names(result.tools)).toEqual(['srv__x']);
+    expect(result.stripped).toEqual(['web_search', 'contributed_alpha']);
+  });
+
+  it('keeps a contributed tool the policy lists', () => {
+    expect(names(applyOrgToolPolicy(list, policy(['contributed_alpha']), contributed).tools)).toEqual([
+      'contributed_alpha',
+      'srv__x',
+    ]);
+  });
+
+  it('reports a disallowed contributed name', () => {
+    expect(orgDisallowedTools(['contributed_alpha', 'srv__x'], policy([]), contributed)).toEqual(['contributed_alpha']);
+  });
+});

@@ -157,7 +157,31 @@ describe('AutoContainmentDecisionRepository', () => {
       scope: 'account',
       expiresAt: null,
       releasedAt: null,
+      decidedBy: 'model',
+      linkRules: [],
+      modelJudgment: null,
     });
+  });
+
+  it('records a link-rule decision with the rules and the model judgment it overrode', async () => {
+    const decision = await repository.recordOnce(
+      input({
+        tier: 'limit',
+        policyVersion: 2,
+        scope: 'ai_spend',
+        expiresAt: new Date(NOW.getTime() + 60 * MINUTE_MS),
+        decidedBy: 'link_rule',
+        linkRules: ['sharedOwnedDomain'],
+        modelJudgment: { result: 'insufficient_evidence', confidence: 0.6 },
+      })
+    );
+    expect(decision).toMatchObject({
+      decidedBy: 'link_rule',
+      linkRules: ['sharedOwnedDomain'],
+      modelJudgment: { result: 'insufficient_evidence', confidence: 0.6 },
+    });
+    const [stored] = await repository.listForDetection(DETECTION_ID);
+    expect(stored).toMatchObject({ decidedBy: 'link_rule', linkRules: ['sharedOwnedDomain'] });
   });
 
   it('records a graduated decision with its tier fields', async () => {

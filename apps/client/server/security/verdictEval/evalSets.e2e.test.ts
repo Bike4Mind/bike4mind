@@ -12,6 +12,7 @@ import {
   AbuseAssessmentModel,
   AbuseEvalSetModel,
   AdminAuditLogModel,
+  AutoContainmentDecisionModel,
   CreditTransaction,
   ShadowDetectionModel,
   UsageEvent,
@@ -320,5 +321,27 @@ describe('shadow mode', () => {
     expect(second.run.report.calibration).toEqual(
       farmHeldOut ? [expect.objectContaining({ model: 'jev-latest', n: 3, brier: 0.04 })] : []
     );
+  });
+
+  it('grades a link-rule decision as its own containment variant', async () => {
+    const world = await seedWorld();
+    await AutoContainmentDecisionModel.collection.insertOne({
+      detectionId: world.farmDetection,
+      revision: 1,
+      assessmentId: 'link-rule',
+      mode: 'shadow',
+      outcome: 'would_intervene',
+      confidence: 0,
+      reason: 'link rule',
+      decidedAt: daysAgo(1),
+      decidedBy: 'link_rule',
+    });
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a'), NOW);
+    await AbuseEvalSetModel.updateOne({ _id: id }, { $set: { 'examples.$[].split': 'heldOut' } });
+
+    const { run } = await runEvalSet(id, ADMIN_ID, null, deps('unused'), NOW);
+
+    const variants = run.report.scores.filter(score => score.grader === 'containment').map(score => score.variant);
+    expect([...new Set(variants)]).toEqual(['shadow:link_rule']);
   });
 });

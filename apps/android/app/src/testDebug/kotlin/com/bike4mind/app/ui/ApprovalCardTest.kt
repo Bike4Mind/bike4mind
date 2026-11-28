@@ -1,6 +1,8 @@
 package com.bike4mind.app.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -12,6 +14,7 @@ import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.approvals.PendingActionFailure
 import com.bike4mind.kit.approvals.PendingActionResult
 import com.bike4mind.kit.sessions.PendingAction
+import com.bike4mind.kit.sessions.PendingActionConnector
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -56,6 +59,34 @@ class ApprovalCardTest {
         compose.onNodeWithTag("message-approve-btn").performClick()
         compose.onNodeWithTag("message-deny-btn").performClick()
         assertEquals(listOf(PendingActionDecision.APPROVE, PendingActionDecision.DENY), answers)
+    }
+
+    @Test
+    fun aCustomConnectorCardNamesTheConnectorAndHost() {
+        show(ApprovalCardState.Open, fresh.copy(connector = PendingActionConnector("Acme", "mcp.acme.test")))
+
+        compose.onNodeWithTag("message-approval-connector")
+            .assertTextEquals(string(R.string.approval_connector, "Acme", "mcp.acme.test"))
+    }
+
+    @Test
+    fun aBuiltInCardShowsNoConnectorAndNoExpandButton() {
+        show(ApprovalCardState.Open)
+
+        assertEquals(0, compose.onAllNodesWithTagCount("message-approval-connector"))
+        assertEquals(0, compose.onAllNodesWithTagCount("message-approval-expand-btn"))
+        compose.onNodeWithTag("message-approve-btn").assertIsEnabled()
+    }
+
+    @Test
+    fun aClippedArgumentMustBeShownInFullBeforeApprove() {
+        val long = (1..6).joinToString("\n") { "line $it" }
+        show(ApprovalCardState.Open, fresh.copy(params = mapOf("body" to long)))
+
+        compose.onNodeWithTag("message-approve-btn").assertIsNotEnabled()
+        compose.onNodeWithTag("message-approval-expand-btn").performClick()
+        compose.onNodeWithText(string(R.string.approval_param, "body", long)).assertIsDisplayed()
+        compose.onNodeWithTag("message-approve-btn").assertIsEnabled()
     }
 
     @Test

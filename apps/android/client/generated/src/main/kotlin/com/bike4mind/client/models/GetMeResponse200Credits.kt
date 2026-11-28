@@ -23,6 +23,7 @@
 
 package com.bike4mind.client.models
 
+import com.bike4mind.client.models.GetMeResponse200CreditsExpiringInner
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -31,6 +32,7 @@ import kotlinx.serialization.Contextual
 /**
  * @param balance
  * @param monthlyAllowance
+ * @param expiring
  */
 @Serializable
 
@@ -40,7 +42,10 @@ data class GetMeResponse200Credits (
     val balance: com.bike4mind.client.Decimal,
 
     @Contextual @SerialName(value = "monthly_allowance")
-    val monthlyAllowance: com.bike4mind.client.Decimal? = null
+    val monthlyAllowance: com.bike4mind.client.Decimal? = null,
+
+    @SerialName(value = "expiring")
+    val expiring: kotlin.collections.List<GetMeResponse200CreditsExpiringInner>? = null
 
 ) {
 

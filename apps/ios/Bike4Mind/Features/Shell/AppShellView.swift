@@ -25,6 +25,8 @@ struct AppShellView: View {
               SettingsView()
             case .studio:
               MediaGalleryView()
+            case .artifacts:
+              ArtifactsView()
             case .brief(let id):
               BriefView(briefID: id)
             }

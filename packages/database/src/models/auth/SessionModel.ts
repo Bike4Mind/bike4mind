@@ -415,7 +415,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     findQuery
       .skip(pagination.limit * (pagination.page - 1))
       .limit(pagination.limit + 1)
-      .sort({ [orderBy.field]: orderBy.direction });
+      .sort({ [orderBy.field]: orderBy.direction, _id: orderBy.direction });
 
     const result = await findQuery.exec();
     const hasMore = result.length === pagination.limit + 1;

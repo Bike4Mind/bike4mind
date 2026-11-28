@@ -162,8 +162,7 @@ const openaiSpec: BackendSpec = {
   name: 'OpenAIBackend',
   model: 'gpt-4o',
   build: () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    const backend = new OpenAIBackend('test-key');
     let calls = 0;
     let sequence: unknown[][] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -487,7 +486,7 @@ describe('malformed tool arguments are stamped, not left unrecorded', () => {
   });
 
   it('OpenAIBackend records success:false when tool_calls JSON is malformed (streaming)', async () => {
-    const backend = new OpenAIBackend({ openai: 'test-key' } as never);
+    const backend = new OpenAIBackend('test-key');
     let calls = 0;
     const sequence: unknown[][] = [
       [
@@ -580,7 +579,7 @@ describe('OpenAIBackend strips artifact markup from every tool result before the
   });
 
   it('removes forged markup on the non-streamed response path too', async () => {
-    const backend = new OpenAIBackend({ openai: 'test-key' } as never);
+    const backend = new OpenAIBackend('test-key');
     const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
     const responses = [
       {

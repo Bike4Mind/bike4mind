@@ -544,14 +544,15 @@ export function ClaudeImportSettings({
           />
         </Stack>
         <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-web-explainer">
-          Mirrors your Bike4Mind web notebooks here, read-only: nothing on the web is changed. Continue one here and it
-          stops syncing.
+          Mirrors your Bike4Mind web notebooks here. Messages you send here are added to the same Bike4Mind web chat and
+          sync both ways.
         </Typography>
         <HowItWorks>
           <Typography level="body-xs" textColor="text.tertiary">
             Your notebooks on Bike4Mind web, for the account you are signed in with, synced when you sign in, when you
             come back to this app, and when you press Sync now. Prompts and replies come over; agent steps, images and
-            files stay on the web. A conversation you continue here becomes your own copy and stops syncing.
+            files stay on the web. Sending with files attached, editing a message or regenerating a reply makes the
+            conversation your own copy here, and it stops syncing.
           </Typography>
         </HowItWorks>
         <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} data-testid="claude-import-web-counts">

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listRuns: vi.fn(),
   pendingActions: vi.fn(),
   openQuestions: vi.fn(),
+  readableSessions: vi.fn(),
   loadEmails: vi.fn(),
   loadDelegations: vi.fn(),
   markEmailsBriefed: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
     markRemindersSurfaced: mocks.markRemindersSurfaced,
   },
   userRepository: { findById: mocks.findUser },
+  sessionRepository: { shareable: { findAllAccessibleByIds: mocks.readableSessions } },
   agentExecutionRepository: { findByUserIdPaginated: mocks.listRuns },
   questRepository: {
     findPendingActionsBySessionIds: mocks.pendingActions,
@@ -106,6 +108,7 @@ describe('brief.compose handler', () => {
       { questId: 'q2', sessionId: 's1', ts: 8, tool: 'archive' },
     ]);
     mocks.openQuestions.mockResolvedValue([]);
+    mocks.readableSessions.mockImplementation(async (_user: unknown, ids: string[]) => ids.map(id => ({ id })));
     mocks.findDueReminders.mockResolvedValue([]);
     mocks.loadEmails.mockResolvedValue([
       {
@@ -146,6 +149,24 @@ describe('brief.compose handler', () => {
     expect(mocks.markEmailsBriefed).toHaveBeenCalledWith('u1', ['e2', 'e1'], expect.any(Date));
     expect(mocks.markDelegationsBriefed).toHaveBeenCalledWith('u1', ['g1'], expect.any(Date));
     expect(mocks.publishPush).toHaveBeenCalledWith(expect.objectContaining({ briefId: 'b1' }), logger);
+  });
+
+  it('loads quests only from the run notebooks the user can read now', async () => {
+    const user = { id: 'u1', groups: ['g'] };
+    mocks.findUser.mockResolvedValue(user);
+    mocks.listRuns.mockResolvedValue({
+      items: [
+        { id: 'r1', sessionId: 's1', query: 'Sync', status: 'completed', completedAt: undefined },
+        { id: 'r2', sessionId: 's2', query: 'Send', status: 'completed', completedAt: undefined },
+      ],
+    });
+    mocks.readableSessions.mockResolvedValue([{ id: 's1' }]);
+
+    await run();
+
+    expect(mocks.readableSessions).toHaveBeenCalledWith(user, ['s1', 's2']);
+    expect(mocks.pendingActions).toHaveBeenCalledWith(['s1'], expect.any(Number), expect.any(Number));
+    expect(mocks.openQuestions).toHaveBeenCalledWith(['s1'], expect.any(Date), expect.any(Number));
   });
 
   it.each([

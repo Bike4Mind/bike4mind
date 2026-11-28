@@ -58,12 +58,14 @@ describe('loadSystemPromptById', () => {
 
 describe('sessionWillInjectAuthoredPrompt', () => {
   it('is true for raw authored text without resolving anything', async () => {
-    expect(await sessionWillInjectAuthoredPrompt({ systemPromptText: 'you are a bagel' }, ctx)).toBe(true);
+    expect(await sessionWillInjectAuthoredPrompt({ userId: 'user-1', systemPromptText: 'you are a bagel' }, ctx)).toBe(
+      true
+    );
     expect(loadSystemPromptContent).not.toHaveBeenCalled();
   });
 
   it('does not count whitespace-only text as authored', async () => {
-    expect(await sessionWillInjectAuthoredPrompt({ systemPromptText: '   ' }, ctx)).toBe(false);
+    expect(await sessionWillInjectAuthoredPrompt({ userId: 'user-1', systemPromptText: '   ' }, ctx)).toBe(false);
   });
 
   it('is true for an activatable id that resolves to content', async () => {
@@ -89,9 +91,12 @@ describe('sessionWillInjectAuthoredPrompt', () => {
   });
 
   it('counts raw text even when a non-activatable id is also set, without resolving', async () => {
-    expect(await sessionWillInjectAuthoredPrompt({ systemPromptText: 'real', systemPromptId: 'anything' }, ctx)).toBe(
-      true
-    );
+    expect(
+      await sessionWillInjectAuthoredPrompt(
+        { userId: 'user-1', systemPromptText: 'real', systemPromptId: 'anything' },
+        ctx
+      )
+    ).toBe(true);
     expect(loadSystemPromptContent).not.toHaveBeenCalled();
   });
 
@@ -108,6 +113,16 @@ describe('sessionWillInjectAuthoredPrompt', () => {
   it('lets the workspace decide a prompt the user set while the session is on it', async () => {
     const session = { surface: 'silent-workspace', systemPromptText: 'mine', userSetFields: ['systemPromptText'] };
     expect(await sessionWillInjectAuthoredPrompt(session, ctx)).toBe(false);
+  });
+
+  it("ignores a collaborator's view of the owner's raw text", async () => {
+    expect(await sessionWillInjectAuthoredPrompt({ userId: 'owner-2', systemPromptText: 'owner prompt' }, ctx)).toBe(
+      false
+    );
+  });
+
+  it('keeps the workspace prompt for a collaborator', async () => {
+    expect(await sessionWillInjectAuthoredPrompt({ userId: 'owner-2', surface: 'prompt-workspace' }, ctx)).toBe(true);
   });
 
   it('reads a live document through toJSON', async () => {

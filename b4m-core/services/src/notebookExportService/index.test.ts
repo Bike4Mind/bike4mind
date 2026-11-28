@@ -788,6 +788,7 @@ describe('notebook export - knowledge file bytes', () => {
       artifactRepository: { create: vi.fn() },
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
+      findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
       adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       fileStorageService: {
@@ -831,6 +832,7 @@ describe('notebook export - the tags stamp', () => {
       artifactRepository: { create: vi.fn() },
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
+      findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
       fileStorageService: { uploadFile: vi.fn(), deleteFile: vi.fn() },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

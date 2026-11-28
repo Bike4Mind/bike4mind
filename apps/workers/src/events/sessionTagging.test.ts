@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   llmComplete: vi.fn(),
   recordUsage: vi.fn(),
   payerCanFund: vi.fn(),
+  lakeFind: vi.fn(),
   completionText: [] as (string | null)[],
   session: {} as Record<string, unknown>,
 }));
@@ -43,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   userRepository: { findById: h.userFindById },
   questRepository: { findOne: h.questFindOne },
+  dataLakeRepository: { find: h.lakeFind },
 }));
 
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
@@ -82,6 +84,7 @@ describe('sessionTagging', () => {
     vi.clearAllMocks();
     h.completionText = [];
     h.payerCanFund.mockResolvedValue(true);
+    h.lakeFind.mockResolvedValue([]);
     h.userFindById.mockImplementation(async (id: string) => ({ id, isAdmin: false }));
     h.sessionUpdate.mockImplementation(async (_user: unknown, data: unknown) => data);
     h.questFindOne.mockResolvedValue({ id: 'quest-1', prompt: 'How do pulsars form?' });
@@ -127,6 +130,50 @@ describe('sessionTagging', () => {
     // Cleared explicitly, not omitted: an import overwrite reopens the gate by nulling `taggedAt`,
     // and a backoff left over from an earlier failure would hold the re-tag off for a full window.
     expect(written.tagLastAttemptAt).toBeNull();
+  });
+
+  it('drops generated data lake meta-tags and tags under a lake file-tag prefix', async () => {
+    h.lakeFind.mockResolvedValue([
+      { id: 'lake-1', createdByUserId: OWNER, fileTagPrefix: 'acme:', datalakeTag: 'datalake:acme' },
+    ]);
+    h.completionText = [
+      JSON.stringify([
+        { name: 'pulsars', strength: 9 },
+        { name: 'datalake:acme', strength: 8 },
+        { name: ' DataLake:Other ', strength: 8 },
+        { name: 'Acme:Legal', strength: 7 },
+        { name: 'opti:solvers', strength: 7 },
+        { name: 'ratio: 3:1', strength: 2 },
+      ]),
+    ];
+
+    await run();
+
+    expect(h.lakeFind).toHaveBeenCalledWith({ createdByUserId: { $in: [OWNER] } });
+    expect(h.sessionUpdate.mock.calls[0][1].tags).toEqual([
+      { name: 'pulsars', strength: 9 },
+      { name: 'ratio: 3:1', strength: 2 },
+    ]);
+  });
+
+  it('skips the lake lookup when no generated tag could carry a prefix', async () => {
+    h.completionText = ['[{"name": "pulsars", "strength": 9}, {"name": "datalake:acme", "strength": 8}]'];
+
+    await run();
+
+    expect(h.lakeFind).not.toHaveBeenCalled();
+    expect(h.sessionUpdate.mock.calls[0][1].tags).toEqual([{ name: 'pulsars', strength: 9 }]);
+  });
+
+  it('treats a completion of only data lake tags as yielding no tags', async () => {
+    h.completionText = ['[{"name": "datalake:acme", "strength": 8}]'];
+
+    await run();
+
+    const written = h.sessionUpdate.mock.calls[0][1];
+    expect(written.tags).toBeUndefined();
+    expect(written.taggedAt).toBeUndefined();
+    expect(written.tagLastAttemptAt).toBeInstanceOf(Date);
   });
 
   it('bills once when a failed tag write is replayed', async () => {

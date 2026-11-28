@@ -5,7 +5,7 @@ import OpenAPIRuntime
 /// `B4MAPI` over the generated `B4MClient`: bearer injection, one 401 retry, and the mapping from
 /// generated response enums to domain models and `APIError`.
 public struct APIClient: B4MAPI {
-  private let client: Client
+  let client: Client
   private let requester: AuthorizedRequester
 
   public init(
@@ -34,6 +34,42 @@ public struct APIClient: B4MAPI {
       case .unauthorized: throw APIError.signedOut
       case .forbidden: throw APIError.forbidden
       case .notFound: throw APIError.notFound
+      case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
+      case .undocumented(let status, _): throw APIError(status: status)
+      default: throw APIError.malformedResponse
+      }
+    }
+  }
+
+  public func renameSession(id: String, name: String) async throws -> SessionSummary {
+    try await call {
+      let output = try await client.updateSession(path: .init(id: id), body: .json(.init(name: name)))
+      switch output {
+      case .ok(let ok):
+        let body = try ok.body.json
+        return SessionSummary(
+          id: body.id, name: body.name, lastUsedModel: body.lastUsedModel,
+          firstCreated: body.firstCreated, lastUpdated: body.lastUpdated)
+      case .unauthorized: throw APIError.signedOut
+      case .forbidden: throw APIError.forbidden
+      case .notFound: throw APIError.notFound
+      case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
+      case .undocumented(let status, _): throw APIError(status: status)
+      default: throw APIError.malformedResponse
+      }
+    }
+  }
+
+  public func deleteSession(id: String) async throws {
+    try await call {
+      let output = try await client.deleteSession(path: .init(id: id))
+      switch output {
+      case .ok, .notFound: return
+      case .unauthorized: throw APIError.signedOut
+      case .forbidden: throw APIError.forbidden
+      case .conflict: throw APIError.conflict
       case .tooManyRequests: throw APIError.rateLimited
       case .upgradeRequired: throw APIError.upgradeRequired
       case .undocumented(let status, _): throw APIError(status: status)
@@ -118,7 +154,7 @@ public struct APIClient: B4MAPI {
   }
 
   /// Runs one generated call and folds every failure into `APIError`.
-  private func call<Result>(_ operation: () async throws -> Result) async throws -> Result {
+  func call<Result>(_ operation: () async throws -> Result) async throws -> Result {
     do {
       return try await operation()
     } catch let error as APIError {

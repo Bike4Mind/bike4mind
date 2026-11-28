@@ -59,17 +59,17 @@ const PROVIDERS: readonly string[] = Object.values(ModelBackend);
 
 // A companion (e.g. retrieve_knowledge_content) is allowed with the tool it pairs with, so it is shown
 // beside that tool rather than as its own checkbox.
-const TOOL_ROWS: ReadonlyArray<{ tool: string; companions: string[] }> = (() => {
+const toolRows = (contributedTools: readonly string[]): ReadonlyArray<{ tool: string; companions: string[] }> => {
   const covered = new Set<string>();
   const rows: Array<{ tool: string; companions: string[] }> = [];
-  for (const tool of b4mLLMTools.options) {
-    if (covered.has(tool)) continue;
+  for (const tool of [...b4mLLMTools.options, ...contributedTools]) {
+    if (covered.has(tool) || rows.some(row => row.tool === tool)) continue;
     const companions = [...expandOrgAllowedTools([tool])].filter(name => name !== tool);
     companions.forEach(name => covered.add(name));
     rows.push({ tool, companions });
   }
   return rows;
-})();
+};
 
 const toggle = (list: string[], value: string, on: boolean) =>
   on ? [...list.filter(item => item !== value), value] : list.filter(item => item !== value);
@@ -102,12 +102,14 @@ const RestrictSwitch: FC<{ id: string; label: string; checked: boolean; onChange
   />
 );
 
-const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolean }> = ({
-  orgId,
-  saved,
-  invalidStored,
-}) => {
+const PolicyEditor: FC<{
+  orgId: string;
+  saved: PolicyForm;
+  invalidStored: boolean;
+  contributedTools: readonly string[];
+}> = ({ orgId, saved, invalidStored, contributedTools }) => {
   const [form, setForm] = useState<PolicyForm>(saved);
+  const TOOL_ROWS = useMemo(() => toolRows(contributedTools), [contributedTools]);
   const save = useSaveOrgModelPolicy(orgId);
   const reset = useResetOrgModelPolicy(orgId);
   const { data: catalogModels } = useOrgModelChoices(orgId);
@@ -136,9 +138,14 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
   const busy = save.isPending || reset.isPending;
   const parsedPolicy = toPolicy(form);
   const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
-  const knownTools: ReadonlySet<string> = new Set(b4mLLMTools.options);
+  const knownTools: ReadonlySet<string> = new Set([...b4mLLMTools.options, ...contributedTools]);
   const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
-  const canSave = !busy && !emptyRestriction && parsedPolicy.success && (invalidStored || !sameForm(form, saved));
+  const canSave =
+    !busy &&
+    !emptyRestriction &&
+    parsedPolicy.success &&
+    (!form.restrictTools || staleTools.length === 0) &&
+    (invalidStored || !sameForm(form, saved));
   const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;
 
   return (
@@ -147,9 +154,9 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
         <Box>
           <Typography level="title-md">Models and tools</Typography>
           <Typography level="body-sm">
-            Limit which AI providers, models and built-in tools members can use when working in this organization.
-            Connector (MCP) tools are governed by the connector policy instead. Requests outside an organization context
-            and platform-selected system models are exempt from this policy.
+            Limit which AI providers, models and tools members can use when working in this organization. Connector
+            (MCP) tools are governed by the connector policy instead. Requests outside an organization context and
+            platform-selected system models are exempt from this policy.
           </Typography>
         </Box>
         {invalidStored && (
@@ -223,10 +230,10 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
 
         <FormControl>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <FormLabel>Built-in tools</FormLabel>
+            <FormLabel>Tools</FormLabel>
             <RestrictSwitch
               id="tools"
-              label="Restrict built-in tools"
+              label="Restrict tools"
               checked={form.restrictTools}
               onChange={on => update({ restrictTools: on })}
             />
@@ -251,7 +258,7 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
                   data-testid={`org-model-policy-tool-${tool}`}
                 />
               ))}
-              <FormHelperText>Unchecking every tool turns off all built-in tools.</FormHelperText>
+              <FormHelperText>Unchecking every tool turns off all tools.</FormHelperText>
             </Box>
           )}
         </FormControl>
@@ -300,6 +307,7 @@ const OrgModelPolicySection: FC<{ organization: IOrganizationDocument }> = ({ or
       orgId={organization.id}
       saved={toForm(data.policy)}
       invalidStored={data.invalidStored}
+      contributedTools={data.contributedTools ?? []}
     />
   );
 };

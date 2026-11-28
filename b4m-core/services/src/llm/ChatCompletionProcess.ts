@@ -75,6 +75,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  withoutNonOwnerSessionAuthoring,
   respondFromWorkspace,
   respondFromCoreTutorial,
   createReasoningWithholder,
@@ -158,7 +159,8 @@ import {
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
-  withFederatedSharedKeys,
+  parseProviderCredentialMode,
+  withProviderCredentialPlan,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -251,7 +253,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { z } from 'zod';
 import { admitsPrivateFileInputs } from './questStartBody';
-import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders, userKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
@@ -288,7 +290,7 @@ import {
 } from './ChatCompletionFeatures';
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
-import { StatusManager } from './StatusManager';
+import { StatusManager, type ClientFrameSender } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
 import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
@@ -1360,6 +1362,7 @@ export class ChatCompletionProcess {
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private onStatusUpdate?: IChatCompletionServiceOptions['onStatusUpdate'];
+  private injectedClientMessageSender?: IChatCompletionServiceOptions['clientMessageSender'];
   private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
@@ -1446,6 +1449,7 @@ export class ChatCompletionProcess {
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
     this.onStatusUpdate = options.onStatusUpdate;
+    this.injectedClientMessageSender = options.clientMessageSender;
     this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
@@ -2002,12 +2006,7 @@ export class ChatCompletionProcess {
 
     const clientInitStartTime = Date.now();
     if (!this.statusManager) {
-      this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, logger),
-        logger,
-        this.wsHttpsUrl,
-        this.user.id
-      );
+      this.statusManager = new StatusManager(this.clientFrameSender(logger), logger, this.wsHttpsUrl, this.user.id);
       logger.info('StatusManager initialized');
     }
     logger.info(
@@ -2220,6 +2219,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    contributedToolNames,
     videoToolConfigResolver,
     musicToolConfigResolver,
     imageJobsResolver,
@@ -2237,6 +2237,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Premium tool map keys: the only externalTools names the org tool policy governs (externalTools also carries admin/slack/lattice tools). */
+    contributedToolNames: ReadonlySet<string>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
@@ -2547,7 +2549,7 @@ export class ChatCompletionProcess {
         return;
       }
       const workspaceSession = await applyWorkspaceSessionSettings(
-        loadedSession,
+        withoutNonOwnerSessionAuthoring(loadedSession, this.user.id),
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
@@ -2924,9 +2926,18 @@ export class ChatCompletionProcess {
       // The model id handed to features and tools that call the backend themselves: the
       // post-resolution id, never a retired pin the provider would reject.
       const runModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
-      // Reuse trusted federation provenance across primary and fallback chat backends.
-      // Direct-SDK consumers below keep the original static key table.
-      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      // Reuse trusted key provenance (platform vs user key) and the per-provider credential mode
+      // across primary and fallback chat backends. Direct-SDK consumers below keep the original
+      // static key table.
+      const chatApiKeyTable = withProviderCredentialPlan(apiKeyTable, {
+        platformKeys: sharedAdminKeyProviders(apiKeyTable),
+        userKeys: userKeyProviders(apiKeyTable),
+        modes: {
+          openai: parseProviderCredentialMode(getSettingsValue('openaiCredentialMode', defaultAdminSettings)),
+          anthropic: parseProviderCredentialMode(getSettingsValue('anthropicCredentialMode', defaultAdminSettings)),
+        },
+        logger,
+      });
       const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
@@ -3942,6 +3953,7 @@ export class ChatCompletionProcess {
         // parentTools.
         sessionDisabledTools: deniedTools,
         orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3997,7 +4009,11 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
       if (allTools) {
-        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        const orgFiltered = applyOrgToolPolicy(
+          allTools,
+          readOrgModelPolicy(organization?.modelPolicy),
+          contributedToolNames
+        );
         if (orgFiltered.stripped.length > 0) {
           logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
             tools: orgFiltered.stripped,
@@ -8231,6 +8247,11 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** The injected frame sink when the host supplied one, else a websocket sender of our own. */
+  private clientFrameSender(logger: Logger): ClientFrameSender {
+    return this.injectedClientMessageSender ?? new ClientMessageSender(this.db, logger);
+  }
+
   public async sendStatusUpdate(
     q: IChatHistoryItemDocument,
     status: string | null,
@@ -8247,7 +8268,7 @@ export class ChatCompletionProcess {
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, this.logger),
+        this.clientFrameSender(this.logger),
         this.logger,
         this.wsHttpsUrl,
         this.user.id
@@ -8276,7 +8297,7 @@ export class ChatCompletionProcess {
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
-        new ClientMessageSender(this.db, this.logger),
+        this.clientFrameSender(this.logger),
         this.logger,
         this.wsHttpsUrl,
         this.user.id
@@ -8562,8 +8583,7 @@ export class ChatCompletionProcess {
         },
       };
 
-      // Send directly to client using a new ClientMessageSender instance
-      const clientMessageSender = new ClientMessageSender(this.db, this.logger);
+      const clientMessageSender = this.clientFrameSender(this.logger);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await clientMessageSender.sendToClient(this.user.id, this.wsHttpsUrl, payload as any);
     } catch (error) {

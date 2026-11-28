@@ -1,6 +1,7 @@
 import {
   type AbuseAssessmentResult,
   type AutoContainmentOutcome,
+  type InterventionDecider,
   isAutomationVerdict,
   type ShadowDetectionVerdict,
   type ShadowDetectionVerdictSource,
@@ -56,7 +57,16 @@ export type EvalDecision = {
   mode: string;
   confidence: number;
   decidedAt: Date;
+  /** Absent on rows written before link rules, which the model decided. */
+  decidedBy?: InterventionDecider;
 };
+
+/**
+ * Rule-decided rows are their own containment variant: their stored confidence is the model's, not the
+ * rule's, and mixing them in would credit the model with the rules' precision.
+ */
+export const containmentVariant = (decision: Pick<EvalDecision, 'mode' | 'decidedBy'>): string =>
+  decision.decidedBy === 'link_rule' ? `${decision.mode}:link_rule` : decision.mode;
 
 export type EvalAccountOutcome = {
   userId: string;
@@ -430,20 +440,20 @@ export function gradeVerdicts(input: GradeVerdictsInput): VerdictEvalReport {
   }
   for (const decision of latestBy(
     input.decisions,
-    row => `${row.detectionId}:${row.mode}`,
+    row => `${row.detectionId}:${containmentVariant(row)}`,
     row => row.decidedAt
   )) {
     const label = detectionLabels.get(decision.detectionId);
     if (!label) continue;
     board.add({
       grader: 'containment',
-      variant: decision.mode,
+      variant: containmentVariant(decision),
       prediction: CONTAINMENT_PREDICTIONS[decision.outcome],
       predicted: decision.outcome,
       label,
       detectionId: decision.detectionId,
       userId: null,
-      confidence: decision.confidence,
+      confidence: decision.decidedBy === 'link_rule' ? null : decision.confidence,
       at: decision.decidedAt,
     });
   }

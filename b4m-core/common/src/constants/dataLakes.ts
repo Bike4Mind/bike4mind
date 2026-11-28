@@ -707,6 +707,22 @@ export const DATA_LAKES: DataLakeConfig[] = [
 /** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
 export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
 
+const REGISTRY_LAKE_KEYS = new Set(DATA_LAKES.flatMap(l => [l.id, l.slug]));
+
+/**
+ * True when `value` is a static-registry lake's id or slug. Lookups by id-or-slug resolve the
+ * registry lake for such a key ahead of any org-less DB lake, and no DB lake may be created at,
+ * or moved org-less with, such a slug (createDataLake, setLakeVisibility).
+ */
+export const isRegistryLakeKey = (value: string): boolean => REGISTRY_LAKE_KEYS.has(value);
+
+/**
+ * The slugs under which DB lakes replace a same-keyed registry lake in a merged list. Only an
+ * org-scoped lake does, matching `findBySlug`; an org-less row never stands in for a registry lake.
+ */
+export const registryOverridingSlugs = (lakes: readonly { slug: string; organizationId?: unknown }[]): Set<string> =>
+  new Set(lakes.filter(lake => !!lake.organizationId).map(lake => lake.slug));
+
 /**
  * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
  * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is

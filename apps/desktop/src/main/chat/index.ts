@@ -129,11 +129,7 @@ import { readWorkspaceChanges } from './project/workspaceChanges';
 import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
-import {
-  capabilityHandlers,
-  completeCapabilityMutation,
-  retireSessionApprovals,
-} from './capabilities/capabilityHandlers';
+import { capabilityHandlers, completeCapabilityMutation } from './capabilities/capabilityHandlers';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { detectLaunchSignals } from './launchSignals';
 import { SpareWorktrees } from './project/workspace';
@@ -678,7 +674,6 @@ export function registerChat(
     new PermissionRuleStore(permissionRulesPath(userData)).read(),
   ])
     .then(async ([roots, trustedProjects, stored]) => {
-      await retireSessionApprovals(capabilityLedger);
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));

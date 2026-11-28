@@ -31,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
     order.push('tx:end');
     return result;
   },
+  dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
 }));
 const recordAdminActionFromRequest = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
@@ -190,6 +191,21 @@ describe('settings/update settings that constrain delegated admins', () => {
       'Only full administrators can assign managed tags'
     );
     expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['adding', 'beta, Lake-Gate', 'beta'],
+    ['removing', 'beta', 'beta, lake-gate'],
+  ])('refuses a settings:manage delegate %s a lake gate tag in defaultTags', async (_label, value, current) => {
+    stored = { settingName: 'defaultTags', settingValue: current };
+    await expect(runHandler('defaultTags', value, {}, DELEGATE)).rejects.toThrow('tags that gate data lake access');
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin set a lake gate tag in defaultTags', async () => {
+    stageWriteResult('defaultTags', 'lake-gate');
+    await runHandler('defaultTags', 'lake-gate');
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('lets a full admin set a managed tag in defaultTags', async () => {

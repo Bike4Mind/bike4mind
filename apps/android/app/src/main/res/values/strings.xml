@@ -60,6 +60,9 @@
     <string name="approval_approve">Approve</string>
     <string name="approval_deny">Deny</string>
     <string name="approval_param">%1$s: %2$s</string>
+    <string name="approval_connector">Sent to %1$s (%2$s)</string>
+    <string name="approval_show_all">Show the full request to approve it</string>
+    <string name="approval_show_less">Show less</string>
     <string name="approval_open">Approve or deny this request</string>
     <string name="approval_lapsed">This request expired</string>
     <string name="approval_approving">Approving</string>
