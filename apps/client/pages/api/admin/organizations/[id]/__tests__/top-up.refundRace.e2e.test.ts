@@ -37,6 +37,10 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => null),
 }));
+// The cap configuration is not the subject of this real-Mongo refund race.
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { ADMIN_SENIOR_GRANTER_IDS: undefined },
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 const mockAudit = vi.mocked((await import('@bike4mind/server-utils/utils/adminAudit')).recordAdminActionFromRequest);
