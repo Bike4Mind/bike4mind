@@ -283,6 +283,20 @@ describe('createReActRunAct sandbox wiring', () => {
     })(actContext());
   }
 
+  it('hands the charter goal to the tool materializer as trusted URL text', async () => {
+    const buildTools = vi.fn(async () => []);
+    await createReActRunAct({
+      llm: {} as never,
+      model: 'global.anthropic.claude-sonnet-4-6',
+      logger: logger as unknown as Logger,
+      buildTools,
+    })(actContext());
+
+    expect(buildTools).toHaveBeenCalledWith(expect.any(Array), actContext().charter.identity.ownerUserId, [
+      actContext().charter.goal.description,
+    ]);
+  });
+
   it('runs guest code in an isolated-vm isolate, never a shared-realm backend', async () => {
     await runAct();
 

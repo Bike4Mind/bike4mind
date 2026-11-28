@@ -3,6 +3,7 @@ import { getUserEntitlements } from '../entitlements/index';
 import {
   resolveToolAvailability,
   buildSharedTools,
+  UrlProvenance,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
@@ -193,7 +194,7 @@ export interface DeepAgentToolMaterializerConfig {
 }
 
 export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterializerConfig): ToolMaterializer {
-  return async (enabledToolNames: string[], ownerUserId: string) => {
+  return async (enabledToolNames: string[], ownerUserId: string, trustedText: string[] = []) => {
     if (enabledToolNames.length === 0) return [];
 
     const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
@@ -222,7 +223,10 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
 
     // No organizationId: a charter carries only its owner, so lake tools here stay personal. Inferring an
     // org from a linked agent would let a background mission write into an org the owner never chose.
+    const urlProvenance = new UrlProvenance();
+    urlProvenance.recordText(trustedText);
     const toolDeps: ToolBuilderDeps = {
+      urlProvenance,
       userId: ownerUserId,
       user: owner,
       getEntitlements: () => getUserEntitlements(owner),

@@ -34,6 +34,7 @@ import type { ModelAdmission } from './modelAdmission';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
+import type { UrlProvenance } from './tools/base/urlProvenance';
 import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
@@ -57,6 +58,8 @@ import { applyOrgToolPolicy } from './orgToolPolicy';
 /** Dependencies needed to build tools (provided by the caller's runtime context) */
 export interface ToolBuilderDeps {
   userId: string;
+  /** The turn's URL provenance (see ToolContext.urlProvenance); every tool result built here is recorded into it. */
+  urlProvenance?: UrlProvenance;
   user: ToolContext['user'];
   logger: Logger;
   db: ToolContext['db'];
@@ -453,6 +456,7 @@ export function buildSharedTools(
       apiKeyId,
       questId: callbacks.questId,
       requestConfirmation: callbacks.onPendingAction,
+      urlProvenance: deps.urlProvenance,
       slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
@@ -627,6 +631,12 @@ export function buildSharedTools(
     logger.info(`[MCP] ${agentOnlyMcpTools.length} agent-only MCP tools withheld from main LLM`);
   }
 
+  // Before the delegate/coordinate tools are added: their results are written by a model.
+  if (deps.urlProvenance) {
+    recordResultsInto(deps.urlProvenance, tools);
+    recordResultsInto(deps.urlProvenance, agentOnlyMcpTools);
+  }
+
   // Inject delegate_to_agent tool - only when an agentStore is available.
   // The Agent Executor (Phase 1) does not yet wire one up, in which case the
   // resulting tool list simply omits subagent delegation.
@@ -776,6 +786,22 @@ function wrapNavigateViewTool(
 // register an observer without tracing the tool registry into every route
 // bundle. Re-exported here to keep the ./llm barrel surface unchanged.
 export { setToolFinishObserver, type ToolFinishObservation } from './toolFinishObserver';
+
+function recordResultsInto(provenance: UrlProvenance, tools: ICompletionOptionTools[] | undefined): void {
+  if (!tools) return;
+  for (let i = 0; i < tools.length; i++) {
+    const originalToolFn = tools[i].toolFn;
+    const toolName = tools[i].toolSchema.name;
+    tools[i] = {
+      ...tools[i],
+      toolFn: async (args: unknown) => {
+        const result = await originalToolFn(args);
+        provenance.recordToolResult(toolName, args, result);
+        return result;
+      },
+    };
+  }
+}
 
 function wrapToolsForSentinels(
   tools: ICompletionOptionTools[],

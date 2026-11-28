@@ -145,6 +145,8 @@ type SendStatusUpdate = (
 // the deps for the lower-level buildSharedTools() function.
 export interface ToolBuilderConfig {
   user: IUserDocument;
+  /** Forwarded to buildSharedTools (see ToolContext.urlProvenance). */
+  urlProvenance?: ToolBuilderDeps['urlProvenance'];
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
@@ -1066,6 +1068,7 @@ export class ToolBuilder {
         thinkingVisibility,
         agentStore,
         modelAdmission: this.deps.modelAdmission,
+        urlProvenance: this.deps.urlProvenance,
       },
       {
         onStatusUpdate: async (changes, status) => {

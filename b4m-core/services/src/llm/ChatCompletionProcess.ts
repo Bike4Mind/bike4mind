@@ -182,6 +182,7 @@ import { refusedUsageOf, timedOutAttemptUsageFields } from './timedOutAttemptUsa
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { UrlProvenance } from './tools/base/urlProvenance';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
@@ -2327,6 +2328,7 @@ export class ChatCompletionProcess {
     let actualArtifactProcessingDuration = 0;
     let actualOnCompleteDuration = 0;
     const actualFinalSaveDuration = 0;
+    const urlProvenance = new UrlProvenance();
 
     // (P2b) Resolve rapid reply OFF the critical path. These lookups (findByQuestId + the
     // blank-quest fallback scan) previously blocked init for ~2-3s and almost always return
@@ -3763,6 +3765,7 @@ export class ChatCompletionProcess {
       const { keys: entitlementKeys } = await this.resolveEntitlementKeys();
 
       const toolBuilder = new ToolBuilder({
+        urlProvenance,
         user: this.user,
         db: this.db,
         entitlementKeys,
@@ -6040,6 +6043,7 @@ export class ChatCompletionProcess {
                 })
               : currentLlm;
             const attemptReasoning = chatReasoningOptionsFor(currentModel, options.reasoningEffort, options.thinking);
+            urlProvenance.recordMessages(hopRequest.messages);
             await hopLlm.complete(
               currentModel.id,
               hopRequest.messages,

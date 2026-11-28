@@ -10,7 +10,7 @@ import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { ADMIN_ASSISTANT_TOOL_NAMES, ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
 import { ToolBuilder } from './tools/ToolBuilder';
-import type { ToolDefinition } from './tools/base/types';
+import type { ToolContext, ToolDefinition } from './tools/base/types';
 import { ADMIN_ASSISTANT_SYSTEM_PROMPT } from './adminAssistantPrompt';
 
 // Process-level coverage for the admin assistant gate. The module mocks mirror the harness in
@@ -125,6 +125,7 @@ type TurnInput = {
   requestTools?: string[];
   requestMcpServers?: string[];
   externalTools?: Record<string, ToolDefinition>;
+  message?: string;
   orgAllowedTools?: string[];
   contributedToolNames?: ReadonlySet<string>;
 };
@@ -276,11 +277,14 @@ describe('ChatCompletionProcess admin assistant gate', () => {
       currentModel: ChatModels.GPT4,
     } as never);
 
+    if (input.message) {
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: input.message } as never);
+    }
     const body = {
       userId: 'user1',
       sessionId: 'session1',
       questId: 'quest1',
-      message: 'Hello',
+      message: input.message ?? 'Hello',
       messageFileIds: [],
       historyCount: 1,
       fabFileIds: [],
@@ -326,6 +330,28 @@ describe('ChatCompletionProcess admin assistant gate', () => {
   };
   const carriesNoAdminPrompt = (turn: TurnResult) =>
     expect(turn.systemMessages.some(content => content.includes(ADMIN_ASSISTANT_SYSTEM_PROMPT))).toBe(false);
+
+  it('gives tools a URL provenance seeded from the prompt before the model runs', async () => {
+    let context: ToolContext | undefined;
+    const probe: ToolDefinition = {
+      name: 'url_probe',
+      implementation: ctx => {
+        context = ctx;
+        return adminToolDefinition('url_probe').implementation(ctx, {});
+      },
+    };
+
+    const turn = await runTurn({
+      isAdmin: false,
+      message: 'Summarize https://docs.test/page',
+      requestTools: ['url_probe'],
+      externalTools: { url_probe: probe },
+    });
+
+    expect(turn.modelCalled).toBe(true);
+    expect(context?.urlProvenance?.allows('https://docs.test/page')).toBe(true);
+    expect(context?.urlProvenance?.allows('https://docs.test/page?d=secret')).toBe(false);
+  });
 
   it('normal session, non-admin: no admin tool offered and no admin prompt', async () => {
     const turn = await runTurn({ isAdmin: false, surface: null, externalTools: allAdminExternalTools() });

@@ -60,9 +60,14 @@ export function agentResultToActResult(result: AgentResult): ActResult {
 /**
  * Materializes a profile's named tools into executable tools, scoped to the
  * agent's owner. Host-supplied and async (it resolves the owner user + builds
- * the toolbelt). `ownerUserId` comes from the charter at call time.
+ * the toolbelt). `ownerUserId` comes from the charter at call time. `trustedText` is the user-written
+ * charter text (goal, linked persona) whose URLs the fetch tools may open; see UrlProvenance.
  */
-export type ToolMaterializer = (enabledToolNames: string[], ownerUserId: string) => Promise<ICompletionOptionTools[]>;
+export type ToolMaterializer = (
+  enabledToolNames: string[],
+  ownerUserId: string,
+  trustedText?: string[]
+) => Promise<ICompletionOptionTools[]>;
 
 /** What a mission inherits from its linked host agent at act time. */
 export interface LinkedAgentContext {
@@ -140,7 +145,10 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
       });
     }
 
-    const tools = await config.buildTools(toolNamesToBuild, ctx.charter.identity.ownerUserId);
+    const tools = await config.buildTools(toolNamesToBuild, ctx.charter.identity.ownerUserId, [
+      ctx.charter.goal.description,
+      ...(linked?.systemPrompt ? [linked.systemPrompt] : []),
+    ]);
 
     // Give the agent a sandboxed JS REPL - the web-safe compute lever. Fresh
     // per wake, in an isolated-vm isolate: the code is LLM-authored and this
