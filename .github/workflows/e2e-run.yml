@@ -183,10 +183,9 @@ jobs:
       # out. dev/staging only (a preview has its own env). Best-effort: warns +
       # proceeds on timeout so a stuck status can't hang the job forever.
       - name: Wait for staging deploy to settle (no deploy in flight)
-        # Decoupled from stamp_promotable: every dev/staging run (any scoped manual
-        # dispatch too) should wait out an in-flight deploy, but only the promotable
-        # frontier stamps a status. Callers pass `pr_number == ''` to restore the
-        # original per-file wait semantics.
+        # Decoupled from stamp_promotable: the caller decides via wait_for_deploy.
+        # Manual core dispatch waits out an in-flight deploy; the deploy-triggered
+        # gate run does not, since it starts after its deploy job finished.
         if: ${{ inputs.wait_for_deploy }}
         continue-on-error: true
         uses: actions/github-script@v8

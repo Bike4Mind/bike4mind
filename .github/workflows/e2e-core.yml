@@ -171,7 +171,7 @@ jobs:
       execution_timeout_minutes: 28
       stamp_promotable:   ${{ inputs.pr_number == '' }}
       # A gate run is dispatched as a staging deploy finishes, so the suite fits before the next
-      # deploy updates any function. Waiting first moved it into those updates instead.
+      # deploy replaces the API server function; waiting first ran it inside that deploy.
       wait_for_deploy:    ${{ inputs.pr_number == '' && inputs.gate_run != 'true' }}
       show_credits:       false
       trigger_label:      ${{ inputs.gate_run == 'true' && 'Run via Deployer' || 'Run via Dispatch' }}
