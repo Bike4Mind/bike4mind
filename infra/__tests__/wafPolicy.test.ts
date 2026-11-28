@@ -161,6 +161,7 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
   ],
   'AWS-AWSManagedRulesSQLiRuleSet': [
     { searchString: '/api/ai/llm', positionalConstraint: 'STARTS_WITH', textTransformations: ['NONE'] },
+    { searchString: '/api/v1/turns', positionalConstraint: 'EXACTLY', textTransformations: ['NONE'] },
     { searchString: '/api/modals/', positionalConstraint: 'STARTS_WITH', textTransformations: ['NONE'] },
     ...ingestExemptions(),
   ],
@@ -635,6 +636,18 @@ describe('wafPolicy', () => {
           expect(m.textTransformations, `${stage} completions allow transformations`).toEqual(['NONE']);
         }
       }
+    });
+    // The turns endpoint carries the same prompt text as the chat composer's /api/ai/llm, so it
+    // takes the same SQLi scope-down, but as one exact path: no sibling route inherits it.
+    it('scopes the turns endpoint out of SQLi exactly, not by prefix', () => {
+      const sqli = managedRules('dev').get('AWS-AWSManagedRulesSQLiRuleSet');
+      const statement = sqli!.Statement as { ManagedRuleGroupStatement: { ScopeDownStatement: unknown } };
+      const scopeDown = statement.ManagedRuleGroupStatement.ScopeDownStatement;
+      const turns = scopeDownExemptions('dev SQLi scope-down', scopeDown).filter(m => m.searchString.includes('turns'));
+
+      expect(turns).toEqual([
+        { searchString: '/api/v1/turns', positionalConstraint: 'EXACTLY', textTransformations: ['NONE'] },
+      ]);
     });
   });
 

@@ -16,6 +16,7 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '../utils/storage/index';
 import type { TutorialModule } from './types';
+import { sheetContentPrefix as contentPrefix } from './sheetTags';
 
 // Each copy the user deletes or renames uses a slot up.
 const SLOT_WINDOW = 32;
@@ -32,8 +33,6 @@ export interface SheetConfig {
   /** Whether a copy issued before content tags existed counts as current for this module. Defaults to stale. */
   legacyCopyIsCurrent?: (module: TutorialModule) => boolean;
 }
-
-const contentPrefix = (tag: string) => `${tag}-csv:`;
 
 export const sheetContentTag = (tag: string, csv: string) =>
   `${contentPrefix(tag)}${createHash('sha256').update(csv).digest('hex').slice(0, 16)}`;

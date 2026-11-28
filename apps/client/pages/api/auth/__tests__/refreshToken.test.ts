@@ -53,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository: {},
   realtimeConnectionRepository: {},
 }));
+vi.mock('@bike4mind/server-utils/auth/impersonatorAccess', () => ({ isImpersonatorAuthorized: vi.fn() }));
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findByKeyNameWithSecret: vi.fn().mockResolvedValue(null) },
 }));
@@ -79,6 +80,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import handler from '../refreshToken';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { isImpersonatorAuthorized } from '@bike4mind/server-utils/auth/impersonatorAccess';
 
 const USER = { id: 'user-1', tokenVersion: 3, isBanned: false, disputePending: false };
 
@@ -162,6 +164,16 @@ describe('POST /api/auth/refreshToken - account state', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().accessToken).toBe('new-access');
       expect(mockSetCookie).toHaveBeenCalledWith(res, 'new-refresh');
+    });
+
+    it('lets the service re-check the admin behind an impersonation session', async () => {
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(mockRotateSession).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ isImpersonatorAuthorized })
+      );
     });
 
     it('forwards the service audit event, metadata included, to the audit log', async () => {

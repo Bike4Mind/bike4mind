@@ -194,10 +194,11 @@ async function resolveFallbackLake(
  * dependency on that collection. Degrading to EMPTY can only narrow what resolves, never widen it.
  *
  * Deliberately NOT short-circuited on a registry slug, tempting as it looks: a slug matching a
- * DATA_LAKES id does not mean the registry lake is what the caller is after. `disambiguateSlug`
- * only reserves the org-less meta-tag, so an ORG-SCOPED lake may legitimately carry a registry
- * slug - exactly the foreign-org shape this arm serves - and skipping the query there resolves the
- * synthetic registry lake in place of the caller's own grant-held lake.
+ * DATA_LAKES id does not mean the registry lake is what the caller is after. An ORG-SCOPED lake
+ * created before `disambiguateSlug` reserved registry keys may still carry a registry slug -
+ * exactly the foreign-org shape this arm serves - and skipping the query there resolves the
+ * synthetic registry lake in place of the caller's own grant-held lake. An org-LESS row never
+ * answers a registry key here or in `findBySlug` (see `isRegistryLakeKey`).
  *
  * A registry-slug match DOES change behavior on failure, though: degrading to no reach here
  * would return null, and resolveLakeAccessWithGrants's `??` chain would then fall through to

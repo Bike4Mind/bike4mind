@@ -49,6 +49,11 @@ describe('the first-steps tutorial', () => {
     }
   });
 
+  it('keeps the saved-conversation card off the answer it follows', () => {
+    const notebooks = FIRST_STEPS_STEPS.find(step => step.id === 'first-steps-notebooks')!;
+    expect(notebooks.avoid).toMatch(/:last-child \[data-testid="ai-response"\]/);
+  });
+
   it('ends on a finale that says where to go next', () => {
     const finale = FIRST_STEPS_STEPS.at(-1)!;
     expect(finale.type).toBe('bridge');

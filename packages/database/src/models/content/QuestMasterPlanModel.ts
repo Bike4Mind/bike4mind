@@ -334,7 +334,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
     return this.questMasterPlanModel
       .find(query, projection)
-      .sort({ lastAccessedAt: -1 })
+      .sort({ lastAccessedAt: -1, _id: -1 })
       .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
       .skip(options?.offset || 0);
   }
@@ -377,7 +377,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     const [plans, total, statsResult] = await Promise.all([
       this.questMasterPlanModel
         .find(filteredQuery, projection)
-        .sort({ lastAccessedAt: -1 })
+        .sort({ lastAccessedAt: -1, _id: -1 })
         .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
         .skip(options?.offset || 0),
       this.questMasterPlanModel.countDocuments(filteredQuery),
@@ -424,7 +424,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
         // Explicit deletedAt filter ensures soft-deleted documents are excluded
         deletedAt: null,
       })
-      .sort({ lastAccessedAt: -1 })
+      .sort({ lastAccessedAt: -1, _id: -1 })
       .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
       .skip(options?.offset || 0);
   }

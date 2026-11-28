@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import type { IUserActivityCounterDocument } from '../types/entities/UserTypes';
 import type { ICounterLogDocument } from '../types/entities/CounterLogTypes';
-import { passthroughShape } from './responseShape';
+import { passthroughField, passthroughShape } from './responseShape';
 
 // Held to the entity interface: a new field fails the build here until it is listed. Key
 // boundary only - it strips keys it does not list, it never withholds one.
@@ -36,5 +36,20 @@ const COUNTER_LOG_RESPONSE_FIELDS = {
   metadata: true,
 } as const satisfies Record<keyof ICounterLogDocument, true>;
 
+// Kept on the audit row for auditors only: a keyed hash of text the user chose is never served back.
+const AUDIT_ONLY_METADATA_KEYS = ['fileNameHash'];
+
+const withoutAuditOnlyMetadata = (metadata: unknown): unknown => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return metadata;
+  const visible: Record<string, unknown> = { ...(metadata as Record<string, unknown>) };
+  for (const key of AUDIT_ONLY_METADATA_KEYS) delete visible[key];
+  return visible;
+};
+
 /** GET /api/users/activities/recent. */
-export const recentActivityListResponseSchema = z.array(z.object(passthroughShape(COUNTER_LOG_RESPONSE_FIELDS)));
+export const recentActivityListResponseSchema = z.array(
+  z.object({
+    ...passthroughShape(COUNTER_LOG_RESPONSE_FIELDS),
+    metadata: passthroughField.transform(withoutAuditOnlyMetadata),
+  })
+);

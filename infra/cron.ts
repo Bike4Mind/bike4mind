@@ -422,6 +422,8 @@ const abuseAssessmentSweep = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/abuseAssessmentSweep.handler',
+        // LinkRuleFactFailures is emitted from applyAutoContainment, which this sweep runs.
+        permissions: [{ actions: ['cloudwatch:PutMetricData'], resources: ['*'] }],
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
         link: [...allSecrets],
@@ -530,6 +532,8 @@ const accountCampaignSweepCron = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/accountCampaignSweep.handler',
+        // LinkRuleFactFailures is emitted from applyAutoContainment, which this sweep runs.
+        permissions: [{ actions: ['cloudwatch:PutMetricData'], resources: ['*'] }],
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],

@@ -38,6 +38,16 @@ vi.mock('@bike4mind/database', async orig => {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mocks.findUserById(...a) }),
+    // desktopToken() carries a sid, and the verifier rejects a sid with no live AuthSession.
+    authSessionRepository: {
+      ...(actual.authSessionRepository as object),
+      findBySid: async (sid: string) => ({
+        sid,
+        userId: sid.replace(/^sid-/, ''),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        revokedAt: null,
+      }),
+    },
   };
 });
 vi.mock('@bike4mind/database/infra', async orig => {

@@ -44,6 +44,7 @@ import {
   SKIP_FAILED_NOTICE,
   TutorialRunner,
   bridgeHeading,
+  cardSide,
   hasForeignQuest,
   stepProgress,
 } from './TutorialRunner';
@@ -295,17 +296,15 @@ describe('TutorialRunner', () => {
     expect(t.advance).not.toHaveBeenCalled();
   });
 
-  it('pastes the opening turn only on request, since the host sends it from its own start box', () => {
+  it('starts the opening turn with its message in the box, like every other prompt step', () => {
     const opening: TutorialScript = {
       id: 'demo',
       steps: [{ id: 'opening', type: 'prompt', body: 'Sent.', turn: 0, prompt: 'Hello' }],
     };
     const { rerenderWith } = renderRunner(transport(), [], { using: opening });
     begin('opening');
-    expect(mockInput.setChatInputValue).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('tutorial-step-waiting')).toBeNull();
-    fireEvent.click(screen.getByTestId('tutorial-step-paste'));
     expect(mockInput.setChatInputValue).toHaveBeenCalledWith('Hello');
+    expect(screen.queryByTestId('tutorial-step-waiting')).toBeNull();
 
     rerenderWith([{ id: 'u0', prompt: 'Hello', status: 'running' }]);
     expect(screen.getByTestId('tutorial-step-waiting')).toBeInTheDocument();
@@ -403,6 +402,23 @@ describe('TutorialRunner', () => {
     renderRunner(transport());
     begin('intro');
     expect(screen.getByTestId('tutorial-step-next')).toHaveFocus();
+  });
+});
+
+describe('cardSide', () => {
+  const step = { anchor: 'attach-files-btn', placement: 'above' as const };
+
+  it('keeps the side the step names while the card points at its own anchor', () => {
+    expect(cardSide(step, null)).toBe('above');
+    expect(cardSide(step, { testid: 'attach-files-btn' })).toBe('above');
+  });
+
+  it('drops that side once a cue moves the card to another anchor, so it takes the roomiest clear spot', () => {
+    expect(cardSide(step, { testid: 'recent-file-1' })).toBeUndefined();
+  });
+
+  it('takes the side a cue names for its own anchor', () => {
+    expect(cardSide(step, { testid: 'add-from-file-browser-btn', placement: 'right' })).toBe('right');
   });
 });
 

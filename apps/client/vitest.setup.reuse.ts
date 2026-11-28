@@ -178,8 +178,16 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// Recharts keeps measured text sizes in a module-level cache that outlives the file (node holds the
+// module), so a file that stubs getBoundingClientRect would make later charts wrap their labels. Not
+// exported from the package entry; required so it is the same CJS copy the charts load.
+const { clearStringCache } = createRequire(import.meta.url)('recharts/lib/util/DOMUtils') as {
+  clearStringCache(): void;
+};
+
 // One hook, in this order: clearing cookies goes through URL, which a test may have stubbed.
 afterAll(() => {
   restoreGlobals();
   resetDocument?.();
+  clearStringCache();
 });

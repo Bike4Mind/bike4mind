@@ -337,6 +337,267 @@ extension Components {
                 case lastUpdated
             }
         }
+        /// - Remark: Generated from `#/components/schemas/updateSessionResponse200`.
+        public struct UpdateSessionResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/_id`.
+            public var _id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/userId`.
+            public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/organizationId`.
+            public var organizationId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/tags`.
+            public typealias TagsPayload = [Components.Schemas.UpdateSessionResponse200.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/tags`.
+            public var tags: Components.Schemas.UpdateSessionResponse200.TagsPayload?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/retrievalTags`.
+            public var retrievalTags: [Swift.String]?
+            /// True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lakeScopeExplicit`.
+            public var lakeScopeExplicit: Swift.Bool?
+            /// Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/firstCreated`.
+            public var firstCreated: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lastUpdated`.
+            public var lastUpdated: Foundation.Date
+            /// Creates a new `UpdateSessionResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _id:
+            ///   - name:
+            ///   - userId:
+            ///   - organizationId:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - forceKnowledgeRetrieval:
+            ///   - retrievalTags:
+            ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///   - lastUsedModel:
+            ///   - firstCreated:
+            ///   - lastUpdated:
+            public init(
+                id: Swift.String,
+                _id: Swift.String? = nil,
+                name: Swift.String,
+                userId: Swift.String,
+                organizationId: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.UpdateSessionResponse200.TagsPayload? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                retrievalTags: [Swift.String]? = nil,
+                lakeScopeExplicit: Swift.Bool? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                lastUsedModel: Swift.String? = nil,
+                firstCreated: Foundation.Date,
+                lastUpdated: Foundation.Date
+            ) {
+                self.id = id
+                self._id = _id
+                self.name = name
+                self.userId = userId
+                self.organizationId = organizationId
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.retrievalTags = retrievalTags
+                self.lakeScopeExplicit = lakeScopeExplicit
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.lastUsedModel = lastUsedModel
+                self.firstCreated = firstCreated
+                self.lastUpdated = lastUpdated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _id
+                case name
+                case userId
+                case organizationId
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case forceKnowledgeRetrieval
+                case retrievalTags
+                case lakeScopeExplicit
+                case includeLibraryFiles
+                case promptCacheTtl
+                case lastUsedModel
+                case firstCreated
+                case lastUpdated
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/updateSessionRequest`.
+        public struct UpdateSessionRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/name`.
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/tags`.
+            public typealias TagsPayload = [Components.Schemas.UpdateSessionRequest.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/tags`.
+            public var tags: Components.Schemas.UpdateSessionRequest.TagsPayload?
+            /// Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/lakeScope`.
+            public var lakeScope: [Swift.String]?
+            /// Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/propagateToProjects`.
+            public var propagateToProjects: Swift.Bool?
+            /// Creates a new `UpdateSessionRequest`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - lastUsedModel: Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it.
+            ///   - forceKnowledgeRetrieval:
+            ///   - lakeScope: The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake.
+            ///   - includeLibraryFiles: Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on.
+            ///   - promptCacheTtl: How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+            ///   - propagateToProjects: Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project.
+            public init(
+                name: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.UpdateSessionRequest.TagsPayload? = nil,
+                lastUsedModel: Swift.String? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                lakeScope: [Swift.String]? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                propagateToProjects: Swift.Bool? = nil
+            ) {
+                self.name = name
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.lastUsedModel = lastUsedModel
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.lakeScope = lakeScope
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.propagateToProjects = propagateToProjects
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case lastUsedModel
+                case forceKnowledgeRetrieval
+                case lakeScope
+                case includeLibraryFiles
+                case promptCacheTtl
+                case propagateToProjects
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/deleteSessionResponse200`.
+        public struct DeleteSessionResponse200: Codable, Hashable, Sendable {
+            /// The caller's most recently updated remaining session, which the product UI opens next; null when none remains.
+            ///
+            /// - Remark: Generated from `#/components/schemas/deleteSessionResponse200/newLastNotebookId`.
+            public var newLastNotebookId: Swift.String?
+            /// Creates a new `DeleteSessionResponse200`.
+            ///
+            /// - Parameters:
+            ///   - newLastNotebookId: The caller's most recently updated remaining session, which the product UI opens next; null when none remains.
+            public init(newLastNotebookId: Swift.String? = nil) {
+                self.newLastNotebookId = newLastNotebookId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case newLastNotebookId
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/getMeResponse200`.
         public struct GetMeResponse200: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/getMeResponse200/id`.
@@ -1393,6 +1654,237 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case data
                 case nextCursor = "next_cursor"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200`.
+        public struct ListArtifactsResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload`.
+            public struct DataPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/id`.
+                public var id: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/type`.
+                public var _type: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/title`.
+                public var title: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/description`.
+                public var description: Swift.String?
+                /// The current version. Starts at 1; each content change adds one.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/version`.
+                public var version: Swift.Int
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/version_tag`.
+                public var versionTag: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/status`.
+                public var status: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/tags`.
+                public var tags: [Swift.String]
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/session_id`.
+                public var sessionId: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/project_id`.
+                public var projectId: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/visibility`.
+                public var visibility: Swift.String
+                /// ISO 8601 timestamp.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/created_at`.
+                public var createdAt: Swift.String
+                /// ISO 8601 timestamp.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/updated_at`.
+                public var updatedAt: Swift.String
+                /// The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/content`.
+                public var content: Swift.String?
+                /// Creates a new `DataPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - id:
+                ///   - _type:
+                ///   - title:
+                ///   - description:
+                ///   - version: The current version. Starts at 1; each content change adds one.
+                ///   - versionTag:
+                ///   - status:
+                ///   - tags:
+                ///   - sessionId:
+                ///   - projectId:
+                ///   - visibility:
+                ///   - createdAt: ISO 8601 timestamp.
+                ///   - updatedAt: ISO 8601 timestamp.
+                ///   - content: The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+                public init(
+                    id: Swift.String,
+                    _type: Swift.String,
+                    title: Swift.String,
+                    description: Swift.String? = nil,
+                    version: Swift.Int,
+                    versionTag: Swift.String? = nil,
+                    status: Swift.String,
+                    tags: [Swift.String],
+                    sessionId: Swift.String? = nil,
+                    projectId: Swift.String? = nil,
+                    visibility: Swift.String,
+                    createdAt: Swift.String,
+                    updatedAt: Swift.String,
+                    content: Swift.String? = nil
+                ) {
+                    self.id = id
+                    self._type = _type
+                    self.title = title
+                    self.description = description
+                    self.version = version
+                    self.versionTag = versionTag
+                    self.status = status
+                    self.tags = tags
+                    self.sessionId = sessionId
+                    self.projectId = projectId
+                    self.visibility = visibility
+                    self.createdAt = createdAt
+                    self.updatedAt = updatedAt
+                    self.content = content
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case id
+                    case _type = "type"
+                    case title
+                    case description
+                    case version
+                    case versionTag = "version_tag"
+                    case status
+                    case tags
+                    case sessionId = "session_id"
+                    case projectId = "project_id"
+                    case visibility
+                    case createdAt = "created_at"
+                    case updatedAt = "updated_at"
+                    case content
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/data`.
+            public typealias DataPayload = [Components.Schemas.ListArtifactsResponse200.DataPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/data`.
+            public var data: Components.Schemas.ListArtifactsResponse200.DataPayload
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/next_cursor`.
+            public var nextCursor: Swift.String?
+            /// Creates a new `ListArtifactsResponse200`.
+            ///
+            /// - Parameters:
+            ///   - data:
+            ///   - nextCursor:
+            public init(
+                data: Components.Schemas.ListArtifactsResponse200.DataPayload,
+                nextCursor: Swift.String? = nil
+            ) {
+                self.data = data
+                self.nextCursor = nextCursor
+            }
+            public enum CodingKeys: String, CodingKey {
+                case data
+                case nextCursor = "next_cursor"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/getArtifactResponse200`.
+        public struct GetArtifactResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/type`.
+            public var _type: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/title`.
+            public var title: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/description`.
+            public var description: Swift.String?
+            /// The current version. Starts at 1; each content change adds one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/version`.
+            public var version: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/version_tag`.
+            public var versionTag: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/status`.
+            public var status: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/tags`.
+            public var tags: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/session_id`.
+            public var sessionId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/project_id`.
+            public var projectId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/visibility`.
+            public var visibility: Swift.String
+            /// ISO 8601 timestamp.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/created_at`.
+            public var createdAt: Swift.String
+            /// ISO 8601 timestamp.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/updated_at`.
+            public var updatedAt: Swift.String
+            /// The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/content`.
+            public var content: Swift.String?
+            /// Creates a new `GetArtifactResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _type:
+            ///   - title:
+            ///   - description:
+            ///   - version: The current version. Starts at 1; each content change adds one.
+            ///   - versionTag:
+            ///   - status:
+            ///   - tags:
+            ///   - sessionId:
+            ///   - projectId:
+            ///   - visibility:
+            ///   - createdAt: ISO 8601 timestamp.
+            ///   - updatedAt: ISO 8601 timestamp.
+            ///   - content: The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+            public init(
+                id: Swift.String,
+                _type: Swift.String,
+                title: Swift.String,
+                description: Swift.String? = nil,
+                version: Swift.Int,
+                versionTag: Swift.String? = nil,
+                status: Swift.String,
+                tags: [Swift.String],
+                sessionId: Swift.String? = nil,
+                projectId: Swift.String? = nil,
+                visibility: Swift.String,
+                createdAt: Swift.String,
+                updatedAt: Swift.String,
+                content: Swift.String? = nil
+            ) {
+                self.id = id
+                self._type = _type
+                self.title = title
+                self.description = description
+                self.version = version
+                self.versionTag = versionTag
+                self.status = status
+                self.tags = tags
+                self.sessionId = sessionId
+                self.projectId = projectId
+                self.visibility = visibility
+                self.createdAt = createdAt
+                self.updatedAt = updatedAt
+                self.content = content
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _type = "type"
+                case title
+                case description
+                case version
+                case versionTag = "version_tag"
+                case status
+                case tags
+                case sessionId = "session_id"
+                case projectId = "project_id"
+                case visibility
+                case createdAt = "created_at"
+                case updatedAt = "updated_at"
+                case content
             }
         }
     }

@@ -83,6 +83,7 @@ function makeAdapters(
     createArtifact: vi.fn().mockResolvedValue({ id: 'artifact_code_red-circle-a1b2c3_1700000000000_0' }),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
+    findOwnedMediaKeys: vi.fn(async (keys: string[]) => new Set(keys)),
     userRepository: { findById: vi.fn().mockResolvedValue(user) },
     adminSettings: {
       findAll: async () => [{ settingName: 'MaxFileSize', settingValue: String(MAX_FILE_SIZE_MB) }],
@@ -1480,5 +1481,63 @@ describe("notebook import: generateUniqueName reuses this run's highest suffix a
     // probe each for the second and third notebook (2) is the bound - a regression to
     // restart-from-1 costs at least one more.
     expect(sessionRepository.find).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe('imported message images', () => {
+  it('writes only the image keys the importing user owns', async () => {
+    const { adapters, bulkCreate } = makeAdapters();
+    adapters.findOwnedMediaKeys = vi.fn(async () => new Set(['mine.png']));
+    const payload = {
+      ...PAYLOAD,
+      notebooks: [
+        {
+          ...PAYLOAD.notebooks[0],
+          chatHistory: [{ ...MESSAGE, images: ['mine.png', 'theirs.png', 42, null, 'mine.png'] }],
+        },
+      ],
+    };
+
+    await new NotebookImportService(adapters).importNotebooks('user-1', payload as never, OPTIONS);
+
+    expect(adapters.findOwnedMediaKeys).toHaveBeenCalledWith(['mine.png', 'theirs.png'], 'user-1');
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual(['mine.png', 'mine.png']);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/not owned/), { dropped: 1 });
+  });
+
+  it('resolves ownership before an overwrite deletes the messages that may prove it', async () => {
+    const order: string[] = [];
+    const existing = [{ id: 'existing-id', userId: 'user-1', name: NOTEBOOK.name }];
+    const { adapters, bulkCreate } = makeAdapters(existing);
+    adapters.findOwnedMediaKeys = vi.fn(async () => {
+      order.push('lookup');
+      return new Set(['mine.png']);
+    });
+    adapters.chatHistoryRepository.deleteMany = vi.fn(async () => {
+      order.push('delete');
+    });
+    const payload = {
+      ...PAYLOAD,
+      notebooks: [{ ...NOTEBOOK, chatHistory: [{ ...MESSAGE, images: ['mine.png'] }] }],
+    };
+
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      {
+        ...OPTIONS,
+        conflictResolution: 'overwrite',
+      } as never
+    );
+
+    expect(order).toEqual(['lookup', 'delete']);
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual(['mine.png']);
+  });
+
+  it('skips the ownership lookup when no message carries images', async () => {
+    const { adapters, bulkCreate } = makeAdapters();
+    await new NotebookImportService(adapters).importNotebooks('user-1', PAYLOAD as never, OPTIONS);
+    expect(adapters.findOwnedMediaKeys).not.toHaveBeenCalled();
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual([]);
   });
 });

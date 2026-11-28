@@ -155,7 +155,7 @@ describe('GET /api/data-lakes/[id]/config-history', () => {
 
       expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ includeFiles: true })
+        expect.objectContaining({ includeFiles: true, viewerUserId: 'u1' })
       );
       expect(json.mock.calls[0][0].data.entries[0].kind).toBe('file');
     });

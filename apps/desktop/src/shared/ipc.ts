@@ -1,5 +1,5 @@
 import type { HostBridgeApi } from './hostBridge';
-import type { HostConnectionsApi } from './hostConnection';
+import type { HostConnectionsApi, HostInstallApi } from './hostConnection';
 import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { StudioApi } from './studioIpc';
@@ -176,6 +176,13 @@ export const IPC_CHANNELS = {
   hostConnect: 'host:connect',
   hostDisconnect: 'host:disconnect',
   hostRemove: 'host:remove',
+  hostSshAliases: 'host:ssh-aliases',
+  hostSshDescribe: 'host:ssh-describe',
+  hostSshAdd: 'host:ssh-add',
+  hostInstall: 'host:install',
+  hostUpdate: 'host:update',
+  /** main -> renderer: one step of an install or update of a remote host program. */
+  hostInstallProgress: 'host:install-progress',
   /** main -> renderer: the whole host list, on every change of any host's connection state. */
   hostStateChanged: 'host:state-changed',
   studioGet: 'studio:get',
@@ -831,7 +838,7 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
-  host: HostBridgeApi & HostConnectionsApi;
+  host: HostBridgeApi & HostConnectionsApi & HostInstallApi;
   library: LibraryApi;
   productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;

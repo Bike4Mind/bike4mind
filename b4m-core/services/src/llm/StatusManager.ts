@@ -19,8 +19,11 @@ interface StatusUpdateOptions {
   skipPayloadOptimization?: boolean;
 }
 
+/** The one ClientMessageSender method the turn's frame paths call; lets a host inject its own sink. */
+export type ClientFrameSender = Pick<ClientMessageSender, 'sendToClient'>;
+
 export class StatusManager {
-  private clientMessageSender: ClientMessageSender;
+  private clientMessageSender: ClientFrameSender;
   private logger: Logger;
   private wsHttpsUrl: string;
   private userId: string;
@@ -31,7 +34,7 @@ export class StatusManager {
   // Track last sent payload to avoid redundant updates
   private lastSentPayload: string | null = null;
 
-  constructor(clientMessageSender: ClientMessageSender, logger: Logger, wsHttpsUrl: string, userId: string) {
+  constructor(clientMessageSender: ClientFrameSender, logger: Logger, wsHttpsUrl: string, userId: string) {
     this.clientMessageSender = clientMessageSender;
     this.logger = logger;
     this.wsHttpsUrl = wsHttpsUrl;

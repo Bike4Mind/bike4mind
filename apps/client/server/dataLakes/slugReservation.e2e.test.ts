@@ -63,7 +63,9 @@ describe('deleted lake slug reservation (real mongod)', () => {
       adapters,
       ORG
     );
-    expect(lake.slug).toBe('opti-knowledge');
+    // New lakes never take a registry slug; this seeds one that predates that reservation.
+    expect(lake.slug).toBe('opti-knowledge-1');
+    await dataLakeRepository.update({ id: lake.id, slug: 'opti-knowledge' });
     // The DB lake admits its creator; the registry lake admits the `Opti` tag.
     const ctx = { userId: USER, isAdmin: false, userTags: ['Opti'], organizationIds: [ORG] };
 

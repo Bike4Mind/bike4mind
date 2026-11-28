@@ -115,12 +115,12 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(attachment(message).color).toBe('#E01E5A');
     expect(fieldsOf(message)).toEqual([
       '*Measured*\n18 sign-in code emails',
-      '*Ceiling*\n15',
+      '*Fires at*\n15 or more',
       '*Window*\n5 minutes ending 12:39 UTC',
       '*Breaching since*\n12:34 UTC (6 min)',
     ]);
     expect(sectionText(message, 'What happened')).toBe(
-      '*What happened*\n18 sign-in code emails in the 5 minutes ending 12:39 UTC; the ceiling is 15.'
+      '*What happened*\n18 sign-in code emails in the 5 minutes ending 12:39 UTC; the alarm fires at 15 or more.'
     );
     expect(sectionText(message, 'Why it matters')).toContain('Automated signups are the usual cause.');
     expect(sectionText(message, 'What to do')).toContain('Check the admin signup activity');
@@ -136,7 +136,7 @@ describe('formatAlarmSlackMessage on production', () => {
       'production  |  level page  |  category abuse  |  bike4mind-production-signup-code-send-burst  |  12:39 UTC, 27 Oct'
     );
     expect(message?.text).toBe(
-      ':rotating_light: PRODUCTION ALARM: Sign-in code emails spiking: 18 sign-in code emails in the 5 minutes ending 12:39 UTC; the ceiling is 15.'
+      ':rotating_light: PRODUCTION ALARM: Sign-in code emails spiking: 18 sign-in code emails in the 5 minutes ending 12:39 UTC; the alarm fires at 15 or more.'
     );
   });
 
@@ -277,10 +277,40 @@ describe('formatAlarmSlackMessage on production', () => {
         'Threshold Crossed: 1 datapoint [2.4855329999999998 (27/10/26 23:00:00)] was greater than or equal to the threshold (2.0).',
       Trigger: { Period: 3600, EvaluationPeriods: 1 },
     };
-    expect(describeReason(alarm, 'USD')).toBe('2.49 USD in the hour ending 00:00 UTC; the ceiling is 2.00.');
+    expect(describeReason(alarm, 'USD')).toBe(
+      '2.49 USD in the hour ending 00:00 UTC; the alarm fires at 2.00 or more.'
+    );
     const fields = describeFields(alarm, 'USD');
     expect(fields).toContain('*Measured*\n2.49 USD');
-    expect(fields).toContain('*Ceiling*\n2.00');
+    expect(fields).toContain('*Fires at*\n2.00 or more');
+  });
+
+  it('words a value equal to an inclusive threshold as reaching it, not as passing a ceiling', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [1.0 (26/11/26 04:13:00)] was greater than or equal to the threshold (1.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm)).toBe(
+      'The value was 1 in the 5 minutes ending 04:18 UTC; the alarm fires at 1 or more.'
+    );
+    const fields = describeFields(alarm);
+    expect(fields).toContain('*Fires at*\n1 or more');
+    expect(fields.some(f => f.startsWith('*Ceiling*'))).toBe(false);
+  });
+
+  it('words an inclusive less-than alarm as firing at the threshold or less', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [0.0 (27/10/26 04:00:00)] was less than or equal to the threshold (0.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'runs')).toBe(
+      '0 runs in the 5 minutes ending 04:05 UTC; the alarm fires at 0 or less.'
+    );
+    expect(describeFields(alarm, 'runs')).toContain('*Fires at*\n0 or less');
   });
 
   it('rolls the bucket end over midnight', () => {

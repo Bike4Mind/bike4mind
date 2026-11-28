@@ -4,6 +4,7 @@ import {
   type AutoContainmentDecisionItem,
   type GraduatedInterventionTier,
   type InterventionHold,
+  type LinkRuleFacts,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 import {
@@ -14,12 +15,18 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { loadAutoContainmentConfig } from '@bike4mind/server-utils/security/autoContainment/config';
+import { loadLinkRuleFacts } from '@bike4mind/server-utils/security/autoContainment/linkRuleFacts';
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
-import { decideIntervention, type InterventionDecision, type InterventionSkipReason } from './policy';
+import {
+  decideIntervention,
+  linkRulesMayOverride,
+  type InterventionDecision,
+  type InterventionSkipReason,
+} from './policy';
 
 /**
  * Automated containment: turns an `abuse` judgment on a shadow detection into the admin bulk Contain
@@ -86,6 +93,8 @@ export type AutoContainmentDeps = {
   auditHold: (userId: string, decision: AutoContainmentDecisionItem) => Promise<void>;
   /** Whether a verification flow can clear a verify hold; without one, verify decisions become review. */
   verificationAvailable: () => Promise<boolean>;
+  /** Link-rule facts for the detection's accounts; fails closed per fact, never throws. */
+  loadLinkRuleFacts: (userIds: string[], config: AutoContainmentConfig) => Promise<LinkRuleFacts[]>;
   now: () => Date;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
 };
@@ -157,6 +166,7 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
   },
   // No card or phone verification flow calls unlockSignupGrant yet, so a verify decision is recorded as review.
   verificationAvailable: async () => false,
+  loadLinkRuleFacts: (userIds, config) => loadLinkRuleFacts(userIds, config, undefined, logger),
   now: () => new Date(),
   logger,
 });
@@ -203,6 +213,8 @@ async function claimDecision(
   const covered = new Set(covering.filter(row => row !== current).flatMap(row => row.userIds));
   const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (current) {
+    // Reclaim keeps the row's decider, accounts and audit fields, so it must not carry another decider's claim.
+    if (decided.tier !== 'contain' && current.decidedBy !== decided.decidedBy) return null;
     const reclaimed = await deps.decisions.reclaim(current.id, {
       staleBefore,
       cappedBefore: new Date(now.getTime() - HOUR_MS),
@@ -232,6 +244,9 @@ async function claimDecision(
           policyVersion: decided.policyVersion,
           scope: decided.scope,
           expiresAt: decided.expiresAt,
+          decidedBy: decided.decidedBy,
+          linkRules: decided.linkRules,
+          modelJudgment: { result: assessment.result, confidence: assessment.confidence },
         }),
   });
   return recorded ? { decision: recorded, retried: false } : null;
@@ -270,6 +285,22 @@ async function releaseContainedHolds(
   }
 }
 
+async function linkFactsFor(
+  detection: ShadowDetectionItem,
+  config: AutoContainmentConfig,
+  deps: AutoContainmentDeps
+): Promise<LinkRuleFacts[] | null> {
+  try {
+    return await deps.loadLinkRuleFacts(detection.userIds, config);
+  } catch (error) {
+    deps.logger.error('[AUTO_CONTAINMENT] link-rule facts unavailable', {
+      detectionId: detection.id,
+      error: errorText(error),
+    });
+    return null;
+  }
+}
+
 /** Decides, and in enforce mode acts on, one assessment. Throws only on a database failure. */
 export async function applyAutoContainment(
   assessment: AbuseAssessmentItem,
@@ -280,13 +311,17 @@ export async function applyAutoContainment(
   const detection = await deps.findDetection(assessment.detectionId);
   if (!detection) return { status: 'skipped', reason: 'detection_not_found' };
 
-  const decided = decideIntervention({
+  const input = {
     assessment,
     detection,
     config,
     now: deps.now(),
     verificationAvailable: await deps.verificationAvailable(),
-  });
+  };
+  const byModel = decideIntervention(input);
+  // The facts cost several reads per account, so they are loaded only when a rule could replace the model's skip.
+  const linkFacts = linkRulesMayOverride(input, byModel) ? await linkFactsFor(detection, config, deps) : null;
+  const decided = linkFacts ? decideIntervention({ ...input, linkFacts }) : byModel;
   if (decided.kind === 'skip') return { status: 'skipped', reason: decided.why };
   if (decided.tier !== 'contain') return applyGraduatedTier(assessment, detection, decided, config, deps);
 

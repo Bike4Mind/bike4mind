@@ -38,6 +38,14 @@ export const CORE_TUTORIALS: readonly CoreTutorial[] = [
     track: 'different',
     order: 40,
   },
+  {
+    id: 'projects',
+    title: 'Work in a project',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 50,
+  },
 ];
 
 /** Resolves only core's own tutorials, so an owner's module id never reaches a core route. */

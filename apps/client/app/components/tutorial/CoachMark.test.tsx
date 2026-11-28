@@ -579,6 +579,30 @@ describe('CoachMark', () => {
     expect(screen.getByTestId('tutorial-coach-card')).toHaveStyle({ top: '16px' });
   });
 
+  it('docks by where an anchor lands, not where it passed through while its sheet slid up', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
+    boxes.set('file-row', rect(16, 700, 374, 830));
+    boxes.set('tutorial-coach-card', rect(0, 0, 358, 200));
+    stubRects();
+    render(
+      <>
+        <div data-testid="sheet">
+          <button data-testid="file-row">monthly-spending.csv</button>
+        </div>
+        <CoachMark stepKey="s" body="Select the file." anchor="file-row" onLeave={() => undefined} />
+      </>
+    );
+    expect(await screen.findByTestId('tutorial-anchor-ring')).toHaveStyle({ top: `${700 - 6}px` });
+    boxes.set('file-row', rect(16, 355, 374, 485));
+    act(() => {
+      screen.getByTestId('sheet').dispatchEvent(new Event('transitionend', { bubbles: true }));
+    });
+    await waitFor(() => expect(screen.getByTestId('tutorial-anchor-ring')).toHaveStyle({ top: `${355 - 6}px` }));
+    // The bottom is the phone card's home edge; the top would cover the sheet's header, search and tabs.
+    expect(screen.getByTestId('tutorial-coach-card')).toHaveStyle({ bottom: '16px' });
+  });
+
   it('shows the step count, or the heading on a card without one', () => {
     const { rerender } = render(
       <CoachMark stepKey="s" body="b" progress={{ index: 1, count: 14 }} onLeave={() => undefined} />
@@ -754,6 +778,18 @@ describe('CoachMark', () => {
     // Once done, the card can still be tucked away again.
     fireEvent.click(screen.getByTestId('tutorial-coach-hide'));
     expect(screen.getByTestId('tutorial-coach-pill')).toBeVisible();
+  });
+
+  it('offers no Leave on a card that ends the module, keeping its own action and the hide button', () => {
+    render(
+      <CoachMark stepKey="finale" body="b" title="Where next" offerLeave={false} onLeave={vi.fn()}>
+        <button data-testid="finale-done">Done</button>
+      </CoachMark>
+    );
+    expect(screen.queryByTestId('tutorial-coach-leave')).toBeNull();
+    expect(screen.queryByText('Leave tutorial')).toBeNull();
+    expect(screen.getByTestId('finale-done')).toBeInTheDocument();
+    expect(screen.getByTestId('tutorial-coach-hide')).toBeInTheDocument();
   });
 
   it('closes a panel card from its X, with no pill and no separate Leave', () => {

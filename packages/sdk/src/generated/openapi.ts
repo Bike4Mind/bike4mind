@@ -217,6 +217,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/turns': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Add a turn to a session
+     * @description Adds a user message to an existing session (called a "notebook" in the product UI) and runs the assistant reply through the same pipeline as the web app, so the turn appears in the session and every other client watching it sees it live. A successful request is answered with an SSE stream (`text/event-stream`): a `meta` event carrying `requestId`, a `turn` event with the new `quest_id` and `session_id`, then `delta` events (`{ quest_id, slot, text }`) that each APPEND `text` to reply slot `slot`, and `replace` events (`{ quest_id, slot, text }`) that REPLACE a slot whole when the server reset or rewrote it (a retry, a rapid-reply handoff). Thinking models stream their reasoning in an earlier slot than the answer. One `settled` event (`{ quest_id, status, failed, credits_used, error_code }`) follows the last slot event, then `data: [DONE]`. `status` is `done` or `stopped`; when `failed` is true the slots hold an explanation rather than an answer, and `error_code` names the cause when it is a known one.
+     *
+     *     DISCONNECTS. Closing the stream detaches from the turn; it does not stop it. The turn runs to the end and is saved to the session, and an API key's concurrent-request slot stays held until the turn finishes. Stop a turn with `POST /api/sessions/{id}/chat/stop-reply`.
+     *
+     *     ERRORS. Everything checked before the turn starts fails with a JSON error body and a real HTTP status, before any stream opens: a bad credential `401`; a key without `ai:chat` `403` (with `required_scopes`); a suspended account, paused spending or an organization the caller cannot bill `403` with an `errorCode`; a `model` that does not exist, is disabled or cannot run a chat completion `400`; a `session_id` that does not exist or that the caller cannot write to `404` (the two are indistinguishable on purpose); a body that fails schema validation `422`; too many requests, or the free-tier daily allowance used up, `429` with `Retry-After`. Once the turn exists the stream opens and the status stays `200`: a turn the account cannot pay for (`error_code: "insufficient_credits"`) or a model its plan or organization does not allow is reported by its `settled` event with `failed: true`, like any other failed turn, and an `error` event is sent only when the server could not follow the turn to its end.
+     */
+    post: operations['createSessionTurn'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/completion-runs': {
     parameters: {
       query?: never;
@@ -4910,6 +4934,190 @@ export interface components {
     };
     /**
      * @example {
+     *       "type": "delta",
+     *       "quest_id": "664f1c2b9a1e4d0012ab34cd",
+     *       "slot": 0,
+     *       "text": "The report covers"
+     *     }
+     */
+    createSessionTurnResponse200:
+      | {
+          /** @enum {string} */
+          type: 'meta';
+          requestId: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'turn';
+          quest_id: string;
+          session_id: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'delta';
+          quest_id: string;
+          slot: number;
+          text: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'replace';
+          quest_id: string;
+          slot: number;
+          text: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'settled';
+          quest_id: string;
+          /** @enum {string} */
+          status: 'done' | 'stopped';
+          failed: boolean;
+          credits_used?: number;
+          /** @enum {string} */
+          error_code?:
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'spend_frozen'
+            | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
+            | 'content_blocked';
+        }
+      | {
+          /** @enum {string} */
+          type: 'error';
+          message: string;
+          requestId?: string;
+          /** @enum {string} */
+          code?:
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'spend_frozen'
+            | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
+            | 'invalid_request'
+            | 'provider_error'
+            | 'provider_rejected'
+            | 'content_blocked'
+            | 'output_budget_exhausted';
+        };
+    createSessionTurnResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'invalid_request'
+        | 'unknown_model'
+        | 'assistant_prefill_unsupported'
+        | 'tool_search_unsupported'
+        | 'all_tools_deferred'
+        | 'deferred_tool_cache_control'
+        | 'unknown_tool_reference'
+        | 'tool_changes_unsupported'
+        | 'invalid_tool_change'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id';
+    };
+    createSessionTurnResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'model_requires_subscription'
+        | 'org_model_not_allowed'
+        | 'spend_frozen';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /**
+       * @description With `errorCode: spend_frozen`: whether the account, its organization or the API key is paused.
+       * @enum {string}
+       */
+      frozenScope?: 'user' | 'organization' | 'api_key';
+      /** @description With `errorCode: spend_frozen`: when spending was paused (ISO 8601). */
+      frozenAt?: string;
+    };
+    createSessionTurnResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
+    };
+    /**
+     * @example {
+     *       "session_id": "664f1c2b9a1e4d0012ab34cd",
+     *       "message": "Summarize the attached report.",
+     *       "model": "claude-opus-4-8"
+     *     }
+     */
+    createSessionTurnRequest: {
+      /** @description The session (notebook) to add the turn to. It must already exist. */
+      session_id: string;
+      /** @description The user message for this turn. */
+      message: string;
+      /** @description Model id, as listed by `GET /api/v1/models`. */
+      model: string;
+      temperature?: number;
+      top_p?: number;
+      /** @description Output ceiling. Omit it to let the server size it for the model. */
+      max_tokens?: number;
+      thinking?: {
+        enabled: boolean;
+        budget_tokens?: number;
+      };
+      /** @description Files attached to this message. */
+      message_file_ids?: string[];
+      /** @description Workbench files to put in context for this turn. */
+      fab_file_ids?: string[];
+      /** @description Earlier turns of the session to send as context. Defaults to 10. 14 is reserved and rejected with 422. */
+      history_count?: number;
+      /**
+       * @description How much of the system stack to place in front of the model. Unset keeps the full stack the web app uses.
+       * @enum {string}
+       */
+      prompt_mode?: 'raw' | 'grounded' | 'surface';
+      /** @description Organization to bill. `null` bills personal credits; omitted uses the caller default. */
+      organization_id?: string | null;
+      /** @description Epoch ms when the client submitted the message, for the turn timing log. */
+      client_submitted_at?: number;
+    };
+    /**
+     * @example {
      *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
      *       "rootSessionId": "session-42",
      *       "budgetCredits": 5000,
@@ -8478,9 +8686,6 @@ export interface components {
             | 'create_data_lake'
             | 'save_content_to_data_lake'
             | 'delegate_to_agent'
-            | 'optihashi_schedule'
-            | 'optihashi_formulate'
-            | 'optihashi_edit_problem'
             | 'navigate_view'
             | 'generate_jupyter_notebook'
             | 'excel_generation'
@@ -21349,6 +21554,157 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createCompletionResponse503'];
+        };
+      };
+    };
+  };
+  createSessionTurn: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createSessionTurnRequest'];
+      };
+    };
+    responses: {
+      /** @description SSE stream of turn events (see the SessionTurnStreamEvent shape). */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'text/event-stream': components['schemas']['createSessionTurnResponse200'];
+        };
+      };
+      /** @description A `model` that does not exist, is disabled or cannot run a chat completion, or an otherwise invalid request. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSessionTurnResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold `ai:chat`, the account is suspended (`errorCode: "account_suspended"`), AI access is turned off for the account, the organization policy does not allow the model for an API key (`errorCode: "org_model_not_allowed"`; a signed-in caller gets the refusal as a failed turn in the stream), or the caller named an `organization_id` it cannot bill (`errorCode: "billing_organization_mismatch"` for an organization-billed key). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSessionTurnResponse403'];
+        };
+      };
+      /** @description No session with that id exists, or the caller cannot write to it. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body over 25 MB. */
+      413: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body failed schema validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createSessionTurnResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded, or the free-tier daily allowance is used up (`errorCode: "daily_free_limit_reached"`). */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal error before the stream opened. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The database is unreachable. Retry later. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

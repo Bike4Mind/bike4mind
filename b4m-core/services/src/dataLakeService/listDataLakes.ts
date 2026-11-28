@@ -13,6 +13,7 @@ import type {
 } from '@bike4mind/common';
 import {
   DATA_LAKES,
+  registryOverridingSlugs,
   DATA_LAKE_TRANSITIONAL_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DEFAULT_DATA_LAKE_ORIGIN,
@@ -597,8 +598,8 @@ export const listDataLakes = async (
     )
   );
 
-  // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
-  const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
+  // Merge with hardcoded fallbacks (an org-scoped DB entry takes precedence by slug/id).
+  const dynamicIds = registryOverridingSlugs(dynamicLakes);
   const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
 
   const normalizedUserTags = ctx.userTags.map(t => t.toLowerCase());
@@ -668,7 +669,7 @@ export const listAllDataLakes = async (
       gitHubBindings.get(dl.id)
     )
   );
-  const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
+  const dynamicIds = registryOverridingSlugs(dynamicLakes);
   const hardcodedFallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
   // This is the only list an admin (the only actor toFallbackConfig ever surfaces groundingMode
   // to) ever sees, so the overlay batch is fetched only here - listDataLakes' non-admin callers

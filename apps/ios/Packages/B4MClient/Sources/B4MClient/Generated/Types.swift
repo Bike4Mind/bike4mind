@@ -24,6 +24,20 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/sessions/{id}`.
     /// - Remark: Generated from `#/paths//api/sessions/{id}/get(getSession)`.
     func getSession(_ input: Operations.GetSession.Input) async throws -> Operations.GetSession.Output
+    /// Update a session
+    ///
+    /// Updates a session (called a "notebook" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on for a session that has never set it; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.
+    ///
+    /// - Remark: HTTP `PUT /api/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/sessions/{id}/put(updateSession)`.
+    func updateSession(_ input: Operations.UpdateSession.Input) async throws -> Operations.UpdateSession.Output
+    /// Delete a session
+    ///
+    /// Deletes one of your sessions (called a "notebook" in the product UI). This cannot be undone through the API. Files you uploaded into the session are deleted with it; files other people uploaded into it are kept, and every access grant this session gave out on a file is revoked. A session you do not own, or one already deleted, is `404`. A `409` means a concurrent change touched one of those files mid-delete; nothing was deleted, so retry. An API key needs `notebooks:write`.
+    ///
+    /// - Remark: HTTP `DELETE /api/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/sessions/{id}/delete(deleteSession)`.
+    func deleteSession(_ input: Operations.DeleteSession.Input) async throws -> Operations.DeleteSession.Output
     /// Get the authenticated caller
     ///
     /// Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, including custom grants; it is null when unavailable and may be omitted by older servers. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
@@ -73,6 +87,20 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/credits/transactions`.
     /// - Remark: Generated from `#/paths//api/v1/credits/transactions/get(listCreditTransactions)`.
     func listCreditTransactions(_ input: Operations.ListCreditTransactions.Input) async throws -> Operations.ListCreditTransactions.Output
+    /// List artifacts
+    ///
+    /// Lists the artifacts you own, newest first, excluding deleted ones. Artifacts shared with you are not listed, though `GET /api/v1/artifacts/{id}` resolves them by id. Items carry `content: null`; fetch an artifact by id for its content. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/get(listArtifacts)`.
+    func listArtifacts(_ input: Operations.ListArtifacts.Input) async throws -> Operations.ListArtifacts.Output
+    /// Get an artifact
+    ///
+    /// Returns an artifact you own, one shared with you, or a public one, with its current version's content.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/{id}/get(getArtifact)`.
+    func getArtifact(_ input: Operations.GetArtifact.Input) async throws -> Operations.GetArtifact.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -88,6 +116,38 @@ extension APIProtocol {
         headers: Operations.GetSession.Input.Headers = .init()
     ) async throws -> Operations.GetSession.Output {
         try await getSession(Operations.GetSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Update a session
+    ///
+    /// Updates a session (called a "notebook" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on for a session that has never set it; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.
+    ///
+    /// - Remark: HTTP `PUT /api/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/sessions/{id}/put(updateSession)`.
+    public func updateSession(
+        path: Operations.UpdateSession.Input.Path,
+        headers: Operations.UpdateSession.Input.Headers = .init(),
+        body: Operations.UpdateSession.Input.Body
+    ) async throws -> Operations.UpdateSession.Output {
+        try await updateSession(Operations.UpdateSession.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Delete a session
+    ///
+    /// Deletes one of your sessions (called a "notebook" in the product UI). This cannot be undone through the API. Files you uploaded into the session are deleted with it; files other people uploaded into it are kept, and every access grant this session gave out on a file is revoked. A session you do not own, or one already deleted, is `404`. A `409` means a concurrent change touched one of those files mid-delete; nothing was deleted, so retry. An API key needs `notebooks:write`.
+    ///
+    /// - Remark: HTTP `DELETE /api/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/sessions/{id}/delete(deleteSession)`.
+    public func deleteSession(
+        path: Operations.DeleteSession.Input.Path,
+        headers: Operations.DeleteSession.Input.Headers = .init()
+    ) async throws -> Operations.DeleteSession.Output {
+        try await deleteSession(Operations.DeleteSession.Input(
             path: path,
             headers: headers
         ))
@@ -184,6 +244,36 @@ extension APIProtocol {
     ) async throws -> Operations.ListCreditTransactions.Output {
         try await listCreditTransactions(Operations.ListCreditTransactions.Input(
             query: query,
+            headers: headers
+        ))
+    }
+    /// List artifacts
+    ///
+    /// Lists the artifacts you own, newest first, excluding deleted ones. Artifacts shared with you are not listed, though `GET /api/v1/artifacts/{id}` resolves them by id. Items carry `content: null`; fetch an artifact by id for its content. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/get(listArtifacts)`.
+    public func listArtifacts(
+        query: Operations.ListArtifacts.Input.Query = .init(),
+        headers: Operations.ListArtifacts.Input.Headers = .init()
+    ) async throws -> Operations.ListArtifacts.Output {
+        try await listArtifacts(Operations.ListArtifacts.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Get an artifact
+    ///
+    /// Returns an artifact you own, one shared with you, or a public one, with its current version's content.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/{id}/get(getArtifact)`.
+    public func getArtifact(
+        path: Operations.GetArtifact.Input.Path,
+        headers: Operations.GetArtifact.Input.Headers = .init()
+    ) async throws -> Operations.GetArtifact.Output {
+        try await getArtifact(Operations.GetArtifact.Input(
+            path: path,
             headers: headers
         ))
     }

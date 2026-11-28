@@ -39,9 +39,12 @@ describe('awsStsIdToken', () => {
   it('asks STS for a token scoped to the audience and returns the JWT', async () => {
     send.mockResolvedValue({ WebIdentityToken: 'sts-jwt' });
     await expect(awsStsIdToken('https://aud.example')).resolves.toBe('sts-jwt');
-    expect(send).toHaveBeenCalledWith({
-      input: { Audience: ['https://aud.example'], SigningAlgorithm: 'RS256' },
-    });
+    expect(send).toHaveBeenCalledWith(
+      {
+        input: { Audience: ['https://aud.example'], SigningAlgorithm: 'RS256' },
+      },
+      { abortSignal: expect.any(AbortSignal) }
+    );
   });
 
   it('fetches a fresh token on every call', async () => {

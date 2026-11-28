@@ -31,13 +31,18 @@ export const get = async (
     throw new Error('Research task not found');
   }
 
-  const researchData = await adapters.db.researchData.findAllByResearchTaskIdWithFiles(researchTask.id);
+  const researchData = await adapters.db.researchData.findAllByResearchTaskIdWithFiles(
+    researchTask.id,
+    researchTask.userId
+  );
 
   const signedResearchData = await Promise.all(
-    researchData.map(async data => ({
-      ...data,
-      fabFile: await generateSignedUrl(data.fabFile, { storage: adapters.storage } as GetFabFileAdapter),
-    }))
+    researchData
+      .filter(data => String(data.fabFile.userId) === researchTask.userId)
+      .map(async data => ({
+        ...data,
+        fabFile: await generateSignedUrl(data.fabFile, { storage: adapters.storage } as GetFabFileAdapter),
+      }))
   );
 
   return {
