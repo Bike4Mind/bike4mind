@@ -2,6 +2,7 @@ import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatApprovalMode, ChatToolApproval } from '@shared/chat';
 import { redact } from '../../devlog/redact';
+import type { ApprovalReasonCode } from './approvalReasons';
 
 /** One line of the log: one approval decision. */
 export type ApprovalLogEntry = {
@@ -15,14 +16,22 @@ export type ApprovalLogEntry = {
   tool: string;
   /** See summarizeToolInput. */
   input: string;
+  /** Length of the redacted input before it was capped, so a cut `input` can be told from a whole one. */
+  inputChars?: number;
+  inputTruncated?: true;
   /** What "always allow" would remember for each sub-command (`git commit *`), redacted like `input`. */
   patterns?: string[];
+  /** What made the gate show a card; on every entry whose `approval.asked` is true, `unknown` when no cause was recorded. */
+  askedFor?: ApprovalReasonCode[];
+  /** Every reason code on the tool's prompt, including ones that did not stop the call (`outbound` in Approve for me). */
+  reasonCodes?: ApprovalReasonCode[];
   approval: ChatToolApproval;
 };
 
 /** Rotated past this, so a long-lived install never grows the file without bound. */
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
-const INPUT_SUMMARY_MAX = 500;
+/** Long enough that nearly every logged command can be replayed whole when the log is analysed. */
+const INPUT_SUMMARY_MAX = 4000;
 
 /**
  * What a call was asked to do, short enough for a log line: the command for a shell tool, the
@@ -30,11 +39,19 @@ const INPUT_SUMMARY_MAX = 500;
  * log outlives the conversation; capped at INPUT_SUMMARY_MAX characters.
  */
 export function summarizeToolInput(input: Record<string, unknown>): string {
+  return describeToolInput(input).input;
+}
+
+/** `summarizeToolInput` plus how long the redacted text was, and whether the cap cut it. */
+export function describeToolInput(
+  input: Record<string, unknown>
+): Pick<ApprovalLogEntry, 'input' | 'inputChars' | 'inputTruncated'> {
   const named = [input.command, input.path, input.file_path, input.url].find(
     (value): value is string => typeof value === 'string'
   );
   const text = redact(named ?? JSON.stringify(input));
-  return text.length > INPUT_SUMMARY_MAX ? `${text.slice(0, INPUT_SUMMARY_MAX)}...` : text;
+  if (text.length <= INPUT_SUMMARY_MAX) return { input: text, inputChars: text.length };
+  return { input: `${text.slice(0, INPUT_SUMMARY_MAX)}...`, inputChars: text.length, inputTruncated: true };
 }
 
 /**

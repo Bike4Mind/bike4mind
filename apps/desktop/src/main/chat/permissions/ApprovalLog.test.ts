@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatToolApproval } from '@shared/chat';
 import { describe, expect, it, vi } from 'vitest';
-import { ApprovalLog, summarizeToolInput, type ApprovalLogEntry } from './ApprovalLog';
+import { ApprovalLog, describeToolInput, summarizeToolInput, type ApprovalLogEntry } from './ApprovalLog';
 
 const renameFailure = vi.hoisted(() => ({ code: undefined as string | undefined }));
 
@@ -126,8 +126,33 @@ describe('summarizeToolInput', () => {
   });
 
   it('caps a long input', () => {
-    const summary = summarizeToolInput({ command: 'ab '.repeat(700) });
-    expect(summary).toHaveLength(503);
+    const summary = summarizeToolInput({ command: 'ab '.repeat(2000) });
+    expect(summary).toHaveLength(4003);
     expect(summary.endsWith('...')).toBe(true);
+  });
+
+  it('keeps a command of a few thousand characters whole', () => {
+    const command = 'ab '.repeat(700).trim();
+    expect(summarizeToolInput({ command })).toBe(command);
+  });
+});
+
+describe('describeToolInput', () => {
+  it('records the length of a whole input and does not mark it truncated', () => {
+    expect(describeToolInput({ command: 'git status' })).toEqual({ input: 'git status', inputChars: 10 });
+  });
+
+  it('marks a capped input and keeps its full redacted length', () => {
+    const described = describeToolInput({ command: 'ab '.repeat(2000) });
+    expect(described.inputTruncated).toBe(true);
+    expect(described.inputChars).toBe(6000);
+    expect(described.input).toHaveLength(4003);
+  });
+
+  it('measures the redacted text, never the raw secret', () => {
+    const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz';
+    const described = describeToolInput({ command: `curl -H "Authorization: Bearer ${secret}" https://x` });
+    expect(described.input).not.toContain(secret);
+    expect(described.inputChars).toBe(described.input.length);
   });
 });

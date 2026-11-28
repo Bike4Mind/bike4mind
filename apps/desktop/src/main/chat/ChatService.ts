@@ -326,7 +326,8 @@ import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimit
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
-import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
+import { describeToolInput, summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
+import type { ApprovalReasonCode, CodedReason } from './permissions/approvalReasons';
 import { resolveSubject } from './permissions/resolveSubject';
 import type { CompiledRule, PermissionRuleSet, PermissionSubject } from './permissions/rules';
 import {
@@ -6681,14 +6682,12 @@ export class ChatService {
         if (gated.approval) {
           // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
           const mode = gated.mode ?? (await this.currentApprovalMode(sessionId));
-          this.logApproval(
-            sessionId,
-            call.name,
-            gated.settled?.input ?? gated.input,
-            gated.approval,
+          this.logApproval(sessionId, call.name, gated.settled?.input ?? gated.input, gated.approval, {
             mode,
-            gated.patterns
-          );
+            patterns: gated.patterns,
+            askedFor: gated.askedFor ?? (tool.interactive ? ['interactive'] : undefined),
+            reasonCodes: gated.reasonCodes,
+          });
         }
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
@@ -8697,11 +8696,21 @@ export class ChatService {
     tool: string,
     input: Record<string, unknown>,
     approval: ChatToolApproval,
-    mode: ChatApprovalMode | undefined,
-    patterns: readonly string[] | undefined
+    details: {
+      mode: ChatApprovalMode | undefined;
+      patterns: readonly string[] | undefined;
+      askedFor: readonly ApprovalReasonCode[] | undefined;
+      reasonCodes: readonly ApprovalReasonCode[] | undefined;
+    }
   ): void {
     const log = this.deps.approvalLog;
     if (!log) return;
+    const { mode, patterns, reasonCodes } = details;
+    const askedFor: readonly ApprovalReasonCode[] | undefined = approval.asked
+      ? details.askedFor?.length
+        ? details.askedFor
+        : ['unknown']
+      : undefined;
     void (async () => {
       const session = await this.deps.store.get(sessionId).catch((error: unknown) => {
         this.deps.logger.warn(`PERMISSIONS: could not read the session title to log: ${String(error)}`);
@@ -8714,10 +8723,12 @@ export class ChatService {
         ...(mode ? { mode } : {}),
         ...(session?.project ? { project: session.project.directory } : {}),
         tool,
-        input: summarizeToolInput(input),
+        ...describeToolInput(input),
         ...(patterns && patterns.length > 0
           ? { patterns: patterns.map(pattern => summarizeToolInput({ command: pattern })) }
           : {}),
+        ...(askedFor ? { askedFor: [...askedFor] } : {}),
+        ...(reasonCodes && reasonCodes.length > 0 ? { reasonCodes: [...reasonCodes] } : {}),
         approval,
       });
     })().catch((error: unknown) => this.deps.logger.warn(`PERMISSIONS: could not log an approval: ${String(error)}`));
@@ -8827,6 +8838,7 @@ export class ChatService {
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
     const patterns = prompt.always?.commands.map(command => command.pattern);
+    const reasonCodes = prompt.reasonCodes ? [...prompt.reasonCodes] : undefined;
     // The same effectful call a third time in a row is not auto-approved by 'auto': the model is
     // more likely stuck than making progress, and this is the point to find out. It replaces only
     // the mode's own approval; an allow rule or "Allow in this chat" the user gave still runs it,
@@ -8841,6 +8853,7 @@ export class ChatService {
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
         mode,
         patterns,
+        reasonCodes,
       };
     }
 
@@ -8893,6 +8906,7 @@ export class ChatService {
         approval: approvalRecord('allowed', { kind: 'chat-allowance' }),
         mode,
         patterns,
+        reasonCodes,
       };
     }
 
@@ -8907,6 +8921,7 @@ export class ChatService {
         approval: approvalRecord('allowed', parts.decidedBy),
         mode,
         patterns,
+        reasonCodes,
       };
     }
     const asked: AskedCard = parts ? narrowToParts(prompt, subject, parts) : { prompt, subject };
@@ -8921,6 +8936,7 @@ export class ChatService {
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
         mode,
         patterns,
+        reasonCodes,
       };
     }
 
@@ -8933,12 +8949,16 @@ export class ChatService {
         )
       : null;
     // Only the reasons beyond the tool's own: an ask rule, a loop, folders not yet allowed.
-    const askedReasons = [askedByRule, stuck ? LOOP_ASK_REASON : null, outsideReason].filter(
-      (reason): reason is string => !!reason
-    );
+    const askedGateReasons: CodedReason[] = [
+      ...(askedByRule ? [['ask-rule', askedByRule] as const] : []),
+      ...(stuck ? [['loop', LOOP_ASK_REASON] as const] : []),
+      ...(outsideReason ? [['outside-folders', outsideReason] as const] : []),
+    ];
+    const askedReasons = askedGateReasons.map(([, reason]) => reason);
     // Full access asks only at its own stops; naming the stop keeps such a card from reading as
     // a mode that never applied. The card gains only a stop the tool's detail does not already say.
-    const fullAccessStops = mode === 'full' ? fullAccessStopReasons(prompt) : [];
+    const codedFullAccessStops = mode === 'full' ? fullAccessStopReasons(prompt) : [];
+    const fullAccessStops = codedFullAccessStops.map(([, reason]) => reason);
     const unshownStops = fullAccessStops.filter(reason => !asked.prompt.detail.includes(reason));
     const fullAccessExplanation = fullAccessStops.join(' ');
     // A tool's reasons can include context that does not itself stop Full access. Name the
@@ -8948,10 +8968,19 @@ export class ChatService {
         ? `This tool asks in every mode. Tool checks: ${fullAccessExplanation}`
         : fullAccessExplanation;
     const modeStop = modeAskReason(mode, prompt, asked.prompt, askedReasons.length);
+    const askedFor: ApprovalReasonCode[] = [
+      ...new Set([
+        ...askedGateReasons.map(([code]) => code),
+        ...(modeStop?.codes ?? []),
+        ...(prompt.irreversible || !prompt.reasons?.length
+          ? codedFullAccessStops.map(([code]) => code)
+          : stoppingFullCodes(prompt, codedFullAccessStops)),
+      ]),
+    ];
     const askedBecause =
       [
         ...askedReasons,
-        ...(modeStop ? [modeStop] : []),
+        ...(modeStop ? [modeStop.text] : []),
         ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${loggedFullAccessExplanation}`] : []),
       ].join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
@@ -9120,6 +9149,7 @@ export class ChatService {
 
     const picked = findOption(prompt, answer.optionId);
     const card = shownCard(answer, requestedAt, askedBecause);
+    const askedForCard = card ? askedFor : undefined;
     const decidedBy = cardDecider(
       answer.settledBy,
       { ...answer, everywhere: savedEverywhere, project: savedForProject === true },
@@ -9144,14 +9174,14 @@ export class ChatService {
         approval,
       };
       this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
-      return { settled: redirected, input: call.input, approval, mode, patterns };
+      return { settled: redirected, input: call.input, approval, mode, patterns, askedFor: askedForCard, reasonCodes };
     }
 
     if (answer.decision === 'deny' || answer.decision === 'redirect') {
       const approval = approvalRecord('denied', decidedBy, card);
       const denied: ChatToolCall = { ...call, status: 'denied', error: deniedMessage(decidedBy), approval };
       this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-      return { settled: denied, input: call.input, approval, mode, patterns };
+      return { settled: denied, input: call.input, approval, mode, patterns, askedFor: askedForCard, reasonCodes };
     }
 
     return {
@@ -9159,6 +9189,8 @@ export class ChatService {
       approval: approvalRecord('allowed', decidedBy, card),
       mode,
       patterns,
+      askedFor: askedForCard,
+      reasonCodes,
     };
   }
 
@@ -10866,6 +10898,10 @@ interface ApprovalOutcome {
   mode?: ChatApprovalMode;
   /** What "always allow" would remember for each sub-command, e.g. `git commit *`; for the approval log. */
   patterns?: string[];
+  /** Why a card was shown, as codes; only set when one was. For the approval log. */
+  askedFor?: ApprovalReasonCode[];
+  /** Every reason code the tool's prompt carried, whether or not it stopped the call. For the approval log. */
+  reasonCodes?: ApprovalReasonCode[];
 }
 
 const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
@@ -10889,27 +10925,61 @@ function modeAskReason(
   prompt: ApprovalPrompt,
   shown: ApprovalPrompt,
   gateReasons: number
-): string | null {
+): { text: string; codes: ApprovalReasonCode[] } | null {
   if (mode === 'full') return null;
-  if (mode === 'ask') return gateReasons > 0 ? null : ASK_MODE_REASON;
+  if (mode === 'ask') return gateReasons > 0 ? null : { text: ASK_MODE_REASON, codes: ['ask-mode'] };
   const toolStopped = prompt.irreversible || prompt.askInFull || prompt.askInAuto;
   if (!toolStopped && gateReasons > 0) return null;
-  const reasons = shown.reasons?.length ? shown.reasons : (prompt.reasons ?? []);
-  if (reasons.length > 0) return `${AUTO_ASK_PREFIX} ${reasons.join(' ')}`;
-  if (prompt.irreversible) return `${AUTO_ASK_PREFIX} It cannot be undone, so it is asked every time.`;
+  const source = shown.reasons?.length ? shown : prompt;
+  const reasons = source.reasons ?? [];
+  if (reasons.length > 0) {
+    const stopping = stoppingCodes(source, 'auto');
+    const fallback: ApprovalReasonCode = toolStopped ? 'tool-asks-in-auto' : 'part-undecided';
+    return {
+      text: `${AUTO_ASK_PREFIX} ${reasons.join(' ')}`,
+      codes: stopping.length > 0 ? stopping : [fallback],
+    };
+  }
+  if (prompt.irreversible) {
+    return { text: `${AUTO_ASK_PREFIX} It cannot be undone, so it is asked every time.`, codes: ['irreversible'] };
+  }
   return toolStopped
-    ? `${AUTO_ASK_PREFIX} this tool asks before each run in this mode.`
-    : `${AUTO_ASK_PREFIX} a part of this call needs a decision of its own.`;
+    ? { text: `${AUTO_ASK_PREFIX} this tool asks before each run in this mode.`, codes: ['tool-asks-in-auto'] }
+    : { text: `${AUTO_ASK_PREFIX} a part of this call needs a decision of its own.`, codes: ['part-undecided'] };
+}
+
+/** One code per entry of `prompt.reasons`; a reason a tool left uncoded counts as `unknown`. */
+function reasonCodesOf(prompt: ApprovalPrompt): ApprovalReasonCode[] {
+  return (prompt.reasons ?? []).map((_, index) => prompt.reasonCodes?.[index] ?? 'unknown');
+}
+
+/**
+ * The codes among a prompt's reasons that stop the mode, for `askedFor`; the rest is card context.
+ * A prompt that does not say which stop (`stopCodes` unset) has every reason code count.
+ */
+function stoppingCodes(prompt: ApprovalPrompt, mode: 'auto' | 'full'): ApprovalReasonCode[] {
+  const codes = reasonCodesOf(prompt);
+  const stops = prompt.stopCodes?.[mode];
+  return stops ? codes.filter(code => stops.includes(code)) : codes;
 }
 
 /**
  * Why Full access stops for a call it would otherwise run: the same two flags `autoApproves`
  * checks before any mode, with the tool's own words for them.
  */
-function fullAccessStopReasons(prompt: ApprovalPrompt): string[] {
-  if (prompt.irreversible) return ['It cannot be undone, so it is asked every time.'];
+function fullAccessStopReasons(prompt: ApprovalPrompt): CodedReason[] {
+  if (prompt.irreversible) return [['irreversible', 'It cannot be undone, so it is asked every time.']];
   if (!prompt.askInFull) return [];
-  return prompt.reasons?.length ? [...prompt.reasons] : ['This tool asks in every mode, Full access included.'];
+  if (!prompt.reasons?.length) return [['tool-asks-in-full', 'This tool asks in every mode, Full access included.']];
+  const codes = reasonCodesOf(prompt);
+  return prompt.reasons.map((reason, index) => [codes[index], reason]);
+}
+
+/** The Full access stop codes that name a reason the tool says stops Full access; the generic code when none does. */
+function stoppingFullCodes(prompt: ApprovalPrompt, stops: readonly CodedReason[]): ApprovalReasonCode[] {
+  if (stops.length === 0) return [];
+  const stopping = stoppingCodes(prompt, 'full');
+  return stopping.length > 0 ? stopping : ['tool-asks-in-full'];
 }
 
 function approvalRecord(

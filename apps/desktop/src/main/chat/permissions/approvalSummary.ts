@@ -116,8 +116,17 @@ function deciderLabel(entry: ApprovalLogEntry): string {
   }
 }
 
-/** Why a card asked, without the free text: `untrusted content (web_fetch)`, `ask rule`, ... */
+/**
+ * Why a card asked, without the free text: the logged codes (`ask-rule + unfollowable`) when the
+ * entry has them, else a label parsed from the sentence older entries carry.
+ */
 function reasonLabel(entry: ApprovalLogEntry): string {
+  if (entry.askedFor && entry.askedFor.length > 0) return entry.askedFor.join(' + ');
+  return legacyReasonLabel(entry);
+}
+
+/** For entries logged before `askedFor`: `untrusted content (web_fetch)`, `ask rule`, ... */
+function legacyReasonLabel(entry: ApprovalLogEntry): string {
   const because = entry.approval.askedBecause;
   if (!because) return "the tool's own check (outside folder, outbound, .env, ...) or ask mode";
   const reasons: string[] = [];

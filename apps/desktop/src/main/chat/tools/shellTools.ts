@@ -32,6 +32,7 @@ import {
   type SandboxedCommand,
 } from './sandbox';
 import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
+import type { ApprovalReasonCode, CodedReason } from '../permissions/approvalReasons';
 import { commandShape, SHAPE_PLACEHOLDER } from './commandShape';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
@@ -560,11 +561,11 @@ export async function shellApproval(
   const parts = scan.commands.map(entry => partAsk(entry));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const signingRisk = scan.gitSigningRisk === true || scan.commands.some(entry => entry.gitSigningRisk);
-  const opaque =
-    gitUnlisted.length > 0 ||
+  const unfollowable =
     scan.unreadScript === true ||
     (scan.unread === true && !scan.commands.some(entry => entry.refsMovedOnly)) ||
     scan.commands.some(entry => entry.unread && !entry.refsMovedOnly);
+  const opaque = gitUnlisted.length > 0 || unfollowable;
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -596,56 +597,142 @@ export async function shellApproval(
   // A script unread as a whole has no part the scan can vouch for, so none is decided alone.
   const byPart =
     !scriptAsks && !scriptAsksInFull && !runsSessionCode && !scan.setsEnvironment && scan.unreadScript !== true;
-  const reasons = [
+  const coded: CodedReason[] = [
     ...(scriptCheckFailed
-      ? ['Could not check whether it runs code written in this session, so it can only be allowed once.']
+      ? [
+          codedReason(
+            'script-unchecked',
+            'Could not check whether it runs code written in this session, so it can only be allowed once.'
+          ),
+        ]
       : []),
-    ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
-    ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ...(scan.envFiles.length > 0
+      ? [codedReason('env-file-read', `Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`)]
+      : []),
+    ...(scan.outbound.length > 0
+      ? [codedReason('outbound', `Can send data off this computer (${scan.outbound.join(', ')}).`)]
+      : []),
     ...(scan.commands.some(entry => entry.deletes)
-      ? ['Deletes files recursively or forcefully, which cannot be undone.']
+      ? [codedReason('recursive-delete', 'Deletes files recursively or forcefully, which cannot be undone.')]
       : []),
     ...(script && script.names.length > 0
       ? [
-          `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`,
+          codedReason(
+            'session-code',
+            `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`
+          ),
         ]
       : []),
     ...(script && script.hooks.length > 0
-      ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
+      ? [
+          codedReason(
+            'git-hooks-changed',
+            'Runs git in a repository whose .git or .husky folder was changed in this session.'
+          ),
+        ]
       : []),
-    ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(gitProgram ? [codedReason('git-program', `Sets ${gitProgram}, which makes git run a program.`)] : []),
     ...(scan.gitPathUnplaced
-      ? ['Puts a folder on PATH that Desktop cannot place, where git may find a program to run for a git command.']
+      ? [
+          codedReason(
+            'git-path-unplaced',
+            'Puts a folder on PATH that Desktop cannot place, where git may find a program to run for a git command.'
+          ),
+        ]
       : []),
-    ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
+    ...(scan.remoteTree
+      ? [codedReason('remote-clone', 'Clones a repository from another computer, whose files cannot be checked first.')]
+      : []),
     ...(touchesProtected || secret
-      ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
+      ? [
+          codedReason(
+            'protected-location',
+            'Reaches a location Desktop protects, such as its own data or permission and hook settings.'
+          ),
+        ]
       : []),
     ...(scan.unread
-      ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      ? [
+          codedReason(
+            'unfollowable',
+            'Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.'
+          ),
+        ]
       : []),
     ...(gitUnlisted.length > 0
-      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
+      ? [codedReason('git-unlisted', `Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`)]
       : []),
     ...(uncheckedSettingsWrite
-      ? ['Names a permission or hook settings file in a command Desktop cannot follow, so it may write there.']
+      ? [
+          codedReason(
+            'settings-write-unfollowable',
+            'Names a permission or hook settings file in a command Desktop cannot follow, so it may write there.'
+          ),
+        ]
       : []),
     ...(writesWhileUnresolved
-      ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
+      ? [
+          codedReason(
+            'protected-unresolved',
+            'May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.'
+          ),
+        ]
       : []),
     ...(named.length > 0
-      ? [`Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
+      ? [
+          codedReason(
+            'wsl-distro-outside-project',
+            `Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`
+          ),
+        ]
       : []),
     ...(unreachable.includes(UNNAMED_DISTRO)
-      ? ['Runs wsl in a distro it does not name, which may be one this project has no folder in.']
+      ? [
+          codedReason(
+            'wsl-unnamed-distro',
+            'Runs wsl in a distro it does not name, which may be one this project has no folder in.'
+          ),
+        ]
       : []),
     ...(unreachable.includes(SYSTEM_DISTRO)
-      ? ['Runs wsl in the WSL system distro, which no project folder is in.']
+      ? [codedReason('wsl-system-distro', 'Runs wsl in the WSL system distro, which no project folder is in.')]
       : []),
     ...(unreachable.includes(WSL_MANAGEMENT)
-      ? ['Runs wsl with an option that manages WSL itself, such as --shutdown or --unregister.']
+      ? [
+          codedReason(
+            'wsl-management',
+            'Runs wsl with an option that manages WSL itself, such as --shutdown or --unregister.'
+          ),
+        ]
       : []),
   ];
+  const reasons = coded.map(([, sentence]) => sentence);
+  // Which of the coded reasons stop each mode, from the same booleans as `scriptAsks` and
+  // `scriptAsksInFull`; keep in sync with them. Codes absent here are context only.
+  const stopsAuto = new Set<ApprovalReasonCode>();
+  const stopsFull = new Set<ApprovalReasonCode>();
+  const stop = (code: ApprovalReasonCode, inAuto: boolean, inFull: boolean) => {
+    if (inAuto) stopsAuto.add(code);
+    if (inFull) stopsFull.add(code);
+  };
+  stop('env-file-read', envScript || parts.some(ask => ask !== undefined && ask.mode !== 'ask'), false);
+  stop('git-program', !!gitProgram, false);
+  stop('git-path-unplaced', scan.gitPathUnplaced === true, false);
+  stop('remote-clone', scan.remoteTree === true, false);
+  stop('protected-location', writesProtected || secret, (writesProtected && !scan.readOnly) || secret);
+  stop('unfollowable', unfollowable, unfollowable);
+  stop('git-unlisted', gitUnlisted.length > 0, gitUnlisted.length > 0);
+  stop('settings-write-unfollowable', uncheckedSettingsWrite, uncheckedSettingsWrite);
+  stop('protected-unresolved', writesWhileUnresolved, writesWhileUnresolved);
+  for (const code of [
+    'wsl-distro-outside-project',
+    'wsl-unnamed-distro',
+    'wsl-system-distro',
+    'wsl-management',
+  ] as const) {
+    stop(code, unreachable.length > 0, unreachable.length > 0);
+  }
+  const codes = coded.map(([code]) => code);
   // A worktree session reading its own main checkout (`git -C <main> status`, `ls <main>/x`) is
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
@@ -679,7 +766,16 @@ export async function shellApproval(
   return {
     detail: [detail, ...reasons].join('\n\n'),
     ...summary,
-    ...(reasons.length > 0 ? { reasons } : {}),
+    ...(reasons.length > 0
+      ? {
+          reasons,
+          reasonCodes: codes,
+          stopCodes: {
+            auto: codes.filter(code => stopsAuto.has(code)),
+            full: codes.filter(code => stopsFull.has(code)),
+          },
+        }
+      : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     ...(scan.readOnly ? { repeatSafe: true as const } : {}),
@@ -719,6 +815,10 @@ export async function shellApproval(
   };
 }
 
+function codedReason(code: ApprovalReasonCode, sentence: string): CodedReason {
+  return [code, sentence];
+}
+
 /** What `ungranted` holds for a command the scan could not read that may reach a WSL distro. */
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
@@ -745,6 +845,7 @@ function unreadApproval(
       askInAuto: true,
       askInFull: true,
       reasons: ['Could not read this command, so where it acts cannot be checked.'],
+      reasonCodes: ['unreadable'],
       unchecked: true,
     };
   }
@@ -753,6 +854,7 @@ function unreadApproval(
   return {
     detail: [detail, reason].join('\n\n'),
     reasons: [reason],
+    reasonCodes: ['unreadable-wsl'],
     key,
     askInAuto: true,
     askInFull: true,
