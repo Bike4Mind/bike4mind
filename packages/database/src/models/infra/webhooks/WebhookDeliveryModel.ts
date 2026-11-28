@@ -130,6 +130,51 @@ class WebhookDeliveryRepository
     }
   }
 
+  /**
+   * Record an outbound attempt, overwriting the row an earlier receive of the same message wrote.
+   * SQS redelivers the same `deliveryId`, so the row tracks the latest attempt. A row that already
+   * reads Success is never downgraded. The replay `payload`/`targetUrl` are kept only while Failed.
+   */
+  async recordAttempt(data: Omit<IWebhookDeliveryDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<boolean> {
+    const { status, processingDurationMs, errorMessage, retryCount, payload, targetUrl, ...identity } = data;
+    const failed = status === WebhookDeliveryStatus.Failed;
+    const unset: Record<string, ''> = {};
+    if (errorMessage === undefined) unset.errorMessage = '';
+    if (!failed) {
+      unset.payload = '';
+      unset.targetUrl = '';
+    }
+
+    try {
+      await WebhookDelivery.updateOne(
+        {
+          deliveryId: identity.deliveryId,
+          subscriptionId: identity.subscriptionId,
+          status: { $ne: WebhookDeliveryStatus.Success },
+        },
+        {
+          $setOnInsert: identity,
+          $set: {
+            status,
+            processingDurationMs,
+            retryCount,
+            ...(errorMessage !== undefined && { errorMessage }),
+            ...(failed && { payload, targetUrl }),
+          },
+          ...(Object.keys(unset).length > 0 && { $unset: unset }),
+        },
+        { upsert: true, runValidators: true }
+      );
+      return true;
+    } catch (error) {
+      // The filter missed a Success row, so the upsert's insert hit the unique index.
+      if ((error as { code?: number }).code === 11000) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   // Pagination methods for delivery history
 
   /**

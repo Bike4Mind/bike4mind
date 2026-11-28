@@ -7,8 +7,10 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   claimDedup: vi.fn(),
-  createOrUpdate: vi.fn(),
-  createIfNotExists: vi.fn(),
+  casDeleteDedup: vi.fn(),
+  casUpdateDedup: vi.fn(),
+  findDelivery: vi.fn(),
+  recordAttempt: vi.fn(),
   findSubscription: vi.fn(),
   incrementConsecutiveFailuresAtomic: vi.fn(),
   resetConsecutiveFailures: vi.fn(),
@@ -19,8 +21,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { claimDedup: h.claimDedup, createOrUpdate: h.createOrUpdate },
-  webhookDeliveryRepository: { createIfNotExists: h.createIfNotExists },
+  cacheRepository: { claimDedup: h.claimDedup, casDeleteDedup: h.casDeleteDedup, casUpdateDedup: h.casUpdateDedup },
+  webhookDeliveryRepository: { recordAttempt: h.recordAttempt, findByDeliveryAndSubscription: h.findDelivery },
   webhookSubscriptionRepository: {
     findById: h.findSubscription,
     incrementConsecutiveFailuresAtomic: h.incrementConsecutiveFailuresAtomic,
@@ -80,6 +82,8 @@ describe('webhookDelivery dispatch', () => {
     vi.clearAllMocks();
     h.validateTargetUrl.mockResolvedValue({ valid: true });
     h.claimDedup.mockResolvedValue({ claimed: true });
+    h.casUpdateDedup.mockResolvedValue(true);
+    h.findDelivery.mockResolvedValue(null);
     h.findSubscription.mockResolvedValue({ id: 'sub-1', enabled: true });
     h.findByOrganizationId.mockResolvedValue({ secret: 'enc(secret)' });
     h.incrementConsecutiveFailuresAtomic.mockResolvedValue({ wasAutoDisabled: false, newFailureCount: 1 });
@@ -108,7 +112,7 @@ describe('webhookDelivery dispatch', () => {
 
     await expect(runDispatch()).resolves.toBeUndefined();
 
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({
       status: WebhookDeliveryStatus.Failed,
       errorMessage: expect.stringMatching(/^Security error/),
     });
@@ -127,8 +131,8 @@ describe('webhookDelivery dispatch', () => {
 
     await expect(runDispatch()).resolves.toBeUndefined();
 
-    expect(h.createIfNotExists).toHaveBeenCalledTimes(1);
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({
+    expect(h.recordAttempt).toHaveBeenCalledTimes(1);
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({
       status: WebhookDeliveryStatus.Failed,
       errorMessage: expect.stringMatching(/redirect/i),
     });
@@ -138,7 +142,7 @@ describe('webhookDelivery dispatch', () => {
   it('records a 2xx response as a successful delivery', async () => {
     await runDispatch();
 
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.resetConsecutiveFailures).toHaveBeenCalledWith('sub-1');
   });
 
@@ -152,7 +156,96 @@ describe('webhookDelivery dispatch', () => {
     await expect(runDispatch()).resolves.toBeUndefined();
 
     expect(cancel).toHaveBeenCalled();
-    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.recordAttempt.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+  });
+  it.each([{ status: 'terminal' }, { status: 'completed' }, { status: 'completed', deliveryId: 'another-delivery' }])(
+    'preserves event dedup without inventing history for receipt %j',
+    async existingData => {
+      h.claimDedup.mockResolvedValue({ claimed: false, existingData });
+
+      await expect(runDispatch()).resolves.toBeUndefined();
+
+      expect(h.fetchMock).not.toHaveBeenCalled();
+      expect(h.findDelivery).not.toHaveBeenCalled();
+      expect(h.recordAttempt).not.toHaveBeenCalled();
+      expect(h.resetConsecutiveFailures).not.toHaveBeenCalled();
+    }
+  );
+
+  it('propagates an uncertain pending-history read instead of acking or resending', async () => {
+    h.claimDedup.mockResolvedValue({ claimed: false, existingData: { status: 'pending', owner: 'original' } });
+    h.findDelivery.mockRejectedValueOnce(new Error('history unavailable'));
+
+    await expect(runDispatch()).rejects.toThrow('history unavailable');
+
+    expect(h.findDelivery).toHaveBeenCalledWith('del-1', 'sub-1');
+    expect(h.fetchMock).not.toHaveBeenCalled();
+    expect(h.casUpdateDedup).not.toHaveBeenCalled();
+  });
+
+  it('retains accepted history without changing a replacement claim', async () => {
+    h.casUpdateDedup.mockResolvedValue(false);
+
+    await expect(runDispatch()).rejects.toThrow('claim changed');
+
+    expect(h.recordAttempt).toHaveBeenCalledWith(expect.objectContaining({ status: WebhookDeliveryStatus.Success }));
+    expect(h.casDeleteDedup).not.toHaveBeenCalled();
+    expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+  });
+
+  describe('dedup claim on a failed attempt', () => {
+    const claimOwner = () => h.claimDedup.mock.calls[0][1].owner as string;
+
+    it.each([
+      ['a 5xx', () => h.fetchMock.mockResolvedValue({ ok: false, status: 503, headers: new Headers() })],
+      ['a 429', () => h.fetchMock.mockResolvedValue({ ok: false, status: 429, headers: new Headers() })],
+      ['a network error', () => h.fetchMock.mockRejectedValue(new TypeError('fetch failed'))],
+      [
+        'a DB error recording the failure',
+        () => {
+          h.fetchMock.mockResolvedValue({ ok: false, status: 500, headers: new Headers() });
+          h.recordAttempt.mockRejectedValueOnce(new Error('db down'));
+        },
+      ],
+    ])('releases its own claim before throwing on %s', async (_label, arrange) => {
+      arrange();
+
+      await expect(runDispatch()).rejects.toThrow();
+
+      expect(claimOwner()).toEqual(expect.any(String));
+      expect(h.casDeleteDedup).toHaveBeenCalledWith('webhook-delivery-evt-1-sub-1', 'owner', claimOwner());
+    });
+
+    it('keeps the claim when the endpoint accepted the POST but a later write failed', async () => {
+      h.recordAttempt.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(runDispatch()).rejects.toThrow('db down');
+
+      expect(h.casUpdateDedup).toHaveBeenCalledWith(
+        'webhook-delivery-evt-1-sub-1',
+        'owner',
+        claimOwner(),
+        expect.objectContaining({ status: 'completed', owner: claimOwner(), deliveryId: 'del-1', httpStatus: 200 }),
+        60 * 60 * 1000
+      );
+      expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
+      expect(h.casDeleteDedup).not.toHaveBeenCalled();
+    });
+
+    it('still throws the original error when releasing the claim fails', async () => {
+      h.fetchMock.mockResolvedValue({ ok: false, status: 502, headers: new Headers() });
+      h.casDeleteDedup.mockRejectedValueOnce(new Error('cache down'));
+
+      await expect(runDispatch()).rejects.toThrow('HTTP 502');
+    });
+
+    it('does not release the claim on a permanent failure, which is acked', async () => {
+      h.fetchMock.mockResolvedValue({ ok: false, status: 404, headers: new Headers() });
+
+      await expect(runDispatch()).resolves.toBeUndefined();
+
+      expect(h.casDeleteDedup).not.toHaveBeenCalled();
+    });
   });
 });

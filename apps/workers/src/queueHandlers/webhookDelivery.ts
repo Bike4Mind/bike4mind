@@ -14,6 +14,7 @@
  * - 10-second timeout per delivery attempt
  */
 
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
@@ -82,7 +83,7 @@ const DEDUP_TTL_MS = 60 * 60 * 1000;
 /**
  * Maximum retries before giving up
  */
-const MAX_RETRIES = 5;
+export const MAX_RETRIES = 5;
 
 /**
  * Circuit breaker threshold (consecutive failures)
@@ -91,7 +92,10 @@ const CIRCUIT_BREAKER_THRESHOLD = 10;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = JSON.parse(event.Records[0].body);
-  const payload = WebhookDeliveryPayloadSchema.parse(body);
+  const parsed = WebhookDeliveryPayloadSchema.parse(body);
+  // SQS redelivers the same body, so the attempt number advances with the receive count.
+  const receiveCount = Number(event.Records[0].attributes?.ApproximateReceiveCount) || 1;
+  const payload: WebhookDeliveryPayload = { ...parsed, attempt: parsed.attempt + receiveCount - 1 };
   const startTime = Date.now();
 
   logger.updateMetadata({
@@ -110,6 +114,76 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     maxRetries: MAX_RETRIES,
   });
 
+  // 2. Idempotency check with atomic claim
+  // Uses findOneAndUpdate with $setOnInsert to prevent race conditions
+  // Only the first Lambda to reach this point will successfully claim the key
+  const dedupKey = `${DEDUP_KEY_PREFIX}${payload.eventId}-${payload.subscriptionId}`;
+  const claimOwner = randomUUID();
+  const claimResult = await cacheRepository.claimDedup(
+    dedupKey,
+    {
+      status: 'pending',
+      owner: claimOwner,
+      deliveryId: payload.deliveryId,
+      startedAt: new Date().toISOString(),
+      eventType: payload.eventType,
+    },
+    DEDUP_TTL_MS
+  );
+
+  if (!claimResult.claimed) {
+    logger.info('Delivery already claimed by another worker', {
+      eventId: payload.eventId,
+      subscriptionId: payload.subscriptionId,
+      existingStatus: claimResult.existingData?.status,
+    });
+    const receipt = claimResult.existingData;
+    if (receipt?.status === 'terminal') return;
+    if (receipt?.status === 'completed') {
+      if (receipt.deliveryId === payload.deliveryId) {
+        const history = await webhookDeliveryRepository.findByDeliveryAndSubscription(
+          payload.deliveryId,
+          payload.subscriptionId
+        );
+        if (history?.status !== WebhookDeliveryStatus.Success) {
+          const httpStatus = typeof receipt.httpStatus === 'number' ? receipt.httpStatus : 0;
+          await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, httpStatus);
+        }
+      }
+      return;
+    }
+    const history = await webhookDeliveryRepository.findByDeliveryAndSubscription(
+      payload.deliveryId,
+      payload.subscriptionId
+    );
+    if (history?.status === WebhookDeliveryStatus.Success && typeof receipt?.owner === 'string') {
+      await finishClaim(dedupKey, receipt.owner, payload, 'completed');
+      return;
+    }
+    throw new RetryableError('Delivery claim is pending; defer without sending another POST');
+  }
+
+  const attempt = { sent: false };
+  try {
+    await deliverClaimed(payload, startTime, dedupKey, claimOwner, logger, attempt);
+    if (!attempt.sent) await finishClaim(dedupKey, claimOwner, payload, 'terminal');
+  } catch (error) {
+    // Release unaccepted work for retry. Accepted work retains its receipt for reconciliation.
+    if (!attempt.sent) {
+      await releaseClaim(dedupKey, claimOwner, logger);
+    }
+    throw error;
+  }
+});
+
+async function deliverClaimed(
+  payload: WebhookDeliveryPayload,
+  startTime: number,
+  dedupKey: string,
+  claimOwner: string,
+  logger: Logger,
+  attempt: { sent: boolean }
+): Promise<void> {
   // 1. SSRF Protection - validate target URL with DNS resolution; the send in step 7 re-checks the dialed address
   const urlValidation = await validateTargetUrl(payload.targetUrl);
   if (!urlValidation.valid) {
@@ -121,25 +195,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     });
     await recordDelivery(payload, startTime, WebhookDeliveryStatus.Failed, 0, `Security error: ${urlValidation.error}`);
     return; // Don't retry - this is a security violation
-  }
-
-  // 2. Idempotency check with atomic claim
-  // Uses findOneAndUpdate with $setOnInsert to prevent race conditions
-  // Only the first Lambda to reach this point will successfully claim the key
-  const dedupKey = `${DEDUP_KEY_PREFIX}${payload.eventId}-${payload.subscriptionId}`;
-  const claimResult = await cacheRepository.claimDedup(
-    dedupKey,
-    { status: 'pending', startedAt: new Date().toISOString(), eventType: payload.eventType },
-    DEDUP_TTL_MS
-  );
-
-  if (!claimResult.claimed) {
-    logger.info('Delivery already claimed by another worker, skipping', {
-      eventId: payload.eventId,
-      subscriptionId: payload.subscriptionId,
-      existingStatus: claimResult.existingData?.status,
-    });
-    return;
   }
 
   // 3. Check if subscription is auto-disabled (circuit breaker)
@@ -251,6 +306,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       },
       { allowHttp: true, discardBody: true }
     );
+    if (response.ok) attempt.sent = true;
     clearTimeout(timeoutId);
     await response.body?.cancel().catch(() => undefined);
 
@@ -263,18 +319,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         processingDurationMs,
       });
 
-      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status);
-
-      // Update cache entry to show successful completion
-      await cacheRepository.createOrUpdate({
-        key: dedupKey,
-        result: { status: 'completed', processedAt: new Date().toISOString(), eventType: payload.eventType },
-        expiresAt: new Date(Date.now() + DEDUP_TTL_MS),
-      });
-
-      // Reset consecutive failures on success
+      // Either durable fact can reconcile the other on redelivery without another POST.
+      const bookkeeping = await Promise.allSettled([
+        finishClaim(dedupKey, claimOwner, payload, 'completed', response.status),
+        recordDelivery(payload, startTime, WebhookDeliveryStatus.Success, response.status),
+      ]);
       await resetConsecutiveFailures(payload.subscriptionId, logger);
-
+      const failed = bookkeeping.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
+        const error: unknown = failed.reason;
+        throw error;
+      }
       return;
     }
 
@@ -342,6 +397,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     throw new RetryableError(errorMessage);
   } catch (error) {
     clearTimeout(timeoutId);
+    if (attempt.sent) throw error;
 
     const processingDurationMs = Date.now() - startTime;
 
@@ -386,7 +442,43 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     throw new RetryableError(errorMessage);
   }
-});
+}
+
+async function finishClaim(
+  dedupKey: string,
+  owner: string,
+  payload: WebhookDeliveryPayload,
+  status: 'completed' | 'terminal',
+  httpStatus?: number
+): Promise<void> {
+  const updated = await cacheRepository.casUpdateDedup(
+    dedupKey,
+    'owner',
+    owner,
+    {
+      status,
+      owner,
+      deliveryId: payload.deliveryId,
+      eventType: payload.eventType,
+      processedAt: new Date().toISOString(),
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+    },
+    DEDUP_TTL_MS
+  );
+  if (!updated) throw new RetryableError('Delivery claim changed before bookkeeping completed');
+}
+
+/**
+ * Drop this receive's `pending` claim so the SQS redelivery can claim it and retry. The owner guard
+ * leaves any newer claim alone. A surviving pending claim defers redelivery instead of acking it.
+ */
+async function releaseClaim(dedupKey: string, owner: string, logger: Logger): Promise<void> {
+  try {
+    await cacheRepository.casDeleteDedup(dedupKey, 'owner', owner);
+  } catch (error) {
+    logger.warn('Failed to release webhook delivery claim; redelivery will defer while it is pending', { error });
+  }
+}
 
 /**
  * Record delivery attempt in database and emit CloudWatch metrics
@@ -404,7 +496,7 @@ async function recordDelivery(
   // Store payload and targetUrl only for failed deliveries (for DLQ replay)
   const shouldStorePayload = status === WebhookDeliveryStatus.Failed;
 
-  await webhookDeliveryRepository.createIfNotExists({
+  await webhookDeliveryRepository.recordAttempt({
     deliveryId: payload.deliveryId,
     organizationId: payload.orgId,
     subscriptionId: payload.subscriptionId,
