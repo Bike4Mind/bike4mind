@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { revokeAccess } from './revokeAccess';
-import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import { InviteType, IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { Permission } from '@bike4mind/common';
 
@@ -74,6 +74,10 @@ describe('organizationService - revokeAccess', () => {
           findById: vi.fn().mockResolvedValue(null),
           update: vi.fn().mockResolvedValue(undefined),
         },
+        invites: {
+          findAllByDocumentId: vi.fn().mockResolvedValue([]),
+          cancelPendingRecipient: vi.fn().mockResolvedValue(null),
+        },
         // No org lakes by default, so the lake-access lapse is a no-op unless a test sets some and
         // the org-update assertions in the existing cases stay exact.
         dataLakes: {
@@ -112,7 +116,7 @@ describe('organizationService - revokeAccess', () => {
     };
 
     expect(result).toEqual(expectedUpdatedOrg);
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('revokes the removed member org-billed API keys, attributed to the removing admin', async () => {
@@ -200,7 +204,7 @@ describe('organizationService - revokeAccess', () => {
 
     await revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   // Removal purges adminUserIds, so this would let a manager edit the Managers list.
@@ -244,7 +248,7 @@ describe('organizationService - revokeAccess', () => {
 
     await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('lets a platform admin remove a manager', async () => {
@@ -261,7 +265,7 @@ describe('organizationService - revokeAccess', () => {
       mockAdapters
     );
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('refuses a manager who is no longer on the roster, and removes nothing', async () => {
@@ -377,6 +381,20 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith({ id: 'user1', organizationId: null });
   });
 
+  it("cancels the removed user's pending named invites to this organization only", async () => {
+    mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', email: 'Member@Example.com' });
+    mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+      { id: 'own', type: InviteType.Organization, recipients: { pending: [' member@example.com'] } },
+      { id: 'other', type: InviteType.Organization, recipients: { pending: ['someone@example.com'] } },
+      { id: 'group', type: InviteType.Group, recipients: { pending: ['member@example.com'] } },
+    ]);
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.invites.findAllByDocumentId).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledExactlyOnceWith('own', 'member@example.com');
+  });
+
   it('clears the pointer when the route id is spelled differently from the stored id', async () => {
     mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', organizationId: 'org1' });
 
@@ -405,6 +423,6 @@ describe('organizationService - revokeAccess', () => {
 
     expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 });

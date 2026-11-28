@@ -1,5 +1,6 @@
-import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
-import { IMessage } from '@bike4mind/common';
+import { dataLakeRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import { DATA_LAKES, IMessage, isDataLakeTagName } from '@bike4mind/common';
+import { dataLakeService } from '@bike4mind/services';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -76,6 +77,25 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
     }
     return null;
   }
+}
+
+/**
+ * Drops model-generated tags that would put the notebook's summary file (owned by `ownerUserId`,
+ * see sessionSummarization.ts) into a data lake: a `datalake:` meta-tag, or a tag under the
+ * fileTagPrefix of a registry lake or a lake the owner created (the prefix arm's anchor). Tags the
+ * user adds to a session themselves do not pass through here.
+ */
+export async function withoutDataLakeTags<T extends { name: string }>(tags: T[], ownerUserId: string): Promise<T[]> {
+  const candidates = tags.filter(tag => !isDataLakeTagName(tag.name));
+  // Every usable fileTagPrefix ends in ':', so a colon-free set needs no lake lookup.
+  if (!candidates.some(tag => tag.name.includes(':'))) return candidates;
+  const ownLakes = await dataLakeService.loadPrefixArmCandidateLakes([ownerUserId], {
+    db: { dataLakes: dataLakeRepository },
+  });
+  const prefixes = [...DATA_LAKES, ...ownLakes].map(lake => lake.fileTagPrefix);
+  return candidates.filter(
+    tag => !prefixes.some(prefix => dataLakeService.couldMatchTagPrefixArmLoosely(tag.name, prefix))
+  );
 }
 
 export const handler = withEventContext(async (event, logger) => {
@@ -219,9 +239,9 @@ export const handler = withEventContext(async (event, logger) => {
     .filter((text): text is string => Boolean(text))
     .join('\n');
 
-  const parsedTags = parseTagsFromLLMResponse(tagsText);
+  const parsedTags = await withoutDataLakeTags(parseTagsFromLLMResponse(tagsText) ?? [], session.userId);
 
-  if (parsedTags && parsedTags.length > 0) {
+  if (parsedTags.length > 0) {
     session.tags = parsedTags;
     session.taggedAt = new Date();
     logger.info('Tags generated', { sessionId, tagCount: parsedTags.length });

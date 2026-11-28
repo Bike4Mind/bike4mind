@@ -15,6 +15,7 @@ import {
 import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
+import { assertCanChangeLakeGateTagsBetween } from '@server/admin/lakeGateTags';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -86,6 +87,7 @@ const handler = adminApi({
       // Editing a package may expire it immediately; creating one already expired is a mistake.
       if (isGrantPackageExpired(data)) throw new BadRequestError('expiresAt: must be in the future');
       assertCanChangeManagedTags(req.user, [], data.tags);
+      await assertCanChangeLakeGateTagsBetween(req.user, [], data.tags);
       const reasonRequired = requiresGrantReason(data, await loadCreditGrantPolicy());
       const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 

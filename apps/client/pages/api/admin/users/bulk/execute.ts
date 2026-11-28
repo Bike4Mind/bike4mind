@@ -33,7 +33,7 @@ const handler = adminApi({
   .post(
     asyncHandler(async (req, res) => {
       const request = AdminUsersBulkExecuteRequestSchema.parse(req.body);
-      assertCanRunUsersBulkAction(req, request.action.type, {
+      await assertCanRunUsersBulkAction(req, request.action.type, {
         blocks: blocksEmailDomains(request.action),
         tags: tagsAddedBy(request.action),
       });

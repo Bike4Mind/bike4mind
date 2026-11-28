@@ -64,7 +64,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       throw new BadRequestError('Invalid input data');
     }
 
-    assertCanSeedAccount(req, {
+    await assertCanSeedAccount(req, {
       isAdmin: validatedData.isAdmin,
       credits: validatedData.initialCredits,
       tags: validatedData.tags,

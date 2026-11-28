@@ -35,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: { usageByGrantPackage: usageRepos.usageByGrantPackage },
   partnerSignupRuleRepository: { countByGrantPackage: usageRepos.countByGrantPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
+  dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
 }));
 // Keep parseAdminActionReason real so the 400 is the production one.
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
@@ -140,6 +141,12 @@ describe('/api/admin/grant-packages (POST) managed tags', () => {
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ tags: ['beta-cohort'] }));
+  });
+
+  it('refuses a lake gate tag from a delegated admin and never writes', async () => {
+    const { req, res } = makeReqRes('POST', { user: DELEGATE, body: { ...small, tags: ['Lake-Gate'] } });
+    await expect(handlers.post(req, res)).rejects.toThrow('tags that gate data lake access');
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('lets a full admin create a package with a managed tag', async () => {
@@ -333,6 +340,25 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
       });
       await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
       expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it('refuses a delegated admin adding or removing a lake gate tag', async () => {
+      for (const [before, after] of [
+        [['beta-cohort'], ['beta-cohort', 'lake-gate']],
+        [['lake-gate', 'beta-cohort'], ['beta-cohort']],
+      ]) {
+        repo.findById.mockResolvedValue({ ...stored, tags: before });
+        const { req, res } = makeReqRes('PATCH', { user: DELEGATE, query: { id: 'p1' }, body: { tags: after } });
+        await expect(handlers.patch(req, res)).rejects.toThrow('tags that gate data lake access');
+      }
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it('lets a full admin add a lake gate tag', async () => {
+      repo.findById.mockResolvedValue({ ...stored, tags: [] });
+      const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { tags: ['lake-gate'] } });
+      await handlers.patch(req, res);
+      expect(res._getStatusCode()).toBe(200);
     });
 
     it('lets a full admin add a managed tag', async () => {
