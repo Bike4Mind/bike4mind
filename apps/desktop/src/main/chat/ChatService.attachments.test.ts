@@ -374,7 +374,10 @@ describe('images', () => {
       capture = vi.fn<ScreenCapturer['capture']>(async () => PNG);
       const screen: ScreenCapturer = {
         access: () => ({ state: 'granted' }),
-        list: async () => [{ id: 'window:7:0', kind: 'window', name: 'My App - Dev' }],
+        list: async () => [
+          { id: 'window:7:0', kind: 'window', name: 'My App - Dev' },
+          { id: 'screen:1:0', kind: 'screen', name: 'Built-in Display' },
+        ],
         capture,
       };
       store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-images-sessions-')), 'test-model');
@@ -562,12 +565,19 @@ describe('images', () => {
       expect(end && 'call' in end ? end.call.media?.[0] : undefined).toMatchObject({ kind: 'image' });
     });
 
-    it('asks before a capture in auto mode', async () => {
+    it('captures a single window in auto mode without asking', async () => {
+      const id = await codeSession('auto');
+      const messages = await toolRound(id, 'screen_capture', { target: 'My App' });
+      expect(capture).toHaveBeenCalledWith('window:7:0', 1568);
+      expect(JSON.stringify(messages.at(-1))).toContain('Image from the screen_capture call above.');
+    });
+
+    it('asks before a whole-screen capture in auto mode', async () => {
       const id = await codeSession('auto');
       await service.send(id, 'look at it');
       await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
       streams[0].write(
-        frame({ type: 'tool_use', tools: [{ id: 'cap_1', name: 'screen_capture', arguments: '{"target":"My App"}' }] })
+        frame({ type: 'tool_use', tools: [{ id: 'cap_1', name: 'screen_capture', arguments: '{"target":"screen"}' }] })
       );
       streams[0].write(frame('[DONE]'));
       await vi.waitUntil(

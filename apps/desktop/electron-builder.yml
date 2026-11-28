@@ -18,14 +18,23 @@ directories:
 # so they have to ship.
 files:
   - out/**
-  # The headless host (`pnpm build:host`) is a separate program, not part of the app.
+  # The headless host (`pnpm build:host`) is a separate program, not part of the app; it ships
+  # packed, as a resource (below).
   - "!out/host/**"
+  - "!out/host-artifact/**"
   - package.json
   # node-pty ships prebuilt binaries for every platform, plus Windows debug symbols (~20 MB)
   # and the sources it would compile from without them; none of that is needed to run.
   - "!**/node_modules/node-pty/prebuilds/*/*.pdb"
   - "!**/node_modules/node-pty/{src,third_party,scripts,binding.gyp}"
   - "!**/node_modules/node-pty/lib/*.test.js"
+
+# The host program Desktop installs on remote machines: one tarball and its manifest, built by the
+# beforePack hook with the version being packaged, so the two always match.
+beforePack: scripts/host-artifact.cjs
+extraResources:
+  - from: out/host-artifact
+    to: host
 
 asar: true
 # node-pty is the only native dependency, and it is N-API with prebuilt binaries for every target,

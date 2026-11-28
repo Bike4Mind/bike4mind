@@ -26,6 +26,9 @@ export function requireSshAlias(alias: unknown): string {
 /** A fixed string: nothing from the host or the user is interpolated into a remote command. */
 export const REMOTE_CONNECT_COMMAND = 'exec "$HOME/.b4m/host/bin/b4m-host" connect';
 
+/** Runs the script that arrives on stdin; the installer's scripts are fixed text (install/remoteScripts.ts). */
+export const REMOTE_SCRIPT_COMMAND = 'sh -s';
+
 /**
  * Where Desktop's ssh multiplexing sockets live. Short on purpose: a unix socket path is limited
  * to about 104 bytes on macOS, and `%C` adds 40. Written with `~` so ssh expands it; ssh takes the
@@ -55,6 +58,11 @@ export function sshConnectArgs(alias: string, platform: NodeJS.Platform = proces
   return ['-T', ...sshOptions(platform), '--', requireSshAlias(alias), REMOTE_CONNECT_COMMAND];
 }
 
+/** The arguments of `ssh` that run a POSIX shell script, sent on stdin, on `alias`. */
+export function sshScriptArgs(alias: string, platform: NodeJS.Platform = process.platform): string[] {
+  return ['-T', ...sshOptions(platform), '--', requireSshAlias(alias), REMOTE_SCRIPT_COMMAND];
+}
+
 /** Thrown when there is no ssh on the user's PATH. */
 export class SshNotFoundError extends Error {
   constructor() {
@@ -73,12 +81,21 @@ export async function resolveSshEnvironment(): Promise<SshEnvironment> {
   return { ssh, env: { ...process.env, PATH: path } };
 }
 
-/** The process that connects to `alias`'s host program. Creates the multiplexing directory ssh expects to exist. */
-export async function sshSpec(alias: string, environment?: SshEnvironment): Promise<ProcessSpec> {
-  const args = sshConnectArgs(alias);
+/** An ssh process with `args`. Creates the multiplexing directory ssh expects to exist. */
+async function sshProcess(alias: string, args: string[], environment?: SshEnvironment): Promise<ProcessSpec> {
   const { ssh, env } = environment ?? (await resolveSshEnvironment());
   if (process.platform !== 'win32') await ensurePrivateDirectory(controlDirectory());
   return { command: ssh, args, env, label: alias };
+}
+
+/** The process that connects to `alias`'s host program. */
+export async function sshSpec(alias: string, environment?: SshEnvironment): Promise<ProcessSpec> {
+  return sshProcess(alias, sshConnectArgs(alias), environment);
+}
+
+/** The process that runs one of the installer's scripts on `alias`. */
+export async function sshScriptSpec(alias: string, environment?: SshEnvironment): Promise<ProcessSpec> {
+  return sshProcess(alias, sshScriptArgs(alias), environment);
 }
 
 /** Reads `ssh -G` output: one `keyword value` pair per line, keywords lower case. */

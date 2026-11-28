@@ -550,8 +550,7 @@ export interface HostSessionView {
  * one in it that is neither the caller nor a child of it, so the model cannot probe either.
  */
 export type HostRenameOutcome =
-  | { ok: true; session: HostSessionView }
-  | { ok: false; reason: 'out-of-scope' | 'user-title' };
+  { ok: true; session: HostSessionView } | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -779,6 +778,11 @@ export interface ApprovalPrompt {
    * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
+  /**
+   * Repeating this exact call is not a sign the model is stuck: it only observes (a read-only shell
+   * command, or `sleep N && <read-only command>` polling), so the repeat-call guard leaves it alone.
+   */
+  repeatSafe?: true;
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
   /**
@@ -844,6 +848,12 @@ export interface ApprovalAlways {
   commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The command's `cwd` and shape (see commandShape), NUL-separated. Set only when the scan could not
+   * follow the command, that is its one reason to ask, and it reads a run-time word. An "Allow in this
+   * chat" then also covers the same shape in the same folder in this chat.
+   */
+  shape?: string;
   /**
    * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
    * cannot tell, and then every one counts.

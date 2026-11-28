@@ -157,7 +157,7 @@ struct MessageBubble: View {
 }
 
 /// One block of a reply. Every case's text is inline Markdown, rendered by `MarkdownText`.
-private struct MarkdownBlockView: View {
+struct MarkdownBlockView: View {
   let block: MarkdownBlock
 
   var body: some View {

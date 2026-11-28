@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isValidSshAlias, parseSshG, REMOTE_CONNECT_COMMAND, requireSshAlias, sshConnectArgs } from './sshCommand';
+import {
+  isValidSshAlias,
+  parseSshG,
+  REMOTE_CONNECT_COMMAND,
+  REMOTE_SCRIPT_COMMAND,
+  requireSshAlias,
+  sshConnectArgs,
+  sshScriptArgs,
+} from './sshCommand';
 
 describe('isValidSshAlias', () => {
   it.each(['devbox', 'devbox.local', 'me@devbox', 'build-01', 'gpu_box', '10.0.0.7', 'A'])('accepts %s', alias => {
@@ -91,5 +99,18 @@ describe('parseSshG', () => {
 
   it('falls back to the alias and port 22 when ssh leaves them out', () => {
     expect(parseSshG('devbox', 'port nope\n')).toEqual({ alias: 'devbox', hostname: 'devbox', user: '', port: 22 });
+  });
+});
+
+describe('sshScriptArgs', () => {
+  it('runs only the fixed script command, with the alias after --', () => {
+    const args = sshScriptArgs('devbox', 'linux');
+    expect(args.slice(-3)).toEqual(['--', 'devbox', REMOTE_SCRIPT_COMMAND]);
+    expect(args).toContain('BatchMode=yes');
+    expect(REMOTE_SCRIPT_COMMAND).toBe('sh -s');
+  });
+
+  it('refuses an alias that could read as an option', () => {
+    expect(() => sshScriptArgs('-oProxyCommand=x', 'linux')).toThrow(/Not an SSH host alias/);
   });
 });
