@@ -172,6 +172,7 @@ const GeneralSettingsTab = () => {
                   opacity: 0.5,
                 },
               }}
+              data-testid="settings-import-history-btn"
               onClick={() => toggleImportHistoryModal()}
             >
               {t('importLLMHistory', { name: t('tools.title') })}

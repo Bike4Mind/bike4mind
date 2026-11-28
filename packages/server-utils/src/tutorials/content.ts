@@ -14,6 +14,9 @@ import artifactsTranscript from './modules/artifacts/transcript.json';
 import { projectsModule } from './modules/projects/module';
 import { PROJECTS_STEPS } from './modules/projects/steps';
 import projectsTranscript from './modules/projects/transcript.json';
+import { importHistoryModule } from './modules/import-history/module';
+import { IMPORT_HISTORY_STEPS } from './modules/import-history/steps';
+import importHistoryTranscript from './modules/import-history/transcript.json';
 
 // Server-only, like the registry: the page gets a tutorial's content only from the run route, overrides applied.
 export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
@@ -34,4 +37,11 @@ export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
   },
   { intro: artifactsModule, version: 1, enabled: true, steps: ARTIFACTS_STEPS, transcript: artifactsTranscript },
   { intro: projectsModule, version: 1, enabled: true, steps: PROJECTS_STEPS, transcript: projectsTranscript },
+  {
+    intro: importHistoryModule,
+    version: 1,
+    enabled: true,
+    steps: IMPORT_HISTORY_STEPS,
+    transcript: importHistoryTranscript,
+  },
 ];

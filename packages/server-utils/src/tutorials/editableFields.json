@@ -130,5 +130,39 @@
       "title",
       "body"
     ]
+  },
+  "import-history": {
+    "import-history-ask": [
+      "title",
+      "body"
+    ],
+    "import-history-export": [
+      "title",
+      "body"
+    ],
+    "import-history-open-profile": [
+      "title",
+      "body"
+    ],
+    "import-history-settings": [
+      "title",
+      "body"
+    ],
+    "import-history-open-importer": [
+      "title",
+      "body"
+    ],
+    "import-history-upload": [
+      "title",
+      "body"
+    ],
+    "import-history-after": [
+      "title",
+      "body"
+    ],
+    "import-history-done": [
+      "title",
+      "body"
+    ]
   }
 }

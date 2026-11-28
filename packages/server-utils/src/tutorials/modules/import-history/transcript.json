@@ -1,0 +1,6 @@
+[
+  {
+    "prompt": "How do I bring my chat history over from ChatGPT or Claude?",
+    "reply": "Bring it over in two parts: export it from the other app, then import it here.\n\n**1. Export from the other app**\n\n- **ChatGPT:** open Settings, then Data controls, and choose Export data. A download link arrives by email.\n- **Claude:** open Settings, then Privacy, and choose Export data. A download link arrives by email.\n\nKeep the .zip just as you download it. Do not unzip it.\n\n**2. Import it here**\n\nOpen Profile, then Settings, and press **Import LLM History**. Set the switch to OpenAI for ChatGPT or to Claude, choose the .zip and press Upload. Each conversation becomes its own notebook, and your inbox tells you when the import is done.\n\nNo export yet? That is fine. An export can take a while to arrive, and you can import it whenever it does."
+  }
+]

@@ -410,6 +410,7 @@ const UploadImportHistoryModal: FC<IUploadImportHistoryModalProps> = ({
             )}
             <Button
               className="import-history-submit-button"
+              data-testid="import-history-submit-btn"
               ref={submitButtonRef}
               onClick={onSubmit}
               onKeyDown={e => {
