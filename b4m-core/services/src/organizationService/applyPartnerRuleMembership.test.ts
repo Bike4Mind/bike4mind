@@ -233,6 +233,16 @@ describe('applyPartnerRuleMembership', () => {
     expect(db.users.update).not.toHaveBeenCalled();
   });
 
+  it('does not re-add a user an administrator removed from the org', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser });
+    db.organizations.findById.mockResolvedValue({ ...org, removedUserIds: ['user-id'] });
+
+    expect(await run()).toEqual({ added: false, reason: 'removed' });
+    expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
+    expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+    expect(db.users.update).not.toHaveBeenCalled();
+  });
+
   it('no-ops when the user is missing', async () => {
     db.users.findById.mockResolvedValue(null);
     expect(await run()).toEqual({ added: false, reason: 'user-missing' });

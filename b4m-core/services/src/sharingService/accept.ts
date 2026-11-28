@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
+import { wasRemovedFromOrganization } from '../organizationService/orgAuthority';
 import { assertContentInvitePolicy } from './organizationPolicy';
 import { grantCap } from '../projectService/addFiles';
 import { projectGrantorCheck, SharedItem } from './projectGrantor';
@@ -58,6 +59,7 @@ interface AcceptInviteAdapters {
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
       addMemberIfUnderCeiling: IOrganizationRepository['addMemberIfUnderCeiling'];
+      clearRemovedMember: IOrganizationRepository['clearRemovedMember'];
       ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
@@ -358,6 +360,9 @@ const acceptOrganization = async (
   }
 
   if (isLink) {
+    if (wasRemovedFromOrganization(organization, user.id)) {
+      throw new ForbiddenError('You cannot join this organization');
+    }
     const minter = params.inviterId ? await db.users.findById(params.inviterId) : null;
     if (
       !minter ||
@@ -409,6 +414,9 @@ const acceptOrganization = async (
     );
     for (const invite of ownNamedInvites) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
   }
+
+  // A named invite is an administrator's choice to bring this person back.
+  if (!isLink) await db.organization.clearRemovedMember(organizationId, user.id);
 
   // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
   // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.
