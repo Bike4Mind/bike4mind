@@ -3554,7 +3554,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // undeleteByDataLakeTag's own per-row modifiedCount gate for the identical reason.
     const flipped: DataLakeSweptFile[] = [];
     for (const doc of docs) {
-      const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
+      // Membership can change after enumeration; only the final write may decide to delete.
+      const result = await this.fabFileModel.updateOne(
+        { $and: [buildDataLakeTeardownFilter(scope, teardown), { _id: doc._id, deletedAt: null }] },
+        { $set: { deletedAt: at } }
+      );
       if (result.modifiedCount === 1) {
         flipped.push(toSweptFile(doc));
       }

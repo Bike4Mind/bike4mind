@@ -48,6 +48,7 @@ function buildDb(overrides: Record<string, unknown> = {}) {
       findStorageKeysByIds: vi.fn().mockResolvedValue([]),
       hardDeleteOneById: vi.fn(),
       findById: vi.fn().mockResolvedValue(null),
+      findAllByIds: vi.fn().mockResolvedValue([]),
       pullTagsByFabFileId: vi.fn().mockResolvedValue(undefined),
     },
     fabFileChunks: {

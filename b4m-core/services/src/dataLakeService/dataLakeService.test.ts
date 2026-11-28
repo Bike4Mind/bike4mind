@@ -5184,6 +5184,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
         findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
         hardDeleteOneById: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue(null),
+        findAllByIds: vi.fn().mockResolvedValue([]),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         findStorageKeysByIds: vi.fn().mockResolvedValue([]),
       },
@@ -5376,6 +5377,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
     adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
     adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['joiner']);
     adapters.db.fabFiles.findById = vi.fn().mockResolvedValue(joiner);
+    adapters.db.fabFiles.findAllByIds.mockResolvedValue([joiner]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
@@ -5394,6 +5396,9 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
     adapters.db.fabFiles.findById = vi
       .fn()
       .mockResolvedValue({ id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] });
+    adapters.db.fabFiles.findAllByIds.mockResolvedValue([
+      { id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] },
+    ]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 

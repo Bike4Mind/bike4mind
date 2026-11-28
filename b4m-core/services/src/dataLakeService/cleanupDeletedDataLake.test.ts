@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import type { IFabFileRepository } from '@bike4mind/common';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
@@ -16,8 +17,8 @@ const LAKE = {
 // to carry a real grant.
 const ADMIN = { userId: 'admin-1', isAdmin: true };
 
-const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
-  withStorageOwnerFakes({
+const makeDb = (fileIds: string[] = ['f1', 'f2']) => {
+  const db = withStorageOwnerFakes({
     dataLakes: {
       findById: vi.fn(async () => ({ ...LAKE })),
       delete: vi.fn(async () => {}),
@@ -54,6 +55,7 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
       findIdsByDataLakeTag: vi.fn(async () => [] as string[]),
       hardDeleteOneById: vi.fn(async () => true),
       findById: vi.fn(async () => undefined as never),
+      findAllByIds: vi.fn<IFabFileRepository['findAllByIds']>(),
       pullTagsByFabFileId: vi.fn(async () => {}),
       findStorageKeysByIds: vi.fn(async () => [] as never),
     },
@@ -62,6 +64,13 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
       clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
     },
   });
+  db.fabFiles.findAllByIds.mockImplementation(async ids => {
+    const readFile: IFabFileRepository['findById'] = db.fabFiles.findById;
+    const files = await Promise.all(ids.map(id => readFile(id)));
+    return files.filter((file): file is NonNullable<typeof file> => file != null);
+  });
+  return db;
+};
 
 /** Records every row/chunk delete as `<kind>:<id>` so both ORDER and PAIRING are assertable. */
 const traceDeletes = (db: ReturnType<typeof makeDb>) => {
