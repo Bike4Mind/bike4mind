@@ -48,6 +48,8 @@ data class SessionListState(
     val loadFailed: Boolean = false,
     /** The user's default model from client-config; null until it loads (or when it could not). */
     val defaultModel: String? = null,
+    /** `features.artifacts` from client-config; false until it loads, so the entry never shows for a disabled feature. */
+    val artifactsEnabled: Boolean = false,
 )
 
 class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
@@ -57,8 +59,8 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
     init {
         refresh()
         viewModelScope.launch {
-            val model = try {
-                graph.clientConfig().models.defaultId
+            val config = try {
+                graph.clientConfig()
             } catch (upgrade: UpgradeRequiredException) {
                 null
             } catch (cancelled: CancellationException) {
@@ -66,7 +68,7 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
             } catch (failure: Exception) {
                 null
             }
-            mutableState.update { it.copy(defaultModel = model) }
+            mutableState.update { it.copy(defaultModel = config?.models?.defaultId, artifactsEnabled = config?.features?.artifacts == true) }
         }
     }
 
@@ -109,6 +111,7 @@ fun SessionListScreen(
     onNewChat: () -> Unit,
     onOpenBrief: () -> Unit,
     onOpenStudio: () -> Unit,
+    onOpenArtifacts: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
@@ -121,6 +124,9 @@ fun SessionListScreen(
                 title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
                     TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text(stringResource(R.string.sessions_brief)) }
+                    if (state.artifactsEnabled) {
+                        TextButton(onClick = onOpenArtifacts, modifier = Modifier.testTag("sessions-artifacts-btn")) { Text(stringResource(R.string.sessions_artifacts)) }
+                    }
                     TextButton(onClick = onOpenStudio, modifier = Modifier.testTag("sessions-studio-btn")) { Text(stringResource(R.string.sessions_studio)) }
                     TextButton(onClick = model::refresh) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("sessions-settings-btn")) { Text(stringResource(R.string.sessions_settings)) }

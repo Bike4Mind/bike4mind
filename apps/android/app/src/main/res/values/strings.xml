@@ -29,6 +29,7 @@
     <string name="sessions_brief">Brief</string>
     <string name="sessions_settings">Settings</string>
     <string name="sessions_studio">Studio</string>
+    <string name="sessions_artifacts">Artifacts</string>
     <string name="sessions_new_chat">New chat</string>
     <string name="sessions_default_model">Default model: %1$s</string>
     <string name="sessions_load_failed">Could not load chats</string>
@@ -336,4 +337,33 @@
     <string name="agent_run_steps_done">%1$d of %2$d steps done</string>
     <string name="agent_run_chip">Agent</string>
     <string name="agent_run_needs_you">Needs you</string>
+
+    <string name="artifacts_title">Artifacts</string>
+    <string name="artifacts_loading">Loading artifacts</string>
+    <string name="artifacts_load_failed">Couldn\'t load your artifacts</string>
+    <string name="artifacts_empty_title">No artifacts yet</string>
+    <string name="artifacts_empty_body">Pages, diagrams and code that Bike4Mind creates for you will appear here.</string>
+    <string name="artifacts_row_description">%1$s, %2$s</string>
+    <string name="artifacts_type_html">Web page</string>
+    <string name="artifacts_type_svg">Image</string>
+    <string name="artifacts_type_mermaid">Diagram</string>
+    <string name="artifacts_type_code">Code</string>
+    <string name="artifacts_type_python">Python</string>
+    <string name="artifacts_type_file">File</string>
+    <string name="artifacts_type_blog_draft">Blog draft</string>
+    <string name="artifacts_type_react">React app</string>
+    <string name="artifacts_type_recharts">Chart</string>
+    <string name="artifacts_type_lattice">Lattice</string>
+    <string name="artifacts_type_chess">Chess</string>
+    <string name="artifacts_type_other">Artifact</string>
+    <string name="artifacts_updated">Updated %1$s</string>
+    <string name="artifacts_open_failed">Couldn\'t open this artifact</string>
+    <string name="artifacts_empty_content">This artifact has no content to show.</string>
+    <string name="artifacts_full_version_title">Best viewed in the web app</string>
+    <string name="artifacts_full_version_body">This kind of artifact is interactive. Open it in the browser to see it in full.</string>
+    <string name="artifacts_open_full_version">Open full version</string>
+    <string name="artifacts_error_offline">Couldn\'t reach Bike4Mind. Check your connection and try again.</string>
+    <string name="artifacts_error_not_found">This artifact is no longer available to you.</string>
+    <string name="artifacts_error_rate_limited">Too many requests. Try again in a moment.</string>
+    <string name="artifacts_error_server">The server could not load your artifacts (HTTP %1$d).</string>
 </resources>

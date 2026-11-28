@@ -38,3 +38,6 @@ packages/database/src/models/UNVALIDATED_UPDATE_PATHS.md
 # Generated route inventory: preserve the generator layout without table-wide formatting churn.
 docs/api-route-inventory.md
 apps/ios/Bike4Mind/Resources/Artifacts/
+
+# Vendored third-party bundle served to the Android artifact WebView.
+apps/android/app/src/main/assets/

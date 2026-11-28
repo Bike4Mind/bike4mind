@@ -72,6 +72,18 @@ open in the browser. To try one without that, target the app directly:
 adb shell am start -a android.intent.action.VIEW -d https://app.bike4mind.com/notebooks/<id> com.bike4mind.app
 ```
 
+## Artifacts
+
+`kit/artifacts` and the Artifacts screens (reachable from the chats list while `features.artifacts` is on) read the user's
+own artifacts through the public API (`listArtifacts`, `getArtifact`). `ArtifactType.presentation` decides how each type is
+shown: html, svg and mermaid in a hardened WebView, code and prose as selectable text, and react, recharts, lattice and chess
+as an "Open full version" link to the web app in a Custom Tab. `ArtifactDocuments` builds the WebView pages: every page gets a
+Content-Security-Policy, the markup is stripped of frames, base and meta tags, and svg is stripped of scripts. The WebView
+has no JS bridge, file access, storage or cookies, and loads with a null origin.
+
+`app/src/main/assets/mermaid.min.js` is the diagram renderer (mermaid 11.17.2, MIT, licence beside it), served to the
+WebView from the app's assets. To update it, copy `dist/mermaid.min.js` from the `mermaid` package and bump the version here.
+
 ## Client identity
 
 Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to

@@ -15,6 +15,7 @@ import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
 import com.bike4mind.app.storage.KeystoreTokenStore
 import com.bike4mind.client.apis.AIApi
 import com.bike4mind.client.apis.AccountApi
+import com.bike4mind.client.apis.ArtifactsApi
 import com.bike4mind.client.apis.SessionsApi
 import com.bike4mind.client.models.GetClientConfigResponse200
 import com.bike4mind.kit.account.AccountDeletionController
@@ -36,6 +37,10 @@ import com.bike4mind.kit.capture.ComposerAttachments
 import com.bike4mind.kit.capture.TranscriptionWire
 import com.bike4mind.kit.capture.TurnSender
 import com.bike4mind.kit.capture.VoiceDictation
+import com.bike4mind.kit.artifacts.ArtifactDetailController
+import com.bike4mind.kit.artifacts.ArtifactDocuments
+import com.bike4mind.kit.artifacts.ArtifactListController
+import com.bike4mind.kit.artifacts.ArtifactsRepository
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
@@ -110,6 +115,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         SessionsApi(environment.baseUrl, engine) { transport.install(it) },
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
+    private val artifacts = ArtifactsRepository(ArtifactsApi(environment.baseUrl, engine) { transport.install(it) })
     private val briefs = BriefWire(environment, http)
     private val busyBlocks = BusyBlocksWire(environment, http)
     val busyBlockPermissions = BusyBlockPermissionStore(appContext)
@@ -181,6 +187,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     fun busyBlockBrief(scope: CoroutineScope) =
         BusyBlockBriefController(busyBlocks, busyBlockSyncer, scope) { enabled -> BusyBlockSyncWorker.follow(appContext, enabled) }
+
+    fun artifactList(scope: CoroutineScope) = ArtifactListController(artifacts, scope)
+
+    fun artifactDetail(id: String, scope: CoroutineScope) = ArtifactDetailController(id, artifacts, scope)
+
+    /** The artifact in the web app, for the types (and the moments) the native viewer cannot draw. */
+    fun artifactFullVersionUrl(id: String): String = ArtifactDocuments.fullVersionUrl(environment, id)
 
     fun mediaGallery(scope: CoroutineScope) = MediaGalleryController(media, mediaFirstPages, scope)
 

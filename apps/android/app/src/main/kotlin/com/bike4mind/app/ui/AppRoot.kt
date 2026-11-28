@@ -52,6 +52,8 @@ fun AppRoot(
     var openBrief by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     // The Studio gallery, opened from the chats list.
     var openStudio by rememberSaveable(graph) { mutableStateOf(false) }
+    // The artifacts list, opened from the chats list when features.artifacts is on.
+    var openArtifacts by rememberSaveable(graph) { mutableStateOf(false) }
     // SETTINGS or DELETE_ACCOUNT while Settings is up.
     var openSettings by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     val route by pendingRoute.collectAsStateWithLifecycle()
@@ -59,6 +61,7 @@ fun AppRoot(
     fun showChat(sessionId: String?, draft: String? = null) {
         openSettings = null
         openStudio = false
+        openArtifacts = false
         openBrief = null
         composeDraft = draft
         if (draft != null) chatLaunch++
@@ -106,6 +109,7 @@ fun AppRoot(
             graph.deletionSignal.reset()
             openSettings = null
             openStudio = false
+            openArtifacts = false
         }
     }
 
@@ -119,6 +123,7 @@ fun AppRoot(
             is Route.Brief -> {
                 openSettings = null
                 openStudio = false
+                openArtifacts = false
                 openChat = null
                 openBrief = pending.briefId
             }
@@ -160,6 +165,10 @@ fun AppRoot(
                 onOpenSession = { showChat(it) },
             )
         }
+        openArtifacts -> ScreenScope(key = Screen.Artifacts(graph)) {
+            BackHandler { openArtifacts = false }
+            ArtifactListScreen(graph = graph, onBack = { openArtifacts = false })
+        }
         openStudio -> ScreenScope(key = Screen.Studio(graph)) {
             BackHandler { openStudio = false }
             MediaGalleryScreen(graph = graph, onBack = { openStudio = false })
@@ -183,6 +192,7 @@ fun AppRoot(
                 onNewChat = { showChat(NEW_CHAT) },
                 onOpenBrief = { openBrief = LATEST_BRIEF },
                 onOpenStudio = { openStudio = true },
+                onOpenArtifacts = { openArtifacts = true },
                 onOpenSettings = { openSettings = SETTINGS },
             )
         }
@@ -197,6 +207,7 @@ private sealed interface Screen {
     data class Sessions(val graph: AppGraph) : Screen
     data class Settings(val graph: AppGraph) : Screen
     data class Studio(val graph: AppGraph) : Screen
+    data class Artifacts(val graph: AppGraph) : Screen
     data class DeleteAccount(val graph: AppGraph) : Screen
     data class Restore(val graph: AppGraph) : Screen
 }
