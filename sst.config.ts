@@ -76,7 +76,22 @@ export default $config({
     // Runs ahead of every Function's handler module so raw console output is redacted like Logger output.
     const { consoleRedactionBanner } = await import('./infra/consoleRedactionBanner');
     const CONSOLE_REDACTION_BANNER = consoleRedactionBanner($cli.paths.root);
+    // Loaded here so the grant below exists before any Function is declared; undefined where the stage has no key.
+    const { secretsAtRestKey, secretsAtRestDecryptPermission, secretsAtRestRoleTags } =
+      await import('./infra/secretsAtRestKey');
+    // Marks every role but the sandbox one as this stage's, which is what the key policy's Decrypt deny checks.
+    if (secretsAtRestKey) {
+      // The sandbox role runs user-supplied code and stays untagged: nothing it holds may reach the key.
+      $transform(aws.iam.Role, (args, _opts, name) => {
+        if (name === 'CallableFunctionRuntimeRole') return;
+        args.tags = $output(args.tags).apply(tags => secretsAtRestRoleTags(tags ?? undefined, $app.stage));
+      });
+    }
     $transform(sst.aws.Function, args => {
+      if (secretsAtRestKey) {
+        const grant = secretsAtRestDecryptPermission(secretsAtRestKey.arn, $app.stage);
+        args.permissions = $output(args.permissions).apply(permissions => [...(permissions ?? []), grant]);
+      }
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
         const external = Array.isArray(esbuild.external) ? [...esbuild.external] : [];

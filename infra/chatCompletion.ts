@@ -31,6 +31,7 @@ import {
 } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
+import { secretsAtRestDecryptPermission, secretsAtRestKey } from './secretsAtRestKey';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
@@ -92,6 +93,7 @@ const ecsSecretNames = [
   'SESSION_SECRET',
   'SECRET_ENCRYPTION_KEY',
   'SECRET_ENCRYPTION_KEY_PREVIOUS',
+  'SECRET_DATA_KEY_WRAPPED',
   'HMAC_SIGNING_SECRET',
   'HMAC_SIGNING_SECRET_PREVIOUS',
   'MEMORY_KEY_SECRET',
@@ -431,6 +433,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       resources: ['*'],
     },
     ...providerFederation.permissions,
+    ...(secretsAtRestKey ? [secretsAtRestDecryptPermission(secretsAtRestKey.arn, $app.stage)] : []),
     ...callableFunctionRuntimeForCallers.permissions,
   ],
   environment: {

@@ -42,6 +42,7 @@
     "translations:sync": "tsx syncTranslations.ts",
     "api-routes:inventory": "tsx src/generateApiRouteInventory.ts",
     "clear-resume-tokens": "tsx src/clear-resume-tokens.ts",
+    "create-wrapped-stage-data-key": "tsx src/create-wrapped-stage-data-key.ts",
     "db:cleanup": "tsx migrate/index.ts cleanup",
     "db:preview-unaddressable-chunks": "tsx migrate/preview-unaddressable-fabfilechunks.ts",
     "db:preview-near-empty-chunks": "tsx migrate/preview-near-empty-fabfilechunks.ts",
@@ -118,6 +119,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-cloudfront": "^3.1150.0",
+    "@aws-sdk/client-kms": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
     "@aws-sdk/client-ssm": "^3.1150.0",

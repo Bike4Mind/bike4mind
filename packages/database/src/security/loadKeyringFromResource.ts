@@ -1,3 +1,4 @@
+import { WRAPPED_DATA_KEY_SECRET_NAME } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import {
@@ -24,7 +25,7 @@ export function selectKeyProvider(
   legacyKey: string | undefined,
   read: (name: string) => string | undefined = readSecretFromResource
 ): KeyProvider {
-  const wrapped = read('SECRET_DATA_KEY_WRAPPED');
+  const wrapped = read(WRAPPED_DATA_KEY_SECRET_NAME);
   if (isSet(wrapped)) {
     let stage: string | undefined;
     try {
