@@ -4,7 +4,14 @@ import { backoffDelay, DEFAULT_BACKOFF, type BackoffPolicy } from './backoff';
 import { initializeHost, measureHost, outcomeForError, type ClientIdentity, type ConnectOutcome } from './handshake';
 
 /** How to open one connection to a host. Rejects with HostConnectError when it cannot. */
-export type HostConnector = { connect(): Promise<HostTransport> };
+export type HostConnector = {
+  /**
+   * Work that must finish before a connection can be opened, such as installing the host program;
+   * not bounded by connectTimeoutMs, so it needs bounds of its own. Rejects as connect does.
+   */
+  prepare?(): Promise<void>;
+  connect(): Promise<HostTransport>;
+};
 
 export type HostLinkTuning = {
   backoff: BackoffPolicy;
@@ -16,7 +23,7 @@ export type HostLinkTuning = {
   heartbeatMs: number;
   /** How long `host/initialize` and `host/info` may take before the link counts as lost, in ms. */
   requestTimeoutMs: number;
-  /** How long the connector may take to open a connection before the attempt counts as failed, in ms. */
+  /** How long the connector may take to open a connection, after `prepare`, before the attempt counts as failed, in ms. */
   connectTimeoutMs: number;
 };
 
@@ -176,7 +183,10 @@ export class HostLink {
     return this.control.request(method, params);
   }
 
-  /** Opens a further connection for a window and checks its protocol; rejects with HostConnectError. */
+  /**
+   * Opens a further connection for a window and checks its protocol; rejects with HostConnectError,
+   * or HostNeedsUserError when the connector finds the host needs an install or update first.
+   */
   async openClient(): Promise<HostTransport> {
     const transport = await this.openTransport();
     const handshake = await initializeHost(transport, this.options.client, this.options.tuning.requestTimeoutMs);
@@ -224,8 +234,12 @@ export class HostLink {
     this.scheduleHeartbeat();
   }
 
-  /** The connector's connect, bounded by connectTimeoutMs; a connection that opens after that is closed. */
-  private openTransport(): Promise<HostTransport> {
+  /**
+   * The connector's prepare, then its connect bounded by connectTimeoutMs; a connection that opens
+   * after that is closed.
+   */
+  private async openTransport(): Promise<HostTransport> {
+    await this.options.connector.prepare?.();
     const { connectTimeoutMs } = this.options.tuning;
     return new Promise((resolve, reject) => {
       let timedOut = false;

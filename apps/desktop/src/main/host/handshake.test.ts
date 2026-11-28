@@ -7,7 +7,7 @@ import {
   type HostTransport,
 } from '@shared/hostProtocol';
 import { hostInfo } from './__fixtures__/fakeHost';
-import { initializeHost, outcomeForError } from './handshake';
+import { HostNeedsUserError, initializeHost, outcomeForError } from './handshake';
 
 const CLIENT = { clientId: 'c', clientName: 'Desktop', clientVersion: '1.0.0' };
 
@@ -57,6 +57,17 @@ describe('outcomeForError', () => {
     expect(outcomeForError(new Error('pipe'))).toEqual({
       retry: true,
       failure: { kind: 'lost', detail: 'pipe', stderrTail: '' },
+    });
+  });
+
+  it('waits for the user on a HostNeedsUserError', () => {
+    expect(outcomeForError(new HostNeedsUserError({ status: 'needsUpdate', required: false }))).toEqual({
+      retry: false,
+      state: { status: 'needsUpdate', required: false },
+    });
+    expect(outcomeForError(new HostNeedsUserError({ status: 'needsInstall' }))).toEqual({
+      retry: false,
+      state: { status: 'needsInstall' },
     });
   });
 

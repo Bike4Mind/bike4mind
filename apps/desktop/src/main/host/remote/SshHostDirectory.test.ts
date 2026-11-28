@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HostConnectError, type HostConnectFailureKind } from '@shared/hostProtocol';
 import { ACCOUNT, FakeHost } from '../__fixtures__/fakeHost';
 import { ConnectionManager } from '../ConnectionManager';
+import { HostNeedsUserError } from '../handshake';
 import type { HostLinkTuning } from '../HostLink';
 import { SshHostDirectory } from './SshHostDirectory';
 import type { SshHostRecord, SshHostsFileContents } from './sshHostsFile';
@@ -28,7 +29,13 @@ const machine = (hostId: string): FakeHost => {
   return host;
 };
 
-function setUp(options: { records?: SshHostRecord[]; config?: string[] } = {}) {
+function setUp(
+  options: {
+    records?: SshHostRecord[];
+    config?: string[];
+    prepareConnection?: (id: string, alias: string) => Promise<void>;
+  } = {}
+) {
   /** Which machine each alias reaches; an alias missing here fails as ssh would. */
   const routes = new Map<string, FakeHost | HostConnectFailureKind>();
   const opened: string[] = [];
@@ -59,6 +66,7 @@ function setUp(options: { records?: SshHostRecord[]; config?: string[] } = {}) {
       throw new HostConnectError({ kind: route ?? 'sshFailed', detail: `ssh: ${alias}: no route`, stderrTail: '' });
     },
     listConfigHosts: async () => ({ aliases: options.config ?? ['devbox', 'devbox-vpn', 'other'], problems: [] }),
+    prepareConnection: options.prepareConnection,
     now: () => NOW,
     newId: () => `new-${nextId++}`,
   });
@@ -231,6 +239,38 @@ describe('SshHostDirectory', () => {
     await settle();
     expect(saved().hosts).toEqual([]);
     expect(manager.list()).toEqual([]);
+  });
+
+  it('prepares each connection first, and a refusal is what the connection reports', async () => {
+    const prepared: string[] = [];
+    const { directory, routes, opened, state } = setUp({
+      records: [record({ reportedHostId: 'machine-a' })],
+      prepareConnection: async (id, alias) => {
+        prepared.push(`${id}:${alias}`);
+        throw new HostNeedsUserError({ status: 'needsUpdate', required: false });
+      },
+    });
+    routes.set('devbox', machine('machine-a'));
+
+    await directory.load();
+    await settle();
+
+    expect(prepared).toEqual(['h1:devbox']);
+    expect(opened).toEqual([]);
+    expect(state('h1')).toEqual({ status: 'needsUpdate', required: false });
+  });
+
+  it('names the alias the next connection goes through as the install target', async () => {
+    const { directory } = setUp({
+      records: [
+        record({ aliases: ['devbox', 'devbox-vpn'], installConsent: true, enabled: false }),
+        record({ id: 'h2', aliases: [] }),
+      ],
+    });
+    await directory.load();
+    expect(directory.installTarget('h1')).toEqual({ alias: 'devbox', installConsent: true });
+    expect(directory.installTarget('h2')).toBeNull();
+    expect(directory.installTarget('missing')).toBeNull();
   });
 
   it('records install consent', async () => {

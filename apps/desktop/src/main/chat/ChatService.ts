@@ -3510,7 +3510,7 @@ export class ChatService {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     const decisionScope = expectedScope;
-    this.deps.approvals?.forgetSession(sessionId);
+    const approvalsForgotten = this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.livePlans.delete(sessionId);
     this.contextNotices.forget(sessionId);
@@ -3531,6 +3531,7 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
     await forgetSessionWrites(sessionId);
+    await approvalsForgotten;
     await removeScratchDirectory(sessionId).catch(error =>
       this.deps.logger.warn(`SCRATCH: could not remove the scratch folder: ${String(error)}`)
     );
@@ -5174,6 +5175,8 @@ export class ChatService {
         modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
+      // Before any tool runs: a browser tool checks its standing consent without going through awaitApproval.
+      await this.deps.approvals?.ready(session.id);
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
@@ -8824,13 +8827,15 @@ export class ChatService {
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
     const patterns = prompt.always?.commands.map(command => command.pattern);
-    // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
-    // the model is more likely stuck than making progress, and this is the point to find out.
-    const stuck = looping && mode === 'auto';
+    // The same effectful call a third time in a row is not auto-approved by 'auto': the model is
+    // more likely stuck than making progress, and this is the point to find out. It replaces only
+    // the mode's own approval; an allow rule or "Allow in this chat" the user gave still runs it,
+    // and a call that only observes (prompt.repeatSafe) never counts as a loop.
+    const stuck = looping && mode === 'auto' && !prompt.repeatSafe;
     // A matching allow rule runs the call in every mode: the user wrote it knowing what the
-    // command does. A loop still stops, and the rule set itself keeps
-    // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
-    if (verdict.decision === 'allow' && !stuck) {
+    // command does. The rule set itself keeps the floors (irreversible, opaque commands,
+    // outside folders) - see PermissionRuleSet.
+    if (verdict.decision === 'allow') {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
@@ -8840,12 +8845,14 @@ export class ChatService {
     }
 
     const intrinsicAllowOnce = prompt.allowOnce;
+    // This conversation's "Allow in this chat" answers, kept from an earlier launch.
+    await gate.ready(sessionId);
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
+      if (prompt.irreversible || prompt.allowOnce || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
         allowanceKey,
@@ -8869,6 +8876,14 @@ export class ChatService {
       ) {
         return { decision: 'once' };
       }
+      // A command the scan cannot follow, allowed before with only its run-time words different.
+      if (
+        always?.shape &&
+        gate.coversShape(sessionId, always.namespace, always.shape) &&
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
+      ) {
+        return { decision: 'once' };
+      }
       return null;
     };
     const standing = standingAnswer();
@@ -8883,8 +8898,9 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || askedByRule);
+    // A looping call is decided on rules and allowances alone: the mode's own cover is what the guard withdraws.
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode, stuck) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -9012,7 +9028,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || intrinsicAllowOnce || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || intrinsicAllowOnce || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -9022,7 +9038,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode, stuck) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -10298,8 +10314,8 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'screen_capture looks at other apps on this computer: without a target it lists the open',
   'windows, and with a window title or id it captures that window as an image you and the user',
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
-  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
-  'capture asks the user first. For web pages use the browser tools.',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. A',
+  'whole-screen capture asks the user first. For web pages use the browser tools.',
 ];
 
 const SIMULATOR_GUIDANCE: readonly string[] = [
@@ -10307,8 +10323,8 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
   'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
   'the app with simulator_screenshot rather than predicting it from the code: the image is in',
-  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
-  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'points, so read tap coordinates straight off it for simulator_input. Whether it asks the user',
+  'first follows their approval mode. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
@@ -10986,7 +11002,9 @@ function decideParts(
   rules: PermissionRuleSet | undefined,
   gate: ApprovalGate,
   sessionId: string,
-  mode: ChatApprovalMode
+  mode: ChatApprovalMode,
+  // The repeat-call guard: the mode's own cover is withdrawn, rules and allowances still count.
+  withoutModeCover = false
 ): PartDecision | null {
   const always = prompt.always;
   if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
@@ -10999,7 +11017,7 @@ function decideParts(
     const covering = byRule?.[index] ?? null;
     if (covering) rule ??= covering;
     else if (partAllowed(allowed, part)) allowance = true;
-    else if (!modeCovers(mode, part)) uncovered.push(part);
+    else if (withoutModeCover || !modeCovers(mode, part)) uncovered.push(part);
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);

@@ -14,6 +14,7 @@
 
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
+    static let artifacts: any ArtifactsAPI = FixtureArtifactsAPI()
     static let studio: any StudioAPI = FixtureStudioAPI()
     /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
     static let frameUploader = FrameUploader(
