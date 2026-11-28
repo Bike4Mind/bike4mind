@@ -6,7 +6,6 @@ import {
   IBriefcasePromptRepository,
   ExecutionMode,
   CATALOG_SUBQUERY_LIMIT,
-  B4MLLMToolsList,
   PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -126,9 +125,9 @@ const BriefcasePromptSchema = new mongoose.Schema<IBriefcasePromptDocument>(
     },
     // Entitlement scoping for system prompts (mapped to user tags). Empty => all.
     visibilityScopes: [{ type: String }],
-    // Constrained to the known tool set so a stored prompt can't carry a tool that
-    // no longer exists (the API allowlist further excludes integration-gated tools).
-    requiredTools: [{ type: String, enum: B4MLLMToolsList }],
+    // Not an enum: names supplied by overlays are not in the built-in set, and a stored name that
+    // later leaves it must stay saveable. BriefcaseRequiredToolsSchema is the write-side gate.
+    requiredTools: [{ type: String }],
     schemaVersion: { type: Number, default: 1, required: true },
   },
   { timestamps: true }

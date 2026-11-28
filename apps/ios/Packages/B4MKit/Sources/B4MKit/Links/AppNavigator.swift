@@ -123,6 +123,12 @@ public final class AppNavigator {
     sessionPath = [.brief(id: nil)]
   }
 
+  /// Opens the Artifacts list (the drawer row).
+  public func openArtifacts() {
+    isDrawerOpen = false
+    sessionPath = [.artifacts]
+  }
+
   /// Pushes a conversation above the current screen (the brief's approval), so Back returns to that screen.
   public func pushSession(id: String) {
     isDrawerOpen = false
@@ -197,6 +203,8 @@ public enum SessionsDestination: Hashable, Sendable {
   case settings
   /// The Studio gallery (`Route.media`).
   case studio
+  /// The Artifacts list (the drawer row).
+  case artifacts
   /// A brief by id; a `nil` id is the latest brief (the drawer row).
   case brief(id: String?)
 

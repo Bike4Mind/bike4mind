@@ -34,6 +34,7 @@ import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport
 import { normalizeGeneration, type GenerationSettings } from '@shared/generation';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
+import type { ChatAllowanceStore, StoredChatAllowances } from './tools/chatAllowances';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import type { LocalUsageScope } from '@shared/usage';
 import {
@@ -148,6 +149,8 @@ const SUMMARY_INDEX = '.summary-index';
 const SUMMARY_INDEX_VERSION = 8;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
+/** Per-session "Allow in this chat" records (see tools/chatAllowances), likewise skipped by `list`. */
+const CHAT_ALLOWANCES = '.chat-allowances';
 const LIST_READ_CONCURRENCY = 16;
 
 interface IndexedSummary {
@@ -331,7 +334,7 @@ export interface PromptCacheTtlMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore implements SessionWritesStore {
+export class SessionStore implements SessionWritesStore, ChatAllowanceStore {
   private readonly studioFamilies = new StudioFamilyStore();
 
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
@@ -1542,12 +1545,86 @@ export class SessionStore implements SessionWritesStore {
     return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
   }
 
+  async loadChatAllowances(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.chatAllowancesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveChatAllowances(id: string, allowances: StoredChatAllowances): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.chatAllowancesPath(directory, id);
+    await mkdir(join(directory, CHAT_ALLOWANCES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(allowances), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteChatAllowances(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.chatAllowancesPath(directory, id), { force: true });
+  }
+
+  private chatAllowancesPath(directory: string, id: string): string {
+    return join(directory, CHAT_ALLOWANCES, basename(this.filePath(directory, id)));
+  }
+
   /**
    * Append a message, titling the session from the first user prompt so the sidebar stops
    * saying "New chat" as soon as there is something to call it.
    */
   async appendMessage(id: string, message: ChatMessage): Promise<ChatSession | null> {
     return this.serialize(id, async () => (await this.appendNow(id, message)) || null);
+  }
+
+  /**
+   * Write a message of a turn the web session ran (ChatService.sendLinkedTurn), under the id the
+   * importer gives that quest: replaced in place when a sync already brought it in, appended
+   * otherwise. The ids are imported ones, so the session stays synced. `running` sets or clears
+   * the import's running mark (left as is when absent): cleared once the turn is known to have
+   * ended, which the next sync would otherwise only do on its own schedule, and set when the
+   * server may still be writing it, until a sync sees the quest settle.
+   */
+  async putLinkedMessage(
+    id: string,
+    message: ChatMessage,
+    options: { running?: boolean } = {}
+  ): Promise<ChatSession | null> {
+    if (!isImportedMessageId(message.id)) throw new Error(`Not an imported message id: ${message.id}`);
+    return this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return null;
+      const session = await this.read(directory, id);
+      if (!session) return null;
+      const at = session.messages.findIndex(existing => existing.id === message.id);
+      if (at >= 0) session.messages[at] = message;
+      else session.messages.push(message);
+      session.updatedAt = new Date().toISOString();
+      if (options.running !== undefined) markLinkedRunning(session, options.running, session.updatedAt);
+      await this.write(directory, session);
+      return session;
+    });
+  }
+
+  /**
+   * Set the running mark of a synced web chat with no message to write: a send stopped before the
+   * server named its turn, which may still exist and run there. See putLinkedMessage.
+   */
+  async setLinkedRunning(id: string): Promise<void> {
+    await this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return;
+      const session = await this.read(directory, id);
+      if (!session?.importOrigin) return;
+      markLinkedRunning(session, true, new Date().toISOString());
+      await this.write(directory, session);
+    });
   }
 
   /** appendMessage, but `false` and nothing written when `admit` rejects the session as stored. */
@@ -1804,5 +1881,16 @@ export class SessionStore implements SessionWritesStore {
     const temporary = `${path}.tmp`;
     await writeFile(temporary, JSON.stringify(record, null, 2), 'utf8');
     await rename(temporary, path);
+  }
+}
+
+/** Stamp or drop a synced web chat's running mark, a lease that isLinkedReplyRunning reads. */
+function markLinkedRunning(session: ChatSession, running: boolean, at: string): void {
+  if (!session.importOrigin) return;
+  if (running) {
+    session.importOrigin = { ...session.importOrigin, runningSince: at };
+  } else if (session.importOrigin.runningSince) {
+    const { runningSince: _runningSince, ...origin } = session.importOrigin;
+    session.importOrigin = origin;
   }
 }

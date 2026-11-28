@@ -25,13 +25,17 @@ import {
   type ChatProject,
   type RecentFolder,
 } from '@shared/chat';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { hostChat } from '../host/hostChat';
+import { useHostEntries } from '../host/hostRegistry';
+import { useHostSessionCapabilities } from '../host/sessionCapabilities';
 import { describeChipRow, displayPath, type ChipRowState } from './chipState';
 import { useHomeDirectory } from './homeDirectory';
 import { BranchIcon, CheckIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
 import type { ProjectBindingController } from './useChat';
 import { useRecentFolders } from './useRecentFolders';
+import { HostFolderPicker } from './HostFolderPicker';
 
 /** Above this the branch list is long enough that filtering it beats scrolling it. */
 const FILTER_THRESHOLD = 8;
@@ -228,8 +232,13 @@ function ProjectChip({
   placement: ChipPlacement;
 }) {
   const { folder, unset } = binding.chips;
-  const recent = useRecentFolders();
+  const recent = useRecentFolders(binding.hostId);
   const [open, setOpen] = useState(false);
+  // The native dialog only sees this machine; another host's folders are browsed over its protocol.
+  const remote = binding.hostId !== LOCAL_HOST_ID;
+  const [browsing, setBrowsing] = useState(false);
+  const hosts = useHostEntries();
+  const hostLabel = hosts.find(entry => entry.hostId === binding.hostId)?.label ?? binding.hostId;
 
   const onOpenChange = (_event: unknown, wantsOpen: boolean): void => {
     if (wantsOpen) recent.refresh();
@@ -289,7 +298,8 @@ function ProjectChip({
         <MenuItem
           onClick={() => {
             setOpen(false);
-            void binding.pickDirectory();
+            if (remote) setBrowsing(true);
+            else void binding.pickDirectory();
           }}
           data-testid="session-chip-project-open-folder"
         >
@@ -299,6 +309,17 @@ function ProjectChip({
           Open folder...
         </MenuItem>
       </Menu>
+      {browsing && (
+        <HostFolderPicker
+          hostId={binding.hostId}
+          hostLabel={hostLabel}
+          onPick={path => {
+            setBrowsing(false);
+            choose(path);
+          }}
+          onClose={() => setBrowsing(false)}
+        />
+      )}
     </Dropdown>
   );
 }
@@ -775,7 +796,12 @@ const PENDING: BranchReading = { branches: [], elsewhere: {}, isRepository: true
  * the branch of a checkout this session never touches; asking the worktree for both would leave
  * the user no branch menu to escape with on a worktree that has since been deleted.
  */
-function useBranches(directory: string | null, workingDirectory: string | null, settledTurns: number): BranchReader {
+function useBranches(
+  hostId: string,
+  directory: string | null,
+  workingDirectory: string | null,
+  settledTurns: number
+): BranchReader {
   const [state, setState] = useState<KeyedReading>({ ...PENDING, of: null });
   const [reread, setReread] = useState(0);
   const refresh = useCallback(() => setReread(count => count + 1), []);
@@ -798,10 +824,10 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
     let current = true;
     const workspace = workingDirectory ?? directory;
     void Promise.all([
-      hostChat.inspectProject(directory),
+      hostChat.inspectProject(hostId, directory),
       // Swallowed rather than awaited strictly: a worktree that has been deleted must still
       // leave the branch list standing, since that menu is the only way back out of it.
-      workspace === directory ? null : hostChat.inspectProject(workspace).catch(() => null),
+      workspace === directory ? null : hostChat.inspectProject(hostId, workspace).catch(() => null),
     ]).then(([inspected, inWorkspace]) => {
       if (!current) return;
       setState({
@@ -818,7 +844,7 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
     // A reply that has ended is the other way HEAD moves: the agent's own tools run in this
     // working directory, and `git switch` from one of them never blurs the window, so the
     // focus listener above is blind to exactly the branch changes this app caused itself.
-  }, [directory, workingDirectory, key, reread, settledTurns]);
+  }, [hostId, directory, workingDirectory, key, reread, settledTurns]);
 
   return { ...(state.of === key ? state : PENDING), refresh };
 }
@@ -867,7 +893,9 @@ export function SessionChips({
   preparing?: boolean;
   layout?: ChipLayout;
 }) {
+  const contextFolders = useHostSessionCapabilities(binding.hostId).desktopChat;
   const { branches, elsewhere, isRepository, checkedOut, refresh } = useBranches(
+    binding.hostId,
     project?.directory ?? null,
     project?.workingDirectory ?? null,
     settledTurns
@@ -945,7 +973,10 @@ export function SessionChips({
           home={home}
           placement={placement}
         />
-        <ContextChips project={project} granted={grantedDirectories} binding={bound} placement={placement} />
+        {/* Extra folders are shared through Desktop's IPC, so a session on another host has none yet. */}
+        {contextFolders && (
+          <ContextChips project={project} granted={grantedDirectories} binding={bound} placement={placement} />
+        )}
       </Stack>
     </Box>
   );

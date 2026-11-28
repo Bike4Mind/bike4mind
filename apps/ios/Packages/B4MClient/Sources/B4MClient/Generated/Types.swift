@@ -87,6 +87,20 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/credits/transactions`.
     /// - Remark: Generated from `#/paths//api/v1/credits/transactions/get(listCreditTransactions)`.
     func listCreditTransactions(_ input: Operations.ListCreditTransactions.Input) async throws -> Operations.ListCreditTransactions.Output
+    /// List artifacts
+    ///
+    /// Lists the artifacts you own, newest first, excluding deleted ones. Artifacts shared with you are not listed, though `GET /api/v1/artifacts/{id}` resolves them by id. Items carry `content: null`; fetch an artifact by id for its content. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/get(listArtifacts)`.
+    func listArtifacts(_ input: Operations.ListArtifacts.Input) async throws -> Operations.ListArtifacts.Output
+    /// Get an artifact
+    ///
+    /// Returns an artifact you own, one shared with you, or a public one, with its current version's content.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/{id}/get(getArtifact)`.
+    func getArtifact(_ input: Operations.GetArtifact.Input) async throws -> Operations.GetArtifact.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -230,6 +244,36 @@ extension APIProtocol {
     ) async throws -> Operations.ListCreditTransactions.Output {
         try await listCreditTransactions(Operations.ListCreditTransactions.Input(
             query: query,
+            headers: headers
+        ))
+    }
+    /// List artifacts
+    ///
+    /// Lists the artifacts you own, newest first, excluding deleted ones. Artifacts shared with you are not listed, though `GET /api/v1/artifacts/{id}` resolves them by id. Items carry `content: null`; fetch an artifact by id for its content. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/get(listArtifacts)`.
+    public func listArtifacts(
+        query: Operations.ListArtifacts.Input.Query = .init(),
+        headers: Operations.ListArtifacts.Input.Headers = .init()
+    ) async throws -> Operations.ListArtifacts.Output {
+        try await listArtifacts(Operations.ListArtifacts.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Get an artifact
+    ///
+    /// Returns an artifact you own, one shared with you, or a public one, with its current version's content.
+    ///
+    /// - Remark: HTTP `GET /api/v1/artifacts/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/artifacts/{id}/get(getArtifact)`.
+    public func getArtifact(
+        path: Operations.GetArtifact.Input.Path,
+        headers: Operations.GetArtifact.Input.Headers = .init()
+    ) async throws -> Operations.GetArtifact.Output {
+        try await getArtifact(Operations.GetArtifact.Input(
+            path: path,
             headers: headers
         ))
     }

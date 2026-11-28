@@ -30,7 +30,6 @@ describe('ChatService write gate', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let root: string;
-  let outside: string;
   let target: string;
   let grants: Parameters<NonNullable<ConstructorParameters<typeof ChatService>[0]['capabilities']>['grant']>[0][];
 
@@ -51,7 +50,6 @@ describe('ChatService write gate', () => {
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-write-gate-')));
-    outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-write-outside-')));
     target = join(root, 'notes.md');
     await writeFile(target, 'alpha\nbeta\ngamma\n', 'utf8');
 
@@ -146,11 +144,11 @@ describe('ChatService write gate', () => {
     expect(lastToolResult()).toMatchObject({ is_error: true, content: expect.stringMatching(/declined/) });
   });
 
-  // Refused, not prompted-around: a write outside the grant never reaches the user as a
+  // Refused, not prompted-around: a write outside the grant and the temp folders never reaches the user as a
   // dialog they could tire of and click through.
   it('refuses a write outside the granted folder without asking the user at all', async () => {
     await startTurn('write to my other folder');
-    streams[0].write(toolTurn('c1', 'file_write', { path: join(outside, 'x.txt'), content: 'nope\n' }));
+    streams[0].write(toolTurn('c1', 'file_write', { path: '/etc/b4m-outside-x.txt', content: 'nope\n' }));
     streams[0].write(frame('[DONE]'));
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });

@@ -1900,6 +1900,26 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     );
   }
 
+  /**
+   * `markFailed` that skips a terminal execution, so a late or repeated write cannot overwrite a
+   * finished run or its original error. Returns whether it wrote.
+   */
+  async markFailedIfActive(id: string, error: Parameters<AgentExecutionRepository['markFailed']>[1]): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES } },
+      {
+        $set: {
+          status: 'failed',
+          // `error.message` is required and runValidators rejects '' (e.g. `new Error()`), which would leave the run active.
+          error: { ...error, message: error.message || 'Unknown error' },
+          completedAt: new Date(),
+        },
+      },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async markAborted(id: string, partialResult?: unknown): Promise<void> {
     const update: Record<string, unknown> = {
       status: 'aborted',

@@ -253,7 +253,7 @@ const handler = adminApi({
           // No externalTools merge here on purpose: this admin test endpoint
           // hardcodes its tool list above and never requests premium overlay
           // tools. Add the premiumLlmTools merge if that ever changes.
-          await chatCompletion.process({ body: testBody, logger: req.logger });
+          await chatCompletion.process({ body: testBody, logger: req.logger, contributedToolNames: new Set<string>() });
           const completedQuest = await chatCompletion.db.quests.findById(quest.id);
           const performance = (
             completedQuest?.promptMeta as { performance?: { firstTokenTime?: number; firstChunkTime?: number } }

@@ -12,6 +12,12 @@ export type SshHostDirectoryOptions = {
   openTransport(alias: string): Promise<HostTransport>;
   /** The aliases of `~/.ssh/config`; only these can be added. */
   listConfigHosts(): Promise<SshConfigListing>;
+  /**
+   * Runs before each connection through `alias` and may refuse it by rejecting, as the connector
+   * would (in Desktop, HostProvisioner.beforeConnect). It is the connector's `prepare` step, so
+   * the time it takes is not charged to the connect timeout.
+   */
+  prepareConnection?(id: string, alias: string): Promise<void>;
   now?: () => number;
   newId?: () => string;
   log?: (message: string) => void;
@@ -109,6 +115,17 @@ export class SshHostDirectory {
     return { ...record };
   }
 
+  /**
+   * The alias the host's next connection goes through, and whether the user agreed to installs
+   * on it; null for a host that is not saved or has no alias left.
+   */
+  installTarget(id: string): { alias: string; installConsent: boolean } | null {
+    const record = this.records.find(candidate => candidate.id === id);
+    if (!record || record.aliases.length === 0) return null;
+    const index = (this.nextRoute.get(id) ?? 0) % record.aliases.length;
+    return { alias: record.aliases[index], installConsent: record.installConsent };
+  }
+
   /** Records whether the user agreed to install and update the host program on this host. */
   async setInstallConsent(id: string, consent: boolean): Promise<void> {
     this.require(id).installConsent = consent;
@@ -126,15 +143,28 @@ export class SshHostDirectory {
   }
 
   private connectorFor(id: string): HostConnector {
+    // prepare and connect pick the same alias: only a failure moves the host on to its next one.
+    const route = () => {
+      const record = this.records.find(candidate => candidate.id === id);
+      if (!record || record.aliases.length === 0) {
+        throw new HostConnectError(lostWith('No SSH alias in ~/.ssh/config reaches this host any more'));
+      }
+      const index = (this.nextRoute.get(id) ?? 0) % record.aliases.length;
+      return { alias: record.aliases[index], advance: () => this.nextRoute.set(id, index + 1) };
+    };
     return {
-      connect: async () => {
-        const record = this.records.find(candidate => candidate.id === id);
-        if (!record || record.aliases.length === 0) {
-          throw new HostConnectError(lostWith('No SSH alias in ~/.ssh/config reaches this host any more'));
+      prepare: async () => {
+        if (!this.options.prepareConnection) return;
+        const { alias, advance } = route();
+        try {
+          await this.options.prepareConnection(id, alias);
+        } catch (error) {
+          advance();
+          throw error;
         }
-        const index = (this.nextRoute.get(id) ?? 0) % record.aliases.length;
-        const alias = record.aliases[index];
-        const advance = () => this.nextRoute.set(id, index + 1);
+      },
+      connect: async () => {
+        const { alias, advance } = route();
         let transport: HostTransport;
         try {
           transport = await this.options.openTransport(alias);

@@ -345,6 +345,8 @@ export interface BuildSharedToolsOptions {
    * as `sessionDisabledTools`; callers still filter the returned array themselves.
    */
   orgToolPolicy?: ReadOrgModelPolicy;
+  /** Names the org policy governs beyond the built-in enum (the premium tool map's keys). */
+  contributedToolNames?: ReadonlySet<string>;
 }
 
 /** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
@@ -644,7 +646,8 @@ export function buildSharedTools(
     (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
       tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
     ),
-    options.orgToolPolicy
+    options.orgToolPolicy,
+    options.contributedToolNames
   ).tools;
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;

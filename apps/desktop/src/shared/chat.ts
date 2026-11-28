@@ -363,9 +363,10 @@ export interface ChatToolDetail {
 }
 
 /**
- * 'always' repeats the approval for identical later calls in the SAME conversation, and is
- * forgotten when the app exits. It is matched on the exact request - an approved `git status`
- * does not carry over to `git status; rm -rf ~`.
+ * 'always' repeats the approval for identical later calls in the SAME conversation, kept with
+ * that conversation across restarts and dropped when it is deleted. It is matched on the exact
+ * request, or for a shell command on the prefix patterns or command shape it was derived into
+ * (see ApprovalGate) - an approved `git status` does not carry over to `git status; rm -rf ~`.
  *
  * 'redirect' is NOT a refusal, and the difference is the whole point of it: the user wants the
  * work done, just in the conversation they are already in rather than by the tool. A denial
@@ -772,6 +773,9 @@ export interface ChatChildWaiting {
   /** The parked call, e.g. "bash gh pr merge 12". Withheld when a device-local child reports to a hosted parent. */
   summary?: string;
 }
+
+/** Marks a prompt the renderer drew before main stored it; main assigns the real id. */
+export const OPTIMISTIC_ID_PREFIX = 'pending-';
 
 export interface ChatMessage {
   id: string;
@@ -1561,6 +1565,11 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  /**
+   * The host the renderer listed this session from. Stamped by the client when a row arrives
+   * (renderer/src/host/sessionDirectory.ts); a host never sends it. Absent means the local host.
+   */
+  hostId?: string;
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
   messageCount: number;

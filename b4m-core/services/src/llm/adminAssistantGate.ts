@@ -30,11 +30,17 @@ export function resolveAdminAssistantTools(input: {
   if (!open) {
     return { open: false, enable: [], deny: [...ADMIN_ASSISTANT_TOOL_NAMES], disableUserIntegrations: false };
   }
+  const adminToolNames: ReadonlySet<string> = new Set(ADMIN_ASSISTANT_TOOL_NAMES);
   const available = ADMIN_ASSISTANT_TOOL_NAMES.filter(name => input.availableToolNames.has(name));
   return {
     open: true,
     enable: [...available, 'navigate_view'],
-    deny: B4MLLMToolsList.filter(name => name !== 'navigate_view'),
+    deny: [
+      ...B4MLLMToolsList.filter(name => name !== 'navigate_view'),
+      ...[...input.availableToolNames].filter(
+        name => name !== 'navigate_view' && !adminToolNames.has(name) && !B4MLLMToolsList.some(b => b === name)
+      ),
+    ],
     disableUserIntegrations: true,
   };
 }

@@ -18,6 +18,7 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 }));
 
 const h = vi.hoisted(() => ({
+  canStillManage: vi.fn(),
   // repos + collaborators
   connFindById: vi.fn(),
   updateHealth: vi.fn(),
@@ -230,6 +231,9 @@ vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess', () => ({
+  connectingUserCanStillManage: h.canStillManage,
+}));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
 import {
@@ -291,6 +295,7 @@ describe('driveLakeIngest consumer', () => {
     // claimForSync/adoptSyncClaim/renewSyncClaim all return the freshly-minted or -rotated claim
     // token (or null on failure) rather than a bare boolean - see
     // OrgGoogleDriveConnection.ingestClaimToken.
+    h.canStillManage.mockResolvedValue(true);
     h.claimForSync.mockResolvedValue('token-claim');
     h.adoptSyncClaim.mockResolvedValue('token-adopt');
     h.renewSyncClaim.mockResolvedValue('token-renew');
@@ -1943,6 +1948,16 @@ describe('driveLakeIngest consumer', () => {
       // either release leaves the suite green.
       if (releases) expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-adopt', null);
       else expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+    });
+
+    it('stops syncing when the connecting user can no longer manage the lake', async () => {
+      h.canStillManage.mockResolvedValue(false);
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.canStillManage).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), expect.anything());
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.stringContaining('Reconnect'));
+      expect(h.createFabFile).not.toHaveBeenCalled();
     });
 
     it('settles an adopted batch when the target lake is archived mid-chain', async () => {

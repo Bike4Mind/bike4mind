@@ -357,7 +357,8 @@ export const createInvite = async (
   const build: Omit<IInvite, 'id'> = {
     // We suggest that it's a FabFile so that permissions is a valid/required field
     type: type as InviteType,
-    documentId: id,
+    // The loaded document's id, not the caller's spelling: invite readers match documentId exactly.
+    documentId: doc.id,
     remaining: resolvedAvailable,
     ...rest,
     recipients: {

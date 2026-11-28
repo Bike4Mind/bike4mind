@@ -1510,6 +1510,11 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
 
 const has = (read: GitArgs, ...names: string[]): boolean => names.some(name => read.given.has(name));
 
+/** The step a merge, rebase, cherry-pick or revert in progress takes instead of starting one. */
+type SequencerStep = 'continue' | 'skip' | 'abort' | 'quit';
+const SEQUENCER_STEPS: readonly SequencerStep[] = ['continue', 'skip', 'abort', 'quit'];
+const SEQUENCED = new Set(['merge', 'rebase', 'cherry-pick', 'revert']);
+
 /** The options of the git subcommands that write the work tree from a commit; any other option leaves the command unread. */
 const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
   checkout: {
@@ -1581,6 +1586,9 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
       'overwrite-ignore',
       'rerere-autoupdate',
       'no-rerere-autoupdate',
+      'continue',
+      'abort',
+      'quit',
     ],
     long: ['message', 'file', 'strategy', 'strategy-option', 'cleanup', 'into-name'],
   },
@@ -1596,13 +1604,14 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
       'keep-redundant-commits',
       'rerere-autoupdate',
       'no-rerere-autoupdate',
+      ...SEQUENCER_STEPS,
     ],
     long: ['mainline', 'strategy', 'strategy-option', 'cleanup', 'empty'],
   },
   revert: {
     letters: 'ns',
     valued: 'mX',
-    flags: ['no-commit', 'signoff', 'reference', 'rerere-autoupdate', 'no-rerere-autoupdate'],
+    flags: ['no-commit', 'signoff', 'reference', 'rerere-autoupdate', 'no-rerere-autoupdate', ...SEQUENCER_STEPS],
     long: ['mainline', 'strategy', 'strategy-option', 'cleanup'],
   },
   reset: {
@@ -1669,6 +1678,7 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
       'no-update-refs',
       'rebase-merges',
       'no-rebase-merges',
+      ...SEQUENCER_STEPS,
     ],
     long: ['onto', 'strategy', 'strategy-option', 'empty', 'whitespace'],
   },
@@ -2311,6 +2321,134 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   return { files, trees, links: false, unread: false };
 }
 
+/** Whether one of `targets` names no commit in the repository at `cwd` now; false when git cannot tell. */
+async function namesNoCommit(cwd: string, targets: readonly string[]): Promise<boolean> {
+  for (const target of targets) {
+    // A `:/text` search would read the suffix below as part of its text.
+    if (!REVISION.test(target) || target.startsWith('-') || target.includes(':')) return false;
+    const found = await gitRun(cwd, ['rev-parse', '--verify', '-q', `${target}^{commit}`]);
+    if (found === null || found.code > 1) return false;
+    if (found.code === 1) return true;
+  }
+  return false;
+}
+
+function sequencerStep(read: GitArgs): SequencerStep | 'several' | null {
+  const steps = SEQUENCER_STEPS.filter(step => read.given.has(step));
+  if (steps.length > 1) return 'several';
+  return steps[0] ?? null;
+}
+
+const OBJECT_NAME = /^[0-9a-f]{4,64}$/;
+// Rebase todo lines that apply a commit, and lines that apply nothing. Any other (exec, label, reset, merge,
+// update-ref) runs a command or moves to a tree the scan does not read.
+const REBASE_PICK = /^(?:pick|p|reword|r|edit|e|squash|s|fixup|f)(?:\s+-[cC])?\s+([0-9a-f]{4,64})(?:\s|$)/;
+const REBASE_STILL = /^(?:drop|d|break|b|noop)(?:\s|$)/;
+const SEQUENCER_PICK = /^(pick|p|revert|r)\s+([0-9a-f]{4,64})(?:\s|$)/;
+
+/**
+ * What a step of the merge, rebase, cherry-pick or revert in progress writes, read from the state git keeps for it:
+ * the tree it returns to on --abort, or the commits still to apply on --continue and --skip. Without such a state git
+ * stops with the tree untouched.
+ */
+async function sequencerWrites(
+  sub: string,
+  step: SequencerStep,
+  cwd: string,
+  against: (targets: readonly (string | null)[], overwrites?: boolean) => Promise<TreeWrite>
+): Promise<TreeWrite> {
+  if (step === 'quit') return NO_TREE;
+  if (wslLocation(cwd) !== null) return UNREAD_TREE;
+  const gitDir = (await gitQuery(cwd, ['rev-parse', '--absolute-git-dir']))?.replace(/\r?\n$/, '');
+  if (!gitDir || !isAbsolute(gitDir)) return UNREAD_TREE;
+  const present = (name: string): Promise<boolean | null> =>
+    lstat(join(gitDir, name)).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' ? false : null)
+    );
+  const objectIn = async (name: string): Promise<string | null> => {
+    const text = (await readSmall(join(gitDir, name)))?.trim() ?? '';
+    return OBJECT_NAME.test(text) ? text : null;
+  };
+  /** The commits the todo list `name` still applies; null when a line does something else. */
+  const todo = async (
+    name: string,
+    line: RegExp,
+    target: (match: RegExpExecArray) => string
+  ): Promise<string[] | null> => {
+    const text = await readSmall(join(gitDir, name));
+    if (text === null) return null;
+    const targets: string[] = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const entry = raw.trim();
+      if (entry === '' || entry.startsWith('#') || (sub === 'rebase' && REBASE_STILL.test(entry))) continue;
+      const match = line.exec(entry);
+      if (match === null) return null;
+      targets.push(target(match));
+    }
+    return targets;
+  };
+  // A skipped step first puts back the commit that stopped, as reset --merge would.
+  const resume = async (targets: string[] | null): Promise<TreeWrite> => {
+    if (targets === null) return UNREAD_TREE;
+    return step === 'skip' ? against([...targets, 'HEAD'], true) : against(targets);
+  };
+  switch (sub) {
+    case 'merge': {
+      // The merge in progress leaves HEAD where it was, and --continue only commits the index; an autostash is
+      // applied on top of either.
+      const autostash = await present('MERGE_AUTOSTASH');
+      if (autostash !== false) return UNREAD_TREE;
+      return step === 'abort' ? against(['HEAD'], true) : step === 'continue' ? NO_TREE : UNREAD_TREE;
+    }
+    case 'cherry-pick':
+    case 'revert': {
+      const sequence = await present('sequencer/todo');
+      if (sequence === null) return UNREAD_TREE;
+      if (step === 'abort') {
+        if (!sequence) return against(['HEAD'], true);
+        const head = await objectIn('sequencer/head');
+        return head === null ? UNREAD_TREE : against([head], true);
+      }
+      if (!sequence) return step === 'skip' ? against(['HEAD'], true) : NO_TREE;
+      // Saved options that sign, pick a merge program or apply a parent other than the first are not read here.
+      const opts = await readSmall(join(gitDir, 'sequencer/opts'));
+      if (
+        opts === null
+          ? (await present('sequencer/opts')) !== false
+          : /^\s*(gpg-sign|strategy|mainline)\s*=/im.test(opts)
+      ) {
+        return UNREAD_TREE;
+      }
+      return resume(
+        await todo('sequencer/todo', SEQUENCER_PICK, match =>
+          match[1]?.startsWith('r') ? `${match[2]}^` : (match[2] as string)
+        )
+      );
+    }
+    case 'rebase': {
+      const [merging, applying, autostash] = await Promise.all([
+        present('rebase-merge'),
+        present('rebase-apply'),
+        present('rebase-merge/autostash'),
+      ]);
+      // The apply backend replays patches, and an autostash is applied on top: neither is read here.
+      if (merging === null || applying !== false || autostash !== false) return UNREAD_TREE;
+      if (!merging) return NO_TREE;
+      if (step === 'abort') {
+        const head = await objectIn('rebase-merge/orig-head');
+        return head === null ? UNREAD_TREE : against([head], true);
+      }
+      // A signing or merge-strategy option saved for the rest of the rebase is not read here.
+      const saved = await Promise.all([present('rebase-merge/gpg_sign_opt'), present('rebase-merge/strategy')]);
+      if (saved.some(found => found !== false)) return UNREAD_TREE;
+      return resume(await todo('rebase-merge/git-rebase-todo', REBASE_PICK, match => match[1] as string));
+    }
+    default:
+      return UNREAD_TREE;
+  }
+}
+
 /**
  * What a git subcommand that rewrites the work tree from a commit writes, found by asking git what differs from
  * that commit; null for one that does not. A target git cannot resolve, an option outside TREE_GRAMMARS, or a
@@ -2340,7 +2478,17 @@ async function gitTreeWrites(
     const root = await top();
     return root === null ? UNREAD_TREE : treeDiff(root, targets, [], root, overwrites);
   };
+  // git resolves every target before it writes, so one naming no commit now stops it with the tree untouched.
+  const againstNamed = async (named: readonly string[], targets = named): Promise<TreeWrite> =>
+    !moved && !read.unknown && (await namesNoCommit(cwd, named)) ? NO_TREE : against(targets);
   const previous = (target: string): string => (target === '-' ? '@{-1}' : target);
+  const step = SEQUENCED.has(sub) ? sequencerStep(read) : null;
+  if (step !== null) {
+    if (step === 'several' || moved || read.unknown || read.positionals.length + read.paths.length > 0) {
+      return UNREAD_TREE;
+    }
+    return sequencerWrites(sub, step, cwd, against);
+  }
   switch (sub) {
     case 'checkout':
     case 'switch': {
@@ -2355,14 +2503,17 @@ async function gitTreeWrites(
         const tracked = await upstreamTracked(cwd);
         if (tracked !== true) return tracked === null ? UNREAD_TREE : NO_TREE;
       }
-      return against(read.positionals.length > 0 ? read.positionals : ['@{u}']);
+      return againstNamed(read.positionals.length > 0 ? read.positionals : ['@{u}']);
     }
     case 'cherry-pick':
     case 'revert': {
       if (read.positionals.length === 0 || read.positionals.some(target => target.includes('..'))) return UNREAD_TREE;
       // A revert undoes a commit, so the tree it moves toward is the commit's parent.
       const parent = String(read.given.get('m') ?? read.given.get('mainline') ?? '');
-      return against(sub === 'revert' ? read.positionals.map(target => `${target}^${parent}`) : read.positionals);
+      return againstNamed(
+        read.positionals,
+        sub === 'revert' ? read.positionals.map(target => `${target}^${parent}`) : read.positionals
+      );
     }
     case 'reset': {
       const target = read.positionals[0] ?? 'HEAD';
@@ -2392,14 +2543,17 @@ async function gitTreeWrites(
         if (tracked !== true) return tracked === null ? UNREAD_TREE : NO_TREE;
       }
       const base = typeof onto === 'string' ? onto : (upstream ?? '@{u}');
-      return against(branch === undefined ? [base] : [base, branch]);
+      return againstNamed(branch === undefined ? [base] : [base, branch]);
     }
     case 'stash': {
       const [action = 'push', ...rest] = read.positionals;
       if (['list', 'show', 'create', 'drop', 'clear', 'store'].includes(action)) return NO_TREE;
       if (action === 'apply' || action === 'pop') {
-        const ref = rest[0] ?? 'stash@{0}';
+        const given = rest[0] ?? '0';
+        // git reads a bare number as that stash entry.
+        const ref = /^\d+$/.test(given) ? `stash@{${given}}` : given;
         if (!REVISION.test(ref)) return UNREAD_TREE;
+        if (!moved && !read.unknown && (await namesNoCommit(cwd, [ref]))) return NO_TREE;
         // A stash holding untracked files writes them too, which the diff below does not list.
         const untracked = await gitRun(cwd, ['rev-parse', '--verify', '-q', `${ref}^3`]);
         if (untracked === null || untracked.code === 0) return UNREAD_TREE;
