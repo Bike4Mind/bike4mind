@@ -225,6 +225,8 @@ export type FakeRemoteHostOptions = {
   connected?: boolean | 'connecting';
   /** The exact connection state to start in (needs sign-in, failed, ...); wins over `connected`. */
   state?: HostConnectionState;
+  /** Whether the user already agreed to installs on it, as main records. */
+  installConsent?: boolean;
   /** Methods it fails with an internal error while connected. */
   failing?: readonly string[];
   /** Answers any other method; undefined fails it as one the host does not serve. */
@@ -240,6 +242,8 @@ export type FakeRemoteHost = {
   setConnected(connected: boolean | 'connecting'): void;
   /** Moves the host to any connection state, as main would push it. */
   setState(state: HostConnectionState): void;
+  /** Main's record of the user's consent to installs, pushed with the host list. */
+  setInstallConsent(consent: boolean): void;
   /** Holds every `method` request until the returned release is called. */
   hold(method: string): () => void;
   /** A notification from this host, delivered as its bridge would. */
@@ -405,6 +409,8 @@ export function chatBackedHostBridge(options: BridgeHostOptions = {}): ChatBacke
     },
     async install(hostId) {
       management.installs.push(hostId);
+      // Installing records the consent in main, which shows on the host's entry.
+      if (remote?.controls.hostId === hostId) remote.controls.setInstallConsent(true);
       return management.installResult;
     },
     async update(hostId, { force }) {
@@ -485,6 +491,7 @@ function createFakeRemote(
   const { hostId } = options;
   let state: boolean | 'connecting' = options.connected ?? true;
   let exact: HostConnectionState | null = options.state ?? null;
+  let installConsent = options.installConsent ?? false;
   const held = new Map<string, Promise<void>>();
   const seqs = new Map<string, number>();
   const subscribed = new Set<string>();
@@ -497,6 +504,10 @@ function createFakeRemote(
       state = next;
       exact = null;
       if (next !== true) subscribed.clear();
+      announce();
+    },
+    setInstallConsent(consent) {
+      installConsent = consent;
       announce();
     },
     setState(next) {
@@ -528,6 +539,7 @@ function createFakeRemote(
     hostId,
     label: options.label ?? hostId,
     kind: 'remote',
+    installConsent,
     state:
       exact ??
       (state === true

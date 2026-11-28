@@ -12,6 +12,7 @@ import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
 import Radio from '@mui/joy/Radio';
 import RadioGroup from '@mui/joy/RadioGroup';
+import Typography from '@mui/joy/Typography';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import type { HostEntry } from '@shared/hostConnection';
 import { useHostEntries } from '../host/hostRegistry';
@@ -81,6 +82,9 @@ function AddProjectDialog({
               />
             ))}
           </RadioGroup>
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 1.5 }} data-testid="add-project-note">
+            A new session opens on the folder. The project shows in the sidebar once you send its first message.
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => void next()} data-testid="add-project-continue-btn">

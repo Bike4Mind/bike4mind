@@ -2,6 +2,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { vi } from 'vitest';
+import { resetDesktopVersion } from '../host/useDesktopVersion';
 import { desktopTheme } from '../theme';
 import type { ChatBackedHostBridge } from './chatBackedHostBridge';
 
@@ -22,6 +23,10 @@ window.getComputedStyle = ((element: Element) => (element as HTMLElement).style)
 export const DESKTOP_VERSION = '2.0.0';
 
 export type MountedHostUi = {
+  /** How many times the renderer asked main for the app version. */
+  versionReads: ReturnType<typeof vi.fn>;
+  /** Desktop sign-in, as the signed-out recovery calls it. */
+  signInApp: ReturnType<typeof vi.fn>;
   openExternal: ReturnType<typeof vi.fn>;
   pickProjectDirectory: ReturnType<typeof vi.fn>;
   unmount: () => Promise<void>;
@@ -29,12 +34,16 @@ export type MountedHostUi = {
 
 /** Mounts `ui` in the Joy theme against a faked `window.b4m` whose host bridge is `bridge`. */
 export async function mountHostUi(ui: ReactNode, bridge: ChatBackedHostBridge): Promise<MountedHostUi> {
+  resetDesktopVersion();
+  const versionReads = vi.fn(async () => ({ currentVersion: DESKTOP_VERSION }));
+  const signInApp = vi.fn(async () => undefined);
   const openExternal = vi.fn(async () => undefined);
   const pickProjectDirectory = vi.fn(async (): Promise<string | null> => null);
   Object.assign(window, {
     b4m: {
       host: bridge,
-      update: { getState: async () => ({ currentVersion: DESKTOP_VERSION }) },
+      update: { getState: versionReads },
+      auth: { signIn: signInApp },
       shell: { openExternal },
       chat: { pickProjectDirectory },
     },
@@ -46,6 +55,8 @@ export async function mountHostUi(ui: ReactNode, bridge: ChatBackedHostBridge): 
     root.render(<CssVarsProvider theme={desktopTheme}>{ui}</CssVarsProvider>);
   });
   return {
+    versionReads,
+    signInApp,
     openExternal,
     pickProjectDirectory,
     async unmount() {

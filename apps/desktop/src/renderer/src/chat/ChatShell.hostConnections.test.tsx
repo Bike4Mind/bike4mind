@@ -97,7 +97,9 @@ beforeEach(() => {
           ? { session: sessionOf(REMOTE), cursor: { epoch: 'test', seq: 0 } }
           : method === 'queue/list'
             ? { queued: [] }
-            : undefined,
+            : method === 'turn/send'
+              ? { ok: true }
+              : undefined,
     },
   });
   const namespaces: Record<string, unknown> = {
@@ -148,8 +150,8 @@ async function openRemoteSession() {
   await flush();
   await flush();
   const row = rowTitled('On the devbox');
-  if (!row) throw new Error('no remote row');
-  await act(async () => row.click());
+  expect(row).toBeDefined();
+  await act(async () => row?.click());
   await flush();
   await flush();
 }
@@ -161,13 +163,61 @@ describe('a session on a host that drops', () => {
     expect(find('composer-blocked-reason')).toBeNull();
   });
 
-  it('says why sending is off, keeps the draft box, and reconnects from the composer', async () => {
+  it('says why sending is off and reconnects from the composer', async () => {
     await openRemoteSession();
     await act(async () => bridge.remote?.setConnected(false));
     await flush();
     expect(find('composer-blocked-reason')?.textContent).toContain('Devbox is not connected');
     await act(async () => find('composer-blocked-action-btn')?.click());
     expect(bridge.management.connects).toEqual(['devbox']);
+  });
+
+  it('shows why Reconnect failed beside the reason instead of dropping the error', async () => {
+    await openRemoteSession();
+    await act(async () => bridge.remote?.setConnected(false));
+    await flush();
+    bridge.connect = async () => {
+      throw new Error('ssh: connection refused');
+    };
+    await act(async () => find('composer-blocked-action-btn')?.click());
+    await flush();
+    expect(find('composer-blocked-reason')?.textContent).toContain('ssh: connection refused');
+  });
+
+  it('sends the same draft with Enter while the host is connected, so the blocked case proves something', async () => {
+    await openRemoteSession();
+    const input = find('chat-composer-input') as HTMLTextAreaElement | null;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'go');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(bridge.remote?.requests.filter(request => request.method === 'turn/send')).toHaveLength(1);
+  });
+
+  it('keeps the typed draft when the host drops, and neither the button nor Enter sends it', async () => {
+    await openRemoteSession();
+    const input = find('chat-composer-input') as HTMLTextAreaElement | null;
+    expect(input).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'half a thought');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => bridge.remote?.setConnected(false));
+    await flush();
+
+    const box = find('chat-composer-input') as HTMLTextAreaElement | null;
+    expect(box?.value).toBe('half a thought');
+    expect((find('chat-send-btn') as HTMLButtonElement | null)?.disabled).toBe(true);
+    await act(async () => {
+      box?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(bridge.remote?.requests.filter(request => request.method === 'turn/send')).toEqual([]);
+    expect((find('chat-composer-input') as HTMLTextAreaElement | null)?.value).toBe('half a thought');
   });
 });
 

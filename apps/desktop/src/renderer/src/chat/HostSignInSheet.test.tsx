@@ -63,6 +63,36 @@ describe('host sign-in sheet', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it.each([
+    ['offline', { status: 'offline', reason: 'unreachable', lastSeenAt: null }],
+    ['failed', { status: 'failed', failure: { kind: 'sshFailed', detail: 'no route', stderrTail: '' } }],
+    [
+      'accountMismatch',
+      { status: 'accountMismatch', hostAccount: { userId: 'other', environmentUrl: 'https://x.test' } },
+    ],
+  ] as const)(
+    'stays open with the reason and a way back when the host drops to %s mid sign-in',
+    async (_name, state) => {
+      const { bridge, onClose } = await open([{ userCode: 'ABCD-1234', expiresIn: 60_000 }]);
+      await act(async () => bridge.remote?.setState(state));
+      expect(onClose).not.toHaveBeenCalled();
+      expect(byTestId('host-signin-interrupted')).not.toBeNull();
+      expect(byTestId('host-signin-code')).toBeNull();
+      await click('host-signin-reconnect-btn');
+      expect(bridge.management.connects).toEqual([HOST_ID]);
+    }
+  );
+
+  it('shows a connecting state, not a failure, while the host reconnects after approval', async () => {
+    const { bridge, onClose } = await open([{ userCode: 'ABCD-1234', expiresIn: 60_000 }]);
+    await act(async () => bridge.remote?.setState({ status: 'connecting' }));
+    expect(byTestId('host-signin-connecting')).not.toBeNull();
+    expect(byTestId('host-signin-interrupted')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => bridge.remote?.setState({ status: 'connected', info: fakeHostInfo(HOST_ID), latencyMs: 10 }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('says the code expired and gets a new one on retry', async () => {
     const { starts } = await open([
       { userCode: 'FIRST-0001', expiresIn: 30 },

@@ -10,7 +10,10 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { HostEntry } from '@shared/hostConnection';
+import { hostCommands, useHostCommandError } from '../host/hostCommands';
+import { hostStatusView } from '../host/hostPresentation';
 import { useHostSignIn, type HostSignIn } from '../host/useHostSignIn';
+import { useNow } from '../host/useNow';
 import { CopyMessageButton } from './CopyMessageButton';
 
 function SignInBody({ signIn }: { signIn: HostSignIn }) {
@@ -62,10 +65,35 @@ function SignInBody({ signIn }: { signIn: HostSignIn }) {
   );
 }
 
+/** The host left the sign-in without becoming connected: say where it is, and offer the way back. */
+function InterruptedBody({ entry }: { entry: HostEntry }) {
+  const now = useNow();
+  const commandError = useHostCommandError(entry.hostId);
+  const { status } = entry.state;
+  if (status === 'connecting' || status === 'reconnecting') {
+    return (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }} data-testid="host-signin-connecting">
+        <CircularProgress size="sm" />
+        <Typography level="body-sm">Connecting to {entry.label}</Typography>
+      </Stack>
+    );
+  }
+  const view = hostStatusView(entry.state, '', now);
+  return (
+    <Alert color="warning" data-testid="host-signin-interrupted">
+      <Stack spacing={0.5}>
+        <Typography level="title-sm">Signing in did not finish: {view.label.toLowerCase()}</Typography>
+        {view.detail && <Typography level="body-xs">{view.detail}</Typography>}
+        {commandError && <Typography level="body-xs">{commandError}</Typography>}
+      </Stack>
+    </Alert>
+  );
+}
+
 /**
  * Signs a host in to the user's account with the device flow: the host mints a code, the user
- * approves it in a browser on this computer. Closes itself when main reports the host no longer
- * needs sign-in.
+ * approves it in a browser on this computer. Closes itself only once the host is connected; a
+ * host that drops meanwhile keeps the sheet open with the reason and a way to reconnect.
  */
 export function HostSignInSheet({
   entry,
@@ -87,19 +115,30 @@ export function HostSignInSheet({
   }, [signIn]);
 
   const stillNeedsSignIn = entry.state.status === 'needsSignIn';
+  const connected = entry.state.status === 'connected';
   useEffect(() => {
-    if (!stillNeedsSignIn) onClose();
-  }, [stillNeedsSignIn, onClose]);
+    if (connected) onClose();
+  }, [connected, onClose]);
 
-  const retryable = signIn.flow.status === 'expired' || signIn.flow.status === 'failed';
+  const retryable = stillNeedsSignIn && (signIn.flow.status === 'expired' || signIn.flow.status === 'failed');
+  const status = entry.state.status;
+  const canReconnect = !stillNeedsSignIn && status !== 'connecting' && status !== 'reconnecting' && !connected;
   return (
     <Modal open onClose={onClose} data-testid="host-signin-sheet">
       <ModalDialog size="md" sx={{ width: 420, maxWidth: 'calc(100vw - 32px)' }}>
         <DialogTitle>Sign in on {entry.label}</DialogTitle>
         <DialogContent>
-          <SignInBody signIn={signIn} />
+          {stillNeedsSignIn ? <SignInBody signIn={signIn} /> : <InterruptedBody entry={entry} />}
         </DialogContent>
         <DialogActions>
+          {canReconnect && (
+            <Button
+              onClick={() => void hostCommands.reconnect(entry.hostId, false)}
+              data-testid="host-signin-reconnect-btn"
+            >
+              Reconnect
+            </Button>
+          )}
           {retryable && (
             <Button onClick={signIn.start} data-testid="host-signin-retry-btn">
               Get a new code

@@ -9,26 +9,25 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { HostEntry, HostRunningWork } from '@shared/hostConnection';
+import { hostCommands, useHostCommandError } from '../host/hostCommands';
 import { hostActions, type HostAction } from '../host/hostPresentation';
 import { hostOperations, useHostOperation } from '../host/hostOperations';
 import { useDesktopVersion } from '../host/useDesktopVersion';
 import { HostSignInSheet } from './HostSignInSheet';
 
 const ACTION_LABEL: Record<HostAction, string> = {
-  add: 'Add',
   connect: 'Connect',
   reconnect: 'Reconnect',
   disconnect: 'Disconnect',
   install: 'Install',
   update: 'Update',
   signIn: 'Sign in',
+  signInApp: 'Sign in',
   remove: 'Remove',
 };
 
 /** Actions that stop something are never the highlighted one. */
 const QUIET: ReadonlySet<HostAction> = new Set(['disconnect', 'remove']);
-
-const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 function describeWork(work: HostRunningWork): string {
   if (work.kind === 'unknown') {
@@ -138,6 +137,10 @@ function RemoveConfirmDialog({
   );
 }
 
+const unreachable = (action: never): never => {
+  throw new Error(`Unhandled host action ${String(action)}`);
+};
+
 type Dialog = 'consent' | 'signIn' | 'remove' | 'update' | null;
 
 export type HostActionsController = {
@@ -158,21 +161,11 @@ export function useHostActions(entry: HostEntry, allowed?: readonly HostAction[]
   const desktopVersion = useDesktopVersion();
   const operation = useHostOperation(entry.hostId);
   const [dialog, setDialog] = useState<Dialog>(null);
-  // Consent is asked for once per host in a window: a retry after a failed install does not re-ask.
-  const [consented, setConsented] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const attempt = useCallback(async (work: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await work();
-    } catch (failure) {
-      setError(message(failure));
-    }
-  }, []);
+  const error = useHostCommandError(entry.hostId);
+  // Consent is main's record, so a second install on this host does not ask and another host does.
+  const consented = entry.installConsent === true;
 
   const install = useCallback(() => {
-    setConsented(true);
     setDialog(null);
     void hostOperations.install(entry.hostId);
   }, [entry.hostId]);
@@ -190,24 +183,23 @@ export function useHostActions(entry: HostEntry, allowed?: readonly HostAction[]
     const { hostId } = entry;
     switch (action) {
       case 'connect':
-        return void attempt(() => window.b4m.host.connect(hostId));
+        return void hostCommands.connect(hostId);
       case 'reconnect':
-        return void attempt(async () => {
-          if (entry.state.status === 'connected') await window.b4m.host.disconnect(hostId);
-          await window.b4m.host.connect(hostId);
-        });
+        return void hostCommands.reconnect(hostId, entry.state.status === 'connected');
       case 'disconnect':
-        return void attempt(() => window.b4m.host.disconnect(hostId));
+        return void hostCommands.disconnect(hostId);
       case 'install':
         return consented ? install() : setDialog('consent');
       case 'update':
         return void update(false);
       case 'signIn':
         return setDialog('signIn');
+      case 'signInApp':
+        return void hostCommands.signInApp(hostId);
       case 'remove':
         return setDialog('remove');
-      case 'add':
-        return;
+      default:
+        return unreachable(action);
     }
   };
 
@@ -222,7 +214,7 @@ export function useHostActions(entry: HostEntry, allowed?: readonly HostAction[]
           label={entry.label}
           onConfirm={() => {
             setDialog(null);
-            void attempt(() => window.b4m.host.remove(entry.hostId));
+            void hostCommands.remove(entry.hostId);
           }}
           onCancel={() => setDialog(null)}
         />
@@ -248,13 +240,10 @@ export function HostActionButtons({
   controller,
   size = 'sm',
   testIdPrefix = 'host-action',
-  onRan,
 }: {
   controller: HostActionsController;
   size?: 'sm' | 'md';
   testIdPrefix?: string;
-  /** Called after a button is pressed, so a popup holding the buttons can close. */
-  onRan?: () => void;
 }) {
   const { actions, busy, error, run } = controller;
   return (
@@ -267,10 +256,7 @@ export function HostActionButtons({
             variant={index === 0 && !QUIET.has(action) ? 'solid' : 'outlined'}
             color={action === 'remove' ? 'danger' : 'primary'}
             disabled={busy}
-            onClick={() => {
-              run(action);
-              onRan?.();
-            }}
+            onClick={() => run(action)}
             data-testid={`${testIdPrefix}-${action}-btn`}
           >
             {ACTION_LABEL[action]}

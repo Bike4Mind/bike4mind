@@ -124,6 +124,14 @@ describe('sidebar with remote hosts', () => {
     expect(byTestId('chat-sessions-empty')).toBeNull();
   });
 
+  it('draws no skeleton for a host that is not connecting, so a stuck host never loads forever', async () => {
+    const failed = { status: 'failed', failure: { kind: 'sshFailed', detail: 'no route', stderrTail: '' } } as const;
+    const bridge = chatBackedHostBridge({ remote: { hostId: HOST_ID, state: failed } });
+    mounted = await mountHostUi(list([], new Map([[HOST_ID, 'stale']])), bridge);
+    await settle();
+    expect(byTestId('host-list-placeholder')).toBeNull();
+  });
+
   it('starts a session on a connected host from the menu', async () => {
     const bridge = chatBackedHostBridge({ remote: { hostId: HOST_ID, state: connected } });
     const started: string[] = [];

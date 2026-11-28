@@ -40,7 +40,14 @@ export type HostConnectionStatus = HostConnectionState['status'];
 /** `local` is the machine Desktop runs on; it is never removed and never needs an account check. */
 export type HostKind = 'local' | 'remote';
 
-export type HostEntry = { hostId: string; label: string; kind: HostKind; state: HostConnectionState };
+export type HostEntry = {
+  hostId: string;
+  label: string;
+  kind: HostKind;
+  state: HostConnectionState;
+  /** Whether the user agreed to installs and updates of the host program on this host; remote hosts only. */
+  installConsent?: boolean;
+};
 
 /** An alias from the user's `~/.ssh/config`; `hostId` is the host it is a route to, once added. */
 export type SshAliasEntry = { alias: string; hostId: string | null };

@@ -10,6 +10,7 @@ import { useHostEntries } from '../host/hostRegistry';
 import { accountLine, hostStatusView } from '../host/hostPresentation';
 import { useHostOperation } from '../host/hostOperations';
 import { useDesktopVersion } from '../host/useDesktopVersion';
+import { useNow } from '../host/useNow';
 import { useSshAliases } from '../host/useSshAliases';
 import { HostActions } from './HostActions';
 import { HostErrorDetail, HostOperationNotice, HostStatusDot } from './HostStatus';
@@ -66,7 +67,8 @@ function Endpoint({ alias }: { alias: string | null }) {
 function HostRow({ entry, alias }: { entry: HostEntry; alias: string | null }) {
   const desktopVersion = useDesktopVersion();
   const operation = useHostOperation(entry.hostId);
-  const view = hostStatusView(entry.state, desktopVersion, Date.now());
+  const now = useNow();
+  const view = hostStatusView(entry.state, desktopVersion, now);
   const { state } = entry;
   const installing = operation.status === 'running';
   const statusLabel = installing ? (operation.kind === 'install' ? 'Installing' : 'Updating') : view.label;

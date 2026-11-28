@@ -88,7 +88,6 @@ import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
 import { SESSION_DRAG_TYPE } from './sessionDrag';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
-import { runningSessionsByHost } from '../host/runningOnHost';
 import { summaryHostId } from '../host/sessionDirectory';
 import { HostBadge, HostListPlaceholder, HostProjectFrame, HostStaleNote } from './HostBadge';
 import { HostNewMenu } from './HostNewMenu';
@@ -926,12 +925,9 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 function ProjectHeader({
   group,
-  runningOnHost,
   onCreateInProject,
 }: {
   group: ProjectGroup;
-  /** Sessions working or waiting on the project's host, for its badge panel. */
-  runningOnHost: number;
   onCreateInProject: (group: ProjectGroup) => void;
 }) {
   return (
@@ -945,7 +941,7 @@ function ProjectHeader({
           {group.name}
         </Typography>
       </Tooltip>
-      {group.hostId !== LOCAL_HOST_ID && <HostBadge hostId={group.hostId} runningSessions={runningOnHost} />}
+      {group.hostId !== LOCAL_HOST_ID && <HostBadge hostId={group.hostId} />}
       <IconButton
         size="sm"
         variant="plain"
@@ -1341,7 +1337,6 @@ export function SessionList({
   // A fold gives way to a search, which would otherwise hide its own matches; the pill is inert
   // meanwhile, since a toggle could not show.
   const isFolded = useCallback((sessionId: string) => foldedIds.has(sessionId) && !searching, [foldedIds, searching]);
-  const runningByHost = useMemo(() => runningSessionsByHost(sessions, statuses), [sessions, statuses]);
   // A remote host that has not listed yet and has no cached rows: there is nothing to draw, so
   // say it is loading instead of letting the list read as empty.
   const placeholderHosts = useMemo(() => {
@@ -1894,7 +1889,6 @@ export function SessionList({
                 <>
                   <ProjectHeader
                     group={group}
-                    runningOnHost={runningByHost.get(group.hostId) ?? 0}
                     onCreateInProject={target => onCreateInProject(target.hostId, target.directory)}
                   />
                   {group.hostId !== LOCAL_HOST_ID && <HostStaleNote hostId={group.hostId} />}

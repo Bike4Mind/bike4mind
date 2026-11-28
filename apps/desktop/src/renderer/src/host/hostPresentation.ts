@@ -6,9 +6,20 @@ import type {
   HostOfflineReason,
 } from '@shared/hostConnection';
 import type { HostConnectFailure } from '@shared/hostProtocol';
+import { compareVersions } from '@shared/update';
 
 /** Everything a user can do to a host from Connections or its panel. */
-export type HostAction = 'add' | 'connect' | 'reconnect' | 'disconnect' | 'install' | 'update' | 'signIn' | 'remove';
+export type HostAction =
+  | 'connect'
+  | 'reconnect'
+  | 'disconnect'
+  | 'install'
+  | 'update'
+  /** Signs the host in to the user's account (device flow). */
+  | 'signIn'
+  /** Signs this Desktop in to Bike4Mind, which every host connection needs. */
+  | 'signInApp'
+  | 'remove';
 
 export type HostTone = 'success' | 'warning' | 'danger' | 'neutral' | 'primary';
 
@@ -19,10 +30,26 @@ export type HostStatusView = {
   detail?: string;
 };
 
-/** A connected host whose program is not this Desktop's version; main keeps it connected and says nothing else. */
+/** How the host program's version compares with this Desktop's; unknown when either is not a version. */
+export type HostVersionRelation = 'older' | 'same' | 'newer' | 'unknown';
+
+export function hostVersionRelation(state: HostConnectionState, desktopVersion: string): HostVersionRelation {
+  if (state.status !== 'connected' || desktopVersion === '') return 'unknown';
+  const order = compareVersions(state.info.hostVersion, desktopVersion);
+  if (order === null) return 'unknown';
+  return order < 0 ? 'older' : order > 0 ? 'newer' : 'same';
+}
+
+/** A host that is behind this Desktop. Main keeps it connected and offers nothing else. */
 export function updateAvailable(state: HostConnectionState, desktopVersion: string): boolean {
   if (state.status === 'needsUpdate') return true;
-  return state.status === 'connected' && desktopVersion !== '' && state.info.hostVersion !== desktopVersion;
+  return hostVersionRelation(state, desktopVersion) === 'older';
+}
+
+/** Shown instead of an Update action when the host is ahead: installing this Desktop's build would be a downgrade. */
+export function hostNewerNote(state: HostConnectionState, desktopVersion: string): string | null {
+  if (hostVersionRelation(state, desktopVersion) !== 'newer' || state.status !== 'connected') return null;
+  return `The host program (${state.info.hostVersion}) is newer than this Desktop (${desktopVersion}). Update Desktop to match; the host is left as it is.`;
 }
 
 const OFFLINE_DETAIL: Record<HostOfflineReason, string> = {
@@ -83,9 +110,8 @@ export function hostStatusView(state: HostConnectionState, desktopVersion: strin
     case 'reconnecting':
       return { label: 'Reconnecting', tone: 'warning', detail: `Attempt ${state.attempt}` };
     case 'connected':
-      return updateAvailable(state, desktopVersion)
-        ? { label: 'Update available', tone: 'primary' }
-        : { label: 'Connected', tone: 'success' };
+      if (updateAvailable(state, desktopVersion)) return { label: 'Update available', tone: 'primary' };
+      return { label: 'Connected', tone: 'success', detail: hostNewerNote(state, desktopVersion) ?? undefined };
     case 'offline':
       return {
         label: `Offline ${formatLastSeen(state.lastSeenAt, now)}`,
@@ -112,6 +138,19 @@ export function hostStatusView(state: HostConnectionState, desktopVersion: strin
   }
 }
 
+const OFFLINE_RECOVERY: Record<HostOfflineReason, HostAction> = {
+  disconnected: 'connect',
+  signedOut: 'signInApp',
+  noNetwork: 'reconnect',
+  unreachable: 'reconnect',
+};
+
+/** The fix a composer offers for a host that cannot take work; null when only waiting helps. */
+export function sendBlockAction(state: HostConnectionState): 'reconnect' | 'signInApp' | null {
+  if (state.status === 'offline') return state.reason === 'signedOut' ? 'signInApp' : 'reconnect';
+  return state.status === 'failed' ? 'reconnect' : null;
+}
+
 /** The action buttons a host in this state offers, primary first. The local host offers none. */
 export function hostActions(entry: HostEntry, desktopVersion: string): HostAction[] {
   if (entry.kind === 'local') return [];
@@ -124,7 +163,7 @@ export function hostActions(entry: HostEntry, desktopVersion: string): HostActio
     case 'connected':
       return [...(updateAvailable(state, desktopVersion) ? (['update'] as const) : []), 'reconnect', 'disconnect'];
     case 'offline':
-      return [state.reason === 'disconnected' ? 'connect' : 'reconnect', 'remove'];
+      return [OFFLINE_RECOVERY[state.reason], 'remove'];
     case 'needsInstall':
       return ['install', 'remove'];
     case 'needsUpdate':
@@ -150,13 +189,16 @@ export function sendBlockedReason(label: string, state: HostConnectionState | un
   return `${label} is not connected (${view.label.toLowerCase()}). Your message is kept; send it once the host is back.`;
 }
 
-/** Who a host is signed in as: the server it uses, since the protocol reports an id rather than a name. */
+/**
+ * Who a host is signed in as. The protocol reports an account id and the server it belongs to,
+ * not a name or an email, so that is what is shown.
+ */
 export function accountLine(account: HostAccount): string {
   if (!account) return 'Not signed in';
   try {
-    return `Signed in to ${new URL(account.environmentUrl).host}`;
+    return `${account.userId} on ${new URL(account.environmentUrl).host}`;
   } catch {
-    return 'Signed in';
+    return account.userId;
   }
 }
 

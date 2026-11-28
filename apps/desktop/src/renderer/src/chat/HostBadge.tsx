@@ -11,6 +11,8 @@ import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import type { HostEntry } from '@shared/hostConnection';
 import { useHostEntries } from '../host/hostRegistry';
 import { accountLine, hostAcceptsWork, hostBadgeText, hostStatusView, updateAvailable } from '../host/hostPresentation';
+import { useHostRunningWork, type HostRunningCount } from '../host/useHostRunningWork';
+import { useNow } from '../host/useNow';
 import { useDesktopVersion } from '../host/useDesktopVersion';
 import { useHostAlias } from '../host/useSshAliases';
 import { useHostOperation } from '../host/hostOperations';
@@ -18,7 +20,7 @@ import { HostActionButtons, useHostActions } from './HostActions';
 import { HostErrorDetail, HostOperationNotice, HostStatusDot } from './HostStatus';
 
 /** Everything the panel does not offer: Add and Remove belong to Settings > Connections. */
-const PANEL_ACTIONS = ['connect', 'reconnect', 'disconnect', 'update', 'signIn', 'install'] as const;
+const PANEL_ACTIONS = ['connect', 'reconnect', 'disconnect', 'update', 'signIn', 'signInApp', 'install'] as const;
 
 function PanelRow({ label, value, testId }: { label: string; value: string; testId: string }) {
   return (
@@ -33,22 +35,18 @@ function PanelRow({ label, value, testId }: { label: string; value: string; test
   );
 }
 
+const runningLabel = (running: HostRunningCount): string =>
+  running.status === 'known' ? String(running.count) : running.status === 'loading' ? '...' : 'Unknown';
+
 /** The panel behind a host badge: where the connection stands, and the one-click fix for it. */
-function HostPanel({
-  entry,
-  runningSessions,
-  controller,
-  onRan,
-}: {
-  entry: HostEntry;
-  runningSessions: number;
-  controller: ReturnType<typeof useHostActions>;
-  onRan: () => void;
-}) {
+function HostPanel({ entry, controller }: { entry: HostEntry; controller: ReturnType<typeof useHostActions> }) {
   const desktopVersion = useDesktopVersion();
+  const now = useNow();
   const operation = useHostOperation(entry.hostId);
   const alias = useHostAlias(entry);
-  const view = hostStatusView(entry.state, desktopVersion, Date.now());
+  // The panel only exists while open, so this asks the host once per opening.
+  const running = useHostRunningWork(entry.hostId, entry.state.status === 'connected');
+  const view = hostStatusView(entry.state, desktopVersion, now);
   const { state } = entry;
   return (
     <Stack spacing={1} sx={{ width: 280 }} data-testid="host-panel">
@@ -64,7 +62,7 @@ function HostPanel({
           <PanelRow label="Latency" value={`${Math.round(state.latencyMs)} ms`} testId="host-panel-latency" />
           <PanelRow label="Host version" value={state.info.hostVersion} testId="host-panel-version" />
           <PanelRow label="Account" value={accountLine(state.info.account)} testId="host-panel-account" />
-          <PanelRow label="Running sessions" value={String(runningSessions)} testId="host-panel-running" />
+          <PanelRow label="Running sessions" value={runningLabel(running)} testId="host-panel-running" />
         </>
       )}
       {view.detail && state.status !== 'failed' && (
@@ -77,7 +75,7 @@ function HostPanel({
       )}
       <HostOperationNotice operation={operation} alias={alias} testId="host-panel-operation" />
       <Divider />
-      <HostActionButtons controller={controller} testIdPrefix="host-panel-action" onRan={onRan} />
+      <HostActionButtons controller={controller} testIdPrefix="host-panel-action" />
     </Stack>
   );
 }
@@ -87,17 +85,17 @@ function HostPanel({
  * not connected also says why in a few words. Nothing for the local host, and nothing until the
  * registry has listed the host.
  */
-export function HostBadge({ hostId, runningSessions }: { hostId: string; runningSessions: number }) {
+export function HostBadge({ hostId }: { hostId: string }) {
   const entry = useHostEntries().find(candidate => candidate.hostId === hostId);
   if (hostId === LOCAL_HOST_ID || !entry) return null;
-  return <HostBadgeFor entry={entry} runningSessions={runningSessions} />;
+  return <HostBadgeFor entry={entry} />;
 }
 
-function HostBadgeFor({ entry, runningSessions }: { entry: HostEntry; runningSessions: number }) {
+function HostBadgeFor({ entry }: { entry: HostEntry }) {
   const desktopVersion = useDesktopVersion();
   const [open, setOpen] = useState(false);
   const controller = useHostActions(entry, PANEL_ACTIONS);
-  const now = Date.now();
+  const now = useNow();
   const view = hostStatusView(entry.state, desktopVersion, now);
   const text = hostBadgeText(entry.state, desktopVersion, now);
   const tone =
@@ -124,12 +122,7 @@ function HostBadgeFor({ entry, runningSessions }: { entry: HostEntry; runningSes
           </Box>
         </MenuButton>
         <Menu size="sm" placement="bottom-end" sx={{ p: 1.25 }} data-testid="host-panel-menu">
-          <HostPanel
-            entry={entry}
-            runningSessions={runningSessions}
-            controller={controller}
-            onRan={() => setOpen(false)}
-          />
+          <HostPanel entry={entry} controller={controller} />
         </Menu>
       </Dropdown>
       {controller.dialogs}
@@ -184,8 +177,9 @@ export function HostProjectFrame({ hostId, children }: { hostId: string; childre
 export function HostComposerChip({ hostId }: { hostId: string }) {
   const entry = useHostEntries().find(candidate => candidate.hostId === hostId);
   const desktopVersion = useDesktopVersion();
+  const now = useNow();
   if (hostId === LOCAL_HOST_ID || !entry) return null;
-  const view = hostStatusView(entry.state, desktopVersion, Date.now());
+  const view = hostStatusView(entry.state, desktopVersion, now);
   return (
     <Stack
       direction="row"

@@ -8,7 +8,10 @@ import {
   formatLastSeen,
   hostActions,
   hostBadgeText,
+  hostNewerNote,
+  hostVersionRelation,
   hostStatusView,
+  sendBlockAction,
   sendBlockedReason,
   sshCommand,
   updateAvailable,
@@ -40,6 +43,8 @@ describe('hostActions', () => {
     ['connected with an older host program', connected('1.0.0'), ['update', 'reconnect', 'disconnect']],
     ['turned off', { status: 'offline', reason: 'disconnected', lastSeenAt: null }, ['connect', 'remove']],
     ['unreachable', { status: 'offline', reason: 'unreachable', lastSeenAt: null }, ['reconnect', 'remove']],
+    ['signed out of Bike4Mind', { status: 'offline', reason: 'signedOut', lastSeenAt: null }, ['signInApp', 'remove']],
+    ['connected with a newer host program', connected('3.0.0'), ['reconnect', 'disconnect']],
     ['not installed', { status: 'needsInstall' }, ['install', 'remove']],
     ['update required', { status: 'needsUpdate', required: true }, ['update', 'remove']],
     ['needs sign-in', { status: 'needsSignIn' }, ['signIn', 'disconnect', 'remove']],
@@ -58,6 +63,38 @@ describe('updateAvailable', () => {
     expect(updateAvailable(connected('1.0.0'), '2.0.0')).toBe(true);
     expect(updateAvailable(connected('2.0.0'), '2.0.0')).toBe(false);
     expect(updateAvailable(connected('1.0.0'), '')).toBe(false);
+  });
+
+  it('compares versions as versions, so 10 is newer than 9 and a newer host is no update', () => {
+    expect(updateAvailable(connected('1.9.0'), '1.10.0')).toBe(true);
+    expect(updateAvailable(connected('1.10.0'), '1.9.0')).toBe(false);
+    expect(updateAvailable(connected('3.0.0'), '2.0.0')).toBe(false);
+    expect(updateAvailable(connected('not-a-version'), '2.0.0')).toBe(false);
+  });
+});
+
+describe('hostVersionRelation', () => {
+  it('says older, same, newer, or unknown', () => {
+    expect(hostVersionRelation(connected('1.0.0'), '2.0.0')).toBe('older');
+    expect(hostVersionRelation(connected('2.0.0'), '2.0.0')).toBe('same');
+    expect(hostVersionRelation(connected('3.0.0'), '2.0.0')).toBe('newer');
+    expect(hostVersionRelation(connected('3.0.0'), '')).toBe('unknown');
+    expect(hostVersionRelation({ status: 'needsInstall' }, '2.0.0')).toBe('unknown');
+  });
+
+  it('notes a newer host and nothing else', () => {
+    expect(hostNewerNote(connected('3.0.0'), '2.0.0')).toContain('Update Desktop');
+    expect(hostNewerNote(connected('1.0.0'), '2.0.0')).toBeNull();
+    expect(hostNewerNote(connected('2.0.0'), '2.0.0')).toBeNull();
+  });
+});
+
+describe('sendBlockAction', () => {
+  it('offers Reconnect for a dropped host, Sign in when this computer is signed out, and nothing while waiting', () => {
+    expect(sendBlockAction({ status: 'offline', reason: 'unreachable', lastSeenAt: null })).toBe('reconnect');
+    expect(sendBlockAction({ status: 'offline', reason: 'signedOut', lastSeenAt: null })).toBe('signInApp');
+    expect(sendBlockAction({ status: 'failed', failure })).toBe('reconnect');
+    expect(sendBlockAction({ status: 'connecting' })).toBeNull();
   });
 });
 
@@ -131,10 +168,9 @@ describe('sendBlockedReason', () => {
 });
 
 describe('accountLine', () => {
-  it('names the server the host uses', () => {
-    expect(accountLine({ userId: 'u', environmentUrl: 'https://app.example.com/x' })).toBe(
-      'Signed in to app.example.com'
-    );
+  it('names the account id and the server it belongs to', () => {
+    expect(accountLine({ userId: 'u', environmentUrl: 'https://app.example.com/x' })).toBe('u on app.example.com');
+    expect(accountLine({ userId: 'u', environmentUrl: 'not a url' })).toBe('u');
     expect(accountLine(null)).toBe('Not signed in');
   });
 });

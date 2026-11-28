@@ -106,6 +106,28 @@ describe('Connections page', () => {
     expect(bridge.management.installs).toEqual([HOST_ID]);
   });
 
+  it("does not ask again on a host the user already agreed to, from main's record", async () => {
+    const bridge = await mountWith(
+      { status: 'needsInstall' },
+      { remote: { hostId: HOST_ID, label: 'devbox', state: { status: 'needsInstall' }, installConsent: true } }
+    );
+    await click('connections-action-install-btn');
+    expect(byTestId('host-install-consent')).toBeNull();
+    expect(bridge.management.installs).toEqual([HOST_ID]);
+  });
+
+  it('asks once, then stops asking on that host after its install recorded consent', async () => {
+    const bridge = await mountWith({ status: 'needsInstall' });
+    await click('connections-action-install-btn');
+    await click('host-install-consent-confirm-btn');
+    await settle();
+    expect(bridge.management.installs).toEqual([HOST_ID]);
+    await act(async () => bridge.remote?.setState({ status: 'needsInstall' }));
+    await click('connections-action-install-btn');
+    expect(byTestId('host-install-consent')).toBeNull();
+    expect(bridge.management.installs).toEqual([HOST_ID, HOST_ID]);
+  });
+
   it('does not install when consent is declined', async () => {
     const bridge = await mountWith({ status: 'needsInstall' });
     await click('connections-action-install-btn');

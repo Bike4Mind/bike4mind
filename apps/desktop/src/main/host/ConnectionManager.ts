@@ -67,6 +67,8 @@ export type HostRegistration = {
   lastSeenAt?: number | null;
   /** Called after connect, disconnect or remove has acted on this host; never for register or unregister. */
   onUserAction?(action: HostUserAction): void;
+  /** Whether the user agreed to installs on this host; shown on its entry. Omitted for hosts that have no such record. */
+  installConsent?(): boolean;
 };
 
 type RegisteredHost = {
@@ -74,6 +76,7 @@ type RegisteredHost = {
   label: string;
   windows: Map<number, WindowConnection>;
   onUserAction(action: HostUserAction): void;
+  installConsent?(): boolean;
 };
 
 /** The `host/*` methods reach a host whose control connection is up, signed in or not; the rest need `connected`. */
@@ -138,6 +141,7 @@ export class ConnectionManager {
       label: registration.label,
       windows: new Map(),
       onUserAction: registration.onUserAction ?? (() => undefined),
+      installConsent: registration.installConsent,
     };
     this.hosts.set(hostId, host);
     if (registration.connect === false) host.link.disconnect('disconnected');
@@ -164,12 +168,18 @@ export class ConnectionManager {
     this.emit();
   }
 
+  /** Sends the list again after a registrant changed something an entry shows besides its state. */
+  refresh(): void {
+    this.emit();
+  }
+
   list(): HostEntry[] {
     return [...this.hosts].map(([hostId, host]) => ({
       hostId,
       label: host.label,
       kind: host.link.kind,
       state: host.link.state,
+      ...(host.installConsent ? { installConsent: host.installConsent() } : {}),
     }));
   }
 
