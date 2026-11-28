@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "31.4.0",
+  "version": "31.5.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -109,7 +109,7 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest",
     "openapi:generate": "tsx src/openapi/generate.ts",

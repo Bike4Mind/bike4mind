@@ -1,5 +1,22 @@
 # @bike4mind/slack
 
+## 8.0.7
+
+### Patch Changes
+
+- [#8797](https://github.com/Bike4Mind/bike4mind/pull/8797) [`4d28840`](https://github.com/Bike4Mind/bike4mind/commit/4d2884014b15a29fceb01bcf32ed094bb83133e4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - read contributed tool names as open strings
+
+- [#8918](https://github.com/Bike4Mind/bike4mind/pull/8918) [`f6bc293`](https://github.com/Bike4Mind/bike4mind/commit/f6bc2938a90e2589836f3bb0536981c89d8b9aa9) Thanks [@vinchi777](https://github.com/vinchi777)! - deliver org GitHub notifications only to current org members
+
+- Updated dependencies [[`c42cd52`](https://github.com/Bike4Mind/bike4mind/commit/c42cd527ecc531e3b90a258250b055975ca3c102), [`5631682`](https://github.com/Bike4Mind/bike4mind/commit/5631682e8c2cc252f19814795033c9bdfc4dfa46), [`e27f44a`](https://github.com/Bike4Mind/bike4mind/commit/e27f44ac47362e73d9960347a7a19770f04c81c0), [`d4e65b6`](https://github.com/Bike4Mind/bike4mind/commit/d4e65b69222066bd392d3cc231f5344c9829dab0), [`dfecf69`](https://github.com/Bike4Mind/bike4mind/commit/dfecf69cdfe3df0de6970f3328d97c22940320e1), [`ad1f64d`](https://github.com/Bike4Mind/bike4mind/commit/ad1f64dc3c48af6fdcfbbcd35054df1cf272b89d), [`ee61e38`](https://github.com/Bike4Mind/bike4mind/commit/ee61e3894af50f043f64368cfa27e1a6a41db7f8), [`b4ae328`](https://github.com/Bike4Mind/bike4mind/commit/b4ae328aec44cae4dcdb8ced1e7d2894b7d190ef), [`40e9f9b`](https://github.com/Bike4Mind/bike4mind/commit/40e9f9bd99e1b475a7dbcca2f20d413f84fc8cd4), [`ca34567`](https://github.com/Bike4Mind/bike4mind/commit/ca3456735946639dc7410c4330a94a2adbe382ce), [`7dd7b37`](https://github.com/Bike4Mind/bike4mind/commit/7dd7b377eed6f68b380f4ac6e21fa776b0df2278), [`8e4a569`](https://github.com/Bike4Mind/bike4mind/commit/8e4a569357272d671b762be3c59c93277747b014), [`8ba1580`](https://github.com/Bike4Mind/bike4mind/commit/8ba1580c80a10547984d0e1935c4e2a4d5a02fb4), [`4f9efe5`](https://github.com/Bike4Mind/bike4mind/commit/4f9efe5271c043a3df6c16324cadb3068a243bb2), [`1329bd2`](https://github.com/Bike4Mind/bike4mind/commit/1329bd23f5444fa7b44c2c4e73a9ad907a478e1f), [`6588bae`](https://github.com/Bike4Mind/bike4mind/commit/6588bae659420dfc5083f1f2022dd77f9962cfb8), [`2453f23`](https://github.com/Bike4Mind/bike4mind/commit/2453f237a085b6e78cec6e9d93c4ce012d263b69), [`4d28840`](https://github.com/Bike4Mind/bike4mind/commit/4d2884014b15a29fceb01bcf32ed094bb83133e4), [`94eb687`](https://github.com/Bike4Mind/bike4mind/commit/94eb68739c6e58b014690a1e41026caacff26dae), [`a6b3653`](https://github.com/Bike4Mind/bike4mind/commit/a6b36532571495644d3edda9b741dbb8addc9b69), [`0779974`](https://github.com/Bike4Mind/bike4mind/commit/0779974e408d7b86d8e8f9c9a27890dce6a32f20), [`8bd1b29`](https://github.com/Bike4Mind/bike4mind/commit/8bd1b298d664836db7eb07ac8ed166b04ac98e4e), [`715ed35`](https://github.com/Bike4Mind/bike4mind/commit/715ed35c9f99e61ad2327b65c054988b99cd3188), [`f5254f7`](https://github.com/Bike4Mind/bike4mind/commit/f5254f7a0983d5749ff4f48d70af574fffb79184), [`726860d`](https://github.com/Bike4Mind/bike4mind/commit/726860d474a18b85c864b939262456dece646001), [`0370fc9`](https://github.com/Bike4Mind/bike4mind/commit/0370fc91fd4c52c5ef5773106ef2af850640a87a), [`0818094`](https://github.com/Bike4Mind/bike4mind/commit/081809406fd6773503e02440a1eb2a9d140fd41a), [`01195ec`](https://github.com/Bike4Mind/bike4mind/commit/01195ec64b7985147d331e983f27103c42700dd2), [`b6cca0c`](https://github.com/Bike4Mind/bike4mind/commit/b6cca0cfe704215d4c061992d44e97712fc08cac), [`1f22182`](https://github.com/Bike4Mind/bike4mind/commit/1f221826023e1a3b1830fe5c98039f59d685ce58), [`446367a`](https://github.com/Bike4Mind/bike4mind/commit/446367a2d0a6874d4ee28784e3f1f83b23b26633), [`2eea2ce`](https://github.com/Bike4Mind/bike4mind/commit/2eea2ce52069e2ed6d2650e90cf0da6ed9a6e77d), [`450ae54`](https://github.com/Bike4Mind/bike4mind/commit/450ae5426b177c596780e420d46389fbba0e7dd3), [`db501c9`](https://github.com/Bike4Mind/bike4mind/commit/db501c9978006002209c9d9df6582adfbe5d67bc), [`2001e0c`](https://github.com/Bike4Mind/bike4mind/commit/2001e0ca18cf375632c0c56247e89ab25ce21f2d), [`6e964ba`](https://github.com/Bike4Mind/bike4mind/commit/6e964ba877dd49c1f9694dc2f2eca797c66c37c8)]:
+  - @bike4mind/common@31.5.0
+  - @bike4mind/services-core@31.4.0
+  - @bike4mind/llm-adapters@2.11.0
+  - @bike4mind/mcp@2.2.16
+  - @bike4mind/agents@1.8.13
+  - @bike4mind/fab-pipeline@3.3.6
+  - @bike4mind/utils@13.1.6
+
 ## 8.0.6
 
 ### Patch Changes

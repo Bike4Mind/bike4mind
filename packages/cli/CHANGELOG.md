@@ -1,5 +1,17 @@
 # @bike4mind/cli
 
+## 5.0.2
+
+### Patch Changes
+
+- [#8761](https://github.com/Bike4Mind/bike4mind/pull/8761) [`b4ae328`](https://github.com/Bike4Mind/bike4mind/commit/b4ae328aec44cae4dcdb8ced1e7d2894b7d190ef) Thanks [@maconard](https://github.com/maconard)! - match REST on the 401, rate cost, problems list, call log, and key scopes
+
+- [#8764](https://github.com/Bike4Mind/bike4mind/pull/8764) [`40e9f9b`](https://github.com/Bike4Mind/bike4mind/commit/40e9f9bd99e1b475a7dbcca2f20d413f84fc8cd4) Thanks [@maconard](https://github.com/maconard)! - say why a call or save is refused and what a function reads
+
+- [#8765](https://github.com/Bike4Mind/bike4mind/pull/8765) [`ca34567`](https://github.com/Bike4Mind/bike4mind/commit/ca3456735946639dc7410c4330a94a2adbe382ce) Thanks [@maconard](https://github.com/maconard)! - let a share's recipient review and call the function on every surface
+
+- [#8789](https://github.com/Bike4Mind/bike4mind/pull/8789) [`faf9ace`](https://github.com/Bike4Mind/bike4mind/commit/faf9acee4a7fe84df8024a210f98b42a17c65d71) Thanks [@maconard](https://github.com/maconard)! - list a tool for an admin key only where the server accepts admin
+
 ## 5.0.1
 
 ### Patch Changes

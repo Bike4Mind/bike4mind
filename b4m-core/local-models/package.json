@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/local-models",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "description": "Discovery and management of local LLM runtimes and host hardware, shared by the B4M CLI and desktop app",
   "repository": {
@@ -84,7 +84,7 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },

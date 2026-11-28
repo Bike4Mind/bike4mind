@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/auth",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "publishConfig": {
     "access": "restricted"
   },
@@ -84,7 +84,7 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck":"tsgo --noEmit --types node",
+    "typecheck": "tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },
