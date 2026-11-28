@@ -168,9 +168,11 @@ describe('sendBlockedReason', () => {
 });
 
 describe('accountLine', () => {
-  it('names the account id and the server it belongs to', () => {
-    expect(accountLine({ userId: 'u', environmentUrl: 'https://app.example.com/x' })).toBe('u on app.example.com');
-    expect(accountLine({ userId: 'u', environmentUrl: 'not a url' })).toBe('u');
+  it('names the server the host is signed in on, never the raw account id', () => {
+    expect(accountLine({ userId: 'u', environmentUrl: 'https://app.example.com/x' })).toBe(
+      'Signed in on app.example.com'
+    );
+    expect(accountLine({ userId: 'u', environmentUrl: 'not a url' })).toBe('Signed in');
     expect(accountLine(null)).toBe('Not signed in');
   });
 });

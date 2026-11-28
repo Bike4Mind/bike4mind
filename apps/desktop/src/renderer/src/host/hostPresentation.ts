@@ -190,15 +190,15 @@ export function sendBlockedReason(label: string, state: HostConnectionState | un
 }
 
 /**
- * Who a host is signed in as. The protocol reports an account id and the server it belongs to,
- * not a name or an email, so that is what is shown.
+ * Who a host is signed in as. The protocol reports an opaque account id and the server it belongs
+ * to, not a name or an email, so only the server is shown.
  */
 export function accountLine(account: HostAccount): string {
   if (!account) return 'Not signed in';
   try {
-    return `${account.userId} on ${new URL(account.environmentUrl).host}`;
+    return `Signed in on ${new URL(account.environmentUrl).host}`;
   } catch {
-    return account.userId;
+    return 'Signed in';
   }
 }
 

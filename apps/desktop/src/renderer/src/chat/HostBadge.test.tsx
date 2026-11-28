@@ -65,7 +65,7 @@ describe('host badge', () => {
     expect(textOf('host-panel-state')).toBe('Connected');
     expect(textOf('host-panel-latency')).toBe('42 ms');
     expect(textOf('host-panel-version')).toBe(DESKTOP_VERSION);
-    expect(textOf('host-panel-account')).toBe('u on app.example.com');
+    expect(textOf('host-panel-account')).toBe('Signed in on app.example.com');
     expect(textOf('host-panel-running')).toBe('2');
     expect(byTestId('host-panel-action-reconnect-btn')).not.toBeNull();
     expect(byTestId('host-panel-action-disconnect-btn')).not.toBeNull();
