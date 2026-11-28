@@ -3511,7 +3511,7 @@ export class ChatService {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     const decisionScope = expectedScope;
-    this.deps.approvals?.forgetSession(sessionId);
+    const approvalsForgotten = this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.livePlans.delete(sessionId);
     this.contextNotices.forget(sessionId);
@@ -3532,6 +3532,7 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
     await forgetSessionWrites(sessionId);
+    await approvalsForgotten;
     await removeScratchDirectory(sessionId).catch(error =>
       this.deps.logger.warn(`SCRATCH: could not remove the scratch folder: ${String(error)}`)
     );
@@ -5175,6 +5176,8 @@ export class ChatService {
         modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
+      // Before any tool runs: a browser tool checks its standing consent without going through awaitApproval.
+      await this.deps.approvals?.ready(session.id);
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
@@ -8855,6 +8858,8 @@ export class ChatService {
     }
 
     const intrinsicAllowOnce = prompt.allowOnce;
+    // This conversation's "Allow in this chat" answers, kept from an earlier launch.
+    await gate.ready(sessionId);
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
@@ -8880,6 +8885,14 @@ export class ChatService {
         always &&
         !prompt.askInAuto &&
         gate.coversCommands(sessionId, always) &&
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
+      ) {
+        return { decision: 'once' };
+      }
+      // A command the scan cannot follow, allowed before with only its run-time words different.
+      if (
+        always?.shape &&
+        gate.coversShape(sessionId, always.namespace, always.shape) &&
         gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
       ) {
         return { decision: 'once' };

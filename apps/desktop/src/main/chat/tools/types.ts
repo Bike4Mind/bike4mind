@@ -857,6 +857,12 @@ export interface ApprovalAlways {
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
   /**
+   * The command's `cwd` and shape (see commandShape), NUL-separated. Set only when the scan could not
+   * follow the command, that is its one reason to ask, and it reads a run-time word. An "Allow in this
+   * chat" then also covers the same shape in the same folder in this chat.
+   */
+  shape?: string;
+  /**
    * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
    * cannot tell, and then every one counts.
    */

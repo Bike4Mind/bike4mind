@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
-import type { ApprovalAlways, ApprovalPart } from './types';
+import { type ChatAllowanceStore, type StoredChatAllowances, storedChatAllowancesSchema } from './chatAllowances';
+import type { ApprovalAlways, ApprovalPart, PartAskKind } from './types';
 
 /** The `optionId` of a question answer that was closed rather than skipped. */
 export const QUESTION_CANCELLED = 'cancelled';
@@ -88,8 +89,20 @@ function withinDirectory(directory: string, candidate: string): boolean {
 interface StandingShell {
   patterns: Set<string>;
   /** Pattern -> the reasons its part asked on the card it was allowed on. */
-  askedOver: Map<string, Set<string>>;
+  askedOver: Map<string, Set<PartAskKind>>;
   directories: Set<string>;
+  /** `${namespace}\x00${shape}` for each command shape (see commandShape) it allowed. */
+  shapes: Set<string>;
+}
+
+function emptyShell(): StandingShell {
+  return { patterns: new Set(), askedOver: new Map(), directories: new Set(), shapes: new Set() };
+}
+
+/** Splits a `${namespace}\x00${rest}` entry; the namespace never holds the separator, the rest may. */
+function splitEntry(entry: string): { namespace: string; rest: string } {
+  const at = entry.indexOf('\x00');
+  return { namespace: entry.slice(0, at), rest: entry.slice(at + 1) };
 }
 
 export interface ApprovalRequestOptions {
@@ -138,13 +151,15 @@ export interface ApprovalGateListener {
  * This is the whole boundary for shell execution. Commands run as the user with nothing
  * confining them, so the thing standing between a crafted prompt and `cat` of some unrelated
  * file is the user reading the command here before it runs. 'always' is scoped to one
- * conversation and dies with the process: to the exact request, plus for a shell command the
- * prefix patterns (`git commit *`) it was derived into.
+ * conversation: to the exact request, plus for a shell command the prefix patterns
+ * (`git commit *`) or command shape it was derived into. With a `store`, it is kept beside the
+ * conversation and survives a restart (see ready); it is never shared with another conversation
+ * except one this conversation spawned (see setParent).
  */
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
 
-  /** sessionId -> standing key -> the answer to replay. In memory only, by design. */
+  /** sessionId -> standing key -> the answer to replay. */
   private readonly standing = new Map<string, Map<string, StandingApproval>>();
 
   /** sessionId -> exact approval key -> the shell patterns and directories it allowed. */
@@ -153,7 +168,37 @@ export class ApprovalGate {
   /** sessionId -> the session that spawned it; see setParent. */
   private readonly parents = new Map<string, string>();
 
-  constructor(private readonly listener?: ApprovalGateListener) {}
+  /** sessionId -> its stored allowances, read once and merged in. */
+  private readonly loads = new Map<string, Promise<void>>();
+
+  /** Sessions whose stored allowances have been merged in. */
+  private readonly loaded = new Set<string>();
+
+  /** sessionId -> its disk writes, in order. */
+  private readonly writes = new Map<string, Promise<void>>();
+
+  /** Keys revoked before the session's stored allowances were read; applied once they are. */
+  private readonly revokedBeforeLoad = new Map<string, Set<string>>();
+
+  /** Sessions with an allowance given while their stored record could not be read; saved once it is. */
+  private readonly unsaved = new Set<string>();
+
+  /** Deleted conversations: nothing is read into or written for them again. Ids are never reused. */
+  private readonly forgotten = new Set<string>();
+
+  constructor(
+    private readonly listener?: ApprovalGateListener,
+    private readonly store?: ChatAllowanceStore,
+    private readonly warn: (message: string) => void = message => console.warn(message)
+  ) {}
+
+  /**
+   * Reads the stored allowances of this session and the sessions that spawned it, once each.
+   * Awaited before any standing answer is looked up; never rejects (a bad record is no allowance).
+   */
+  async ready(sessionId: string): Promise<void> {
+    await Promise.all(this.lineage(sessionId).map(id => this.load(id)));
+  }
 
   /**
    * The standing approval covering this call, or null when there is none.
@@ -172,17 +217,42 @@ export class ApprovalGate {
     return null;
   }
 
+  /**
+   * Drops a standing answer. Before the session's stored allowances are read, the revoke is held
+   * and applied as they are, so it reports true: a stored allowance cannot apply before then.
+   */
   revoke(sessionId: string, key: string): boolean {
+    const removed = this.revokeLoaded(sessionId, key);
+    if (removed) this.persist(sessionId);
+    if (!this.store || this.loaded.has(sessionId) || this.forgotten.has(sessionId)) return removed;
+    const held = this.revokedBeforeLoad.get(sessionId) ?? new Set<string>();
+    held.add(key);
+    this.revokedBeforeLoad.set(sessionId, held);
+    void this.load(sessionId);
+    return true;
+  }
+
+  private revokeLoaded(sessionId: string, key: string): boolean {
     const keys = this.standing.get(sessionId);
-    if (!keys) return false;
-    let removed = keys.delete(key);
-    for (const stored of keys.keys()) {
+    let removed = keys?.delete(key) ?? false;
+    for (const stored of keys?.keys() ?? []) {
       if (stored.startsWith(`${key}#`)) {
-        keys.delete(stored);
+        keys?.delete(stored);
         removed = true;
       }
     }
     return (this.standingShell.get(sessionId)?.delete(key) ?? false) || removed;
+  }
+
+  /**
+   * Whether "Allow in this chat" was given, here or in a session that spawned this one, to a
+   * command of this `shape` (see commandShape) for this tool.
+   */
+  coversShape(sessionId: string, namespace: string, shape: string): boolean {
+    const entry = `${namespace}\x00${shape}`;
+    return this.lineage(sessionId).some(id =>
+      [...(this.standingShell.get(id)?.values() ?? [])].some(standing => standing.shapes.has(entry))
+    );
   }
 
   /**
@@ -279,6 +349,7 @@ export class ApprovalGate {
             this.remember(sessionId, standingKey(key, answer.optionId), answer);
           }
           if (options.always) this.rememberShell(sessionId, key, options.always);
+          this.persist(sessionId);
         }
         if (announced) this.listener?.settled(sessionId);
         resolve({
@@ -343,39 +414,161 @@ export class ApprovalGate {
     }
   }
 
-  /** Deleting a conversation drops both its in-flight asks and anything it had standing. */
-  forgetSession(sessionId: string): void {
+  /**
+   * Deleting a conversation drops its in-flight asks and anything it had standing, on disk too.
+   * Resolves once the stored record is gone.
+   */
+  forgetSession(sessionId: string): Promise<void> {
+    this.forgotten.add(sessionId);
     this.standing.delete(sessionId);
     this.standingShell.delete(sessionId);
     this.parents.delete(sessionId);
+    this.revokedBeforeLoad.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
         entry.settle({ decision: 'deny' }, 'conversation-deleted');
         this.pending.delete(approvalId);
       }
     }
+    const store = this.store;
+    if (!store) return Promise.resolve();
+    return this.enqueue(sessionId, () => store.deleteChatAllowances(sessionId));
   }
 
+  /** Drops everything in memory; what is stored stays for the next launch. */
   dispose(): void {
     for (const entry of this.pending.values()) entry.settle({ decision: 'deny' }, 'app-quit');
     this.pending.clear();
     this.standing.clear();
     this.standingShell.clear();
     this.parents.clear();
+    this.loads.clear();
+    this.loaded.clear();
+    this.revokedBeforeLoad.clear();
+    this.unsaved.clear();
+  }
+
+  private load(sessionId: string): Promise<void> {
+    const store = this.store;
+    if (!store || this.forgotten.has(sessionId)) return Promise.resolve();
+    let pending = this.loads.get(sessionId);
+    if (!pending) {
+      pending = (async () => {
+        let stored: unknown = null;
+        try {
+          stored = await store.loadChatAllowances(sessionId);
+        } catch (error) {
+          // Left unloaded, so a later save cannot overwrite a record that may still be readable; retried on next ready.
+          this.warn(`APPROVALS: could not read allowances for ${sessionId}: ${String(error)}`);
+          this.loads.delete(sessionId);
+          return;
+        }
+        if (this.forgotten.has(sessionId)) return;
+        if (stored !== null && stored !== undefined) this.merge(sessionId, stored);
+        this.loaded.add(sessionId);
+        const held = this.revokedBeforeLoad.get(sessionId);
+        this.revokedBeforeLoad.delete(sessionId);
+        const revoked = !!held && [...held].map(key => this.revokeLoaded(sessionId, key)).some(Boolean);
+        if (revoked || this.unsaved.delete(sessionId)) this.persist(sessionId);
+      })();
+      this.loads.set(sessionId, pending);
+    }
+    return pending;
+  }
+
+  /** Adds a stored record to what is in memory; a record that does not parse adds nothing. */
+  private merge(sessionId: string, stored: unknown): void {
+    const parsed = storedChatAllowancesSchema.safeParse(stored);
+    if (!parsed.success) {
+      this.warn(`APPROVALS: ignoring malformed allowances for ${sessionId}: ${parsed.error.message}`);
+      return;
+    }
+    const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
+    for (const { key, optionId, value } of parsed.data.answers) {
+      if (keys.has(key)) continue;
+      keys.set(key, { ...(optionId ? { optionId } : {}), ...(value === undefined ? {} : { value }) });
+    }
+    if (keys.size > 0) this.standing.set(sessionId, keys);
+    const byKey = this.standingShell.get(sessionId) ?? new Map<string, StandingShell>();
+    for (const { key, patterns, directories, shapes } of parsed.data.shell) {
+      const standing = byKey.get(key) ?? emptyShell();
+      for (const { namespace, pattern, askedOver } of patterns) {
+        const entry = `${namespace}\x00${pattern}`;
+        standing.patterns.add(entry);
+        if (askedOver.length > 0) {
+          standing.askedOver.set(entry, new Set([...(standing.askedOver.get(entry) ?? []), ...askedOver]));
+        }
+      }
+      for (const directory of directories) standing.directories.add(directory);
+      for (const { namespace, shape } of shapes) standing.shapes.add(`${namespace}\x00${shape}`);
+      byKey.set(key, standing);
+    }
+    if (byKey.size > 0) this.standingShell.set(sessionId, byKey);
+  }
+
+  private snapshot(sessionId: string): StoredChatAllowances {
+    return {
+      version: 1,
+      answers: [...(this.standing.get(sessionId) ?? [])].map(([key, { optionId, value }]) => ({
+        key,
+        ...(optionId ? { optionId } : {}),
+        ...(value === undefined ? {} : { value }),
+      })),
+      shell: [...(this.standingShell.get(sessionId) ?? [])].map(([key, standing]) => ({
+        key,
+        patterns: [...standing.patterns].map(entry => {
+          const { namespace, rest } = splitEntry(entry);
+          return { namespace, pattern: rest, askedOver: [...(standing.askedOver.get(entry) ?? [])] };
+        }),
+        directories: [...standing.directories],
+        shapes: [...standing.shapes].map(entry => {
+          const { namespace, rest } = splitEntry(entry);
+          return { namespace, shape: rest };
+        }),
+      })),
+    };
+  }
+
+  /** Writes this session's allowances, after its stored ones are merged in so none is lost. */
+  private persist(sessionId: string): void {
+    const store = this.store;
+    if (!store || this.forgotten.has(sessionId)) return;
+    void this.enqueue(sessionId, async () => {
+      await this.load(sessionId);
+      if (this.forgotten.has(sessionId)) return;
+      if (!this.loaded.has(sessionId)) {
+        this.unsaved.add(sessionId);
+        return;
+      }
+      const record = this.snapshot(sessionId);
+      if (record.answers.length === 0 && record.shell.length === 0) await store.deleteChatAllowances(sessionId);
+      else await store.saveChatAllowances(sessionId, record);
+    });
+  }
+
+  /** Runs one disk operation after the session's earlier ones; a failure is logged, never thrown. */
+  private enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
+    const next = (this.writes.get(sessionId) ?? Promise.resolve())
+      .then(operation)
+      .catch(error => this.warn(`APPROVALS: could not save allowances for ${sessionId}: ${String(error)}`));
+    this.writes.set(sessionId, next);
+    return next;
+  }
+
+  /** Resolves once every disk write queued so far for this session has finished. */
+  flush(sessionId: string): Promise<void> {
+    return this.writes.get(sessionId) ?? Promise.resolve();
   }
 
   private rememberShell(sessionId: string, key: string, always: ApprovalAlways): void {
     const byKey = this.standingShell.get(sessionId) ?? new Map<string, StandingShell>();
-    const standing = byKey.get(key) ?? {
-      patterns: new Set(),
-      askedOver: new Map(),
-      directories: new Set(),
-    };
+    const standing = byKey.get(key) ?? emptyShell();
+    if (always.shape) standing.shapes.add(`${always.namespace}\x00${always.shape}`);
     for (const { pattern, ask } of always.commands) {
       const entry = `${always.namespace}\x00${pattern}`;
       standing.patterns.add(entry);
       if (ask) {
-        const over = standing.askedOver.get(entry) ?? new Set<string>();
+        const over = standing.askedOver.get(entry) ?? new Set<PartAskKind>();
         for (const kind of ask.kinds) over.add(kind);
         standing.askedOver.set(entry, over);
       }
