@@ -14,7 +14,7 @@ export default defineConfig({
     ...(process.env.REPO_TEST_LANE === 'repo'
       ? { include: ['**/*.repo.test.ts'] }
       : { exclude: [...configDefaults.exclude, '**/*.repo.test.ts'] }),
-    // Raise the 15s shared floor to 30s for the CI "misc" shard. This package has a handful of
+    // Raise the 15s shared floor to 30s for the CI "scripts" shard. This package has a handful of
     // real-Mongo integration suites (createMongoServer/createMongoReplSet) that pay a per-worker
     // mongod cold start plus whatever collections and indexes they build (vitest.setup.ts turns
     // the on-connect build off, so only explicit Model.init() calls pay for indexes), so the 15s

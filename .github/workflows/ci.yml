@@ -522,17 +522,21 @@ jobs:
   #     second step after the leg's own unit run. apps/client, apps/workers and
   #     packages/server-utils therefore each appear in two lanes; they are disjoint by
   #     construction (the unit lane excludes exactly the glob the integration lane
-  #     includes), so nothing runs twice and nothing is dropped. The integration lanes
-  #     ride on short unit legs instead of their own runners because each runner pays
-  #     ~2-3 min of fixed setup and runner slots are the queue's bottleneck.
-  #   - services-workers-integration: services, by far the heaviest remaining package
-  #     (test-file count and Mongo-backed setup cost), plus the apps/workers and
-  #     packages/server-utils integration lane.
+  #     includes), so nothing runs twice and nothing is dropped. The shorter integration
+  #     lanes (apps/workers, packages/server-utils) ride on unit legs instead of their own
+  #     runners because each runner pays ~2-3 min of fixed setup and runner slots are the
+  #     queue's bottleneck.
+  #   - services, server-utils, scripts, data: one heavy unit suite each (services-core,
+  #     server-utils, scripts, database). A leg runs its packages one at a time (see the
+  #     workspace-concurrency note on the test step), each with the whole runner's pool, so
+  #     its runtime is the sum of its suites and two heavy suites never share a leg.
+  #     server-utils also carries its own integration lane, scripts the apps/workers one,
+  #     and data the small common package.
+  #   - client-integration: the apps/client integration lane, with db-core and core as its
+  #     unit filter.
   #   - desktop: apps/desktop alone, the largest suite outside apps/client.
-  #   - data-client-integration, cli-workers: hand-grouped buckets of the
-  #     next-heaviest packages, the first also carrying the apps/client integration lane
-  #     and the second the workspace typecheck. Their packages run one at a time (see the
-  #     workspace-concurrency note on the test step), each with the whole runner's pool.
+  #   - cli-workers: a hand-grouped bucket of mid-sized packages, also carrying the
+  #     workspace typecheck.
   #   - misc: a NEGATION catch-all (every non-client package minus the ones
   #     explicitly placed above) instead of an explicit include list. This makes
   #     bucket coverage complete by construction: a package with a `test` script
@@ -635,13 +639,24 @@ jobs:
           # mongod ports, and createMongoServer's retry loop is the documented flake when too many
           # start at once. Same bare-token rule as `filter`.
           #
-          # apps/workers and packages/server-utils hold only a few integration files each; their
-          # unit lanes run in cli-workers and misc below.
-          - name: services-workers-integration
+          # One heavy suite per leg below: a leg's packages run in series, so two heavy suites in
+          # one leg make it the matrix's longest.
+          - name: services
             tier: medium
             filter: '--filter @bike4mind/services-core'
             workers: ''
-            integration-filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils'
+          - name: server-utils
+            tier: medium
+            filter: '--filter @bike4mind/server-utils'
+            workers: ''
+            integration-filter: '--filter @bike4mind/server-utils'
+          # apps/workers' integration lane rides here, and its unit lane in cli-workers. The DST
+          # verification step below is keyed on this leg's name.
+          - name: scripts
+            tier: medium
+            filter: '--filter @bike4mind/scripts'
+            workers: ''
+            integration-filter: '--filter @bike4mind/workers'
           # apps/desktop has a leg of its own: 730+ files, 5-9 min on this runner, which made a
           # shared leg with cli and workers run 13-17 min with everything in series.
           - name: desktop
@@ -660,12 +675,18 @@ jobs:
             filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice --filter @bike4mind/workers'
             workers: ''
             typecheck: 'true'
-          - name: data-client-integration
+          - name: data
             tier: medium
-            filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
+            filter: '--filter @bike4mind/common --filter @bike4mind/database'
             workers: ''
             # packages/database's ~160 suites each boot a mongod; see TMPDIR on the test step.
             tmpfs: 'true'
+          # db-core and core (seconds together) are this leg's unit `filter` because
+          # checkClientTestShards.test.ts reads a block without one as no test leg at all.
+          - name: client-integration
+            tier: medium
+            filter: '--filter @bike4mind/db-core --filter @bike4mind/core'
+            workers: ''
             integration-filter: '--filter @bike4mind/client'
           # The catch-all: every workspace package the buckets above do not name. A `filter`
           # value reaches the step as an env var and is split on whitespace into argv, so the
@@ -674,7 +695,7 @@ jobs:
           # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
             tier: medium
-            filter: '--filter !@bike4mind/client --filter !@bike4mind/services-core --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/desktop --filter !@bike4mind/workers --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
+            filter: '--filter !@bike4mind/client --filter !@bike4mind/services-core --filter !@bike4mind/server-utils --filter !@bike4mind/scripts --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/desktop --filter !@bike4mind/workers --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
             workers: ''
 
     steps:
@@ -929,7 +950,7 @@ jobs:
       # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
       # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
       - name: Verify telemetry retention and worker scheduling across DST
-        if: matrix.shard.name == 'services-workers-integration' && steps.select.outputs.integration-filter != ''
+        if: matrix.shard.name == 'scripts' && steps.select.outputs.integration-filter != ''
         env:
           TZ: America/New_York
           VITEST_MAX_WORKERS: '2'
