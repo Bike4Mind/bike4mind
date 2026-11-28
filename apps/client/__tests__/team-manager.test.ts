@@ -186,6 +186,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     // lakes here, so that step is a no-op and the assertions below stay about membership.
     mockLakeRepositories = {
       userApiKeys: { revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]) },
+      publishedArtifacts: { transferOrgTierOwnership: vi.fn().mockResolvedValue(0) },
       dataLakes: {
         findByOrganizationId: vi.fn().mockResolvedValue([]),
         update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),

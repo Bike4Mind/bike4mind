@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { publishedArtifactRepository } from '@bike4mind/database/content';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_SHARE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
@@ -79,6 +80,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           userApiKeys: userApiKeyRepository,
+          publishedArtifacts: publishedArtifactRepository,
           ...lakeConfigAuditDb,
         },
         // Resolved here rather than in the service: whether this removal came from a browser

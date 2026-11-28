@@ -453,6 +453,19 @@ export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifa
   }
 
   /**
+   * Hand every page `fromUserId` owns in an organization's namespace, soft-deleted ones included,
+   * to `toUserId`. Returns how many moved.
+   */
+  async transferOrgTierOwnership(organizationId: string, fromUserId: string, toUserId: string): Promise<number> {
+    const result = await this.model.updateMany(
+      { tier: 'organization', scopeId: organizationId, ownerId: fromUserId },
+      { $set: { ownerId: toUserId } },
+      { runValidators: true }
+    );
+    return result.modifiedCount;
+  }
+
+  /**
    * Resolve a live artifact by its no-sign-in share token, in either storage shape.
    * The matching rules (and why they are what they are) live on `shareTokenFilter`.
    * Callers needing a lean read build the same filter from it directly.
