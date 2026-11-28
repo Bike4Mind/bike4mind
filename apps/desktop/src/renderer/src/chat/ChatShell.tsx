@@ -30,6 +30,8 @@ import { hostChat } from '../host/hostChat';
 import { useHostSessionCapabilities, useSessionCapabilities } from '../host/sessionCapabilities';
 import { summaryHostId } from '../host/sessionDirectory';
 import { useSessionHost } from '../host/sessionHost';
+import { useHostSendBlock } from '../host/useHostSendBlock';
+import { HostComposerChip } from './HostBadge';
 import { sessionHostMemory } from '../host/sessionHostMemory';
 import { useHostEntries } from '../host/hostRegistry';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
@@ -830,9 +832,14 @@ export function ChatShell({
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
       : null
   );
-  const blockedReason = block.reason;
+  const hostBlock = useHostSendBlock(activeHost);
+  const blockedReason = block.reason ?? hostBlock.reason;
   const blockedAction =
-    block.action === 'open-models' ? { label: 'Open Models', onClick: () => setScreen('models') } : null;
+    block.action === 'open-models'
+      ? { label: 'Open Models', onClick: () => setScreen('models') }
+      : block.reason
+        ? null
+        : hostBlock.action;
   const reloadCatalog = catalog.reload;
   const blockedNotice =
     noLocal?.fix === 'start-ollama' ? (
@@ -1690,6 +1697,19 @@ export function ChatShell({
     [sessions, sessionDraft.start, clearCodeError, markSessionStart]
   );
 
+  /** A fresh Code draft on `hostId`, opened and focused; with a `directory`, already in that project. */
+  const startOnHost = useCallback(
+    (hostId: string, directory?: string) => {
+      clearCodeError();
+      markSessionStart('new');
+      setScreen('conversation');
+      setMode('code');
+      setActiveId(sessionDraft.start('code', directory ? { directory } : {}, undefined, hostId));
+      setComposerFocus(request => request + 1);
+    },
+    [sessionDraft.start, clearCodeError, markSessionStart]
+  );
+
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const deleteTarget = useMemo(
     () => (deleteSessionId ? sessions.find(session => session.id === deleteSessionId) : undefined),
@@ -1988,6 +2008,9 @@ export function ChatShell({
             onOpenMissionControl={() => setScreen('mission-control')}
             onCreateInProject={(hostId, directory) => void onCreateInProject(hostId, directory)}
             onCreateInSection={sectionId => void onCreateInSection(sectionId)}
+            onNewSessionOnHost={hostId => startOnHost(hostId)}
+            onAddProject={startOnHost}
+            hostListings={hostListings}
             onDelete={setDeleteSessionId}
             onTogglePin={session => void togglePin(session)}
             onToggleArchived={session => void toggleArchived(session)}
@@ -2666,26 +2689,29 @@ export function ChatShell({
                 skills={skills}
                 mentionSessions={sessions}
                 leading={
-                  capabilities.desktopChat && (
-                    <>
-                      <ApprovalModePill
-                        key={`approval:${activeId ?? ''}`}
-                        mode={conversation.session?.approvalMode ?? 'ask'}
-                        disabled={chatSettingsLocked}
-                        onSelect={mode => void conversation.setApprovalMode(mode)}
-                      />
-                      {orchestrateCapable && (
-                        <OrchestratePill
-                          on={delegating}
-                          disabled={!activeId}
-                          policy={conversation.session?.orchestrationPolicy}
-                          planner={conversation.session?.model}
-                          models={catalog.models}
-                          onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
+                  <>
+                    <HostComposerChip hostId={activeHost} />
+                    {capabilities.desktopChat && (
+                      <>
+                        <ApprovalModePill
+                          key={`approval:${activeId ?? ''}`}
+                          mode={conversation.session?.approvalMode ?? 'ask'}
+                          disabled={chatSettingsLocked}
+                          onSelect={mode => void conversation.setApprovalMode(mode)}
                         />
-                      )}
-                    </>
-                  )
+                        {orchestrateCapable && (
+                          <OrchestratePill
+                            on={delegating}
+                            disabled={!activeId}
+                            policy={conversation.session?.orchestrationPolicy}
+                            planner={conversation.session?.model}
+                            models={catalog.models}
+                            onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
+                          />
+                        )}
+                      </>
+                    )}
+                  </>
                 }
                 footer={indicators =>
                   capabilities.models ? (

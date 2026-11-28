@@ -87,7 +87,12 @@ import { SessionBadge } from './SessionBadge';
 import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
 import { SESSION_DRAG_TYPE } from './sessionDrag';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { runningSessionsByHost } from '../host/runningOnHost';
 import { summaryHostId } from '../host/sessionDirectory';
+import { HostBadge, HostListPlaceholder, HostProjectFrame, HostStaleNote } from './HostBadge';
+import { HostNewMenu } from './HostNewMenu';
+import type { HostListingState } from './useChat';
 import { useHostSessionCapabilities } from '../host/sessionCapabilities';
 import {
   clampSidebarWidth,
@@ -921,9 +926,12 @@ function SectionLabel({ children }: { children: ReactNode }) {
 
 function ProjectHeader({
   group,
+  runningOnHost,
   onCreateInProject,
 }: {
   group: ProjectGroup;
+  /** Sessions working or waiting on the project's host, for its badge panel. */
+  runningOnHost: number;
   onCreateInProject: (group: ProjectGroup) => void;
 }) {
   return (
@@ -937,6 +945,7 @@ function ProjectHeader({
           {group.name}
         </Typography>
       </Tooltip>
+      {group.hostId !== LOCAL_HOST_ID && <HostBadge hostId={group.hostId} runningSessions={runningOnHost} />}
       <IconButton
         size="sm"
         variant="plain"
@@ -1159,6 +1168,9 @@ export function SessionList({
   onOpenMissionControl,
   onCreateInProject,
   onCreateInSection,
+  onNewSessionOnHost,
+  onAddProject,
+  hostListings,
   onDelete,
   onTogglePin,
   onToggleArchived,
@@ -1193,6 +1205,12 @@ export function SessionList({
   onOpenMissionControl?: () => void;
   /** New session in the project at `directory` on `hostId`; see ProjectGroup. */
   onCreateInProject: (hostId: string, directory: string) => void;
+  /** Starts a Code session on a connected remote host; with it, the sidebar offers "New on a host". */
+  onNewSessionOnHost?: (hostId: string) => void;
+  /** Opens a draft in a folder the user chose on `hostId`. */
+  onAddProject?: (hostId: string, directory: string) => void;
+  /** Each host's listing state; a host still loading its first list shows placeholders rather than "no sessions". */
+  hostListings?: ReadonlyMap<string, HostListingState>;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -1323,7 +1341,21 @@ export function SessionList({
   // A fold gives way to a search, which would otherwise hide its own matches; the pill is inert
   // meanwhile, since a toggle could not show.
   const isFolded = useCallback((sessionId: string) => foldedIds.has(sessionId) && !searching, [foldedIds, searching]);
+  const runningByHost = useMemo(() => runningSessionsByHost(sessions, statuses), [sessions, statuses]);
+  // A remote host that has not listed yet and has no cached rows: there is nothing to draw, so
+  // say it is loading instead of letting the list read as empty.
+  const placeholderHosts = useMemo(() => {
+    if (!hostListings || mode !== 'code') return [];
+    const listed = new Set(sessions.map(summaryHostId));
+    return [...hostListings]
+      .filter(
+        ([hostId, state]) =>
+          hostId !== LOCAL_HOST_ID && !listed.has(hostId) && (state === 'loading' || state === 'pending')
+      )
+      .map(([hostId]) => hostId);
+  }, [hostListings, mode, sessions]);
   const empty =
+    placeholderHosts.length === 0 &&
     refHits.length === 0 &&
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
@@ -1693,6 +1725,9 @@ export function SessionList({
         {/* One label and one behaviour in both modes: it makes a session and opens nothing.
             A Code session starts unbound and its chip row is where a project is chosen. */}
         <NavItem icon={<PlusIcon />} label="New" onClick={onCreate} testId="chat-new-session-btn" />
+        {onNewSessionOnHost && onAddProject && (
+          <HostNewMenu onNewSessionOnHost={onNewSessionOnHost} onAddProject={onAddProject} />
+        )}
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
@@ -1854,24 +1889,41 @@ export function SessionList({
 
             {sections.custom.map(customGroup)}
 
-            {sections.projects.map(group => (
-              <Box key={group.key} data-testid="project-group">
-                <ProjectHeader
-                  group={group}
-                  onCreateInProject={target => onCreateInProject(target.hostId, target.directory)}
-                />
-                <CappedSessionRows
-                  groupKey={`project:${group.key}`}
-                  testIdPrefix="sidebar-project"
-                  sessions={group.sessions}
-                  uncapped={searching}
-                  activeId={activeId}
-                  statuses={statuses}
-                  revealId={revealId}
-                  row={row}
-                  descendants={descendants}
-                />
-              </Box>
+            {sections.projects.map(group => {
+              const rows = (
+                <>
+                  <ProjectHeader
+                    group={group}
+                    runningOnHost={runningByHost.get(group.hostId) ?? 0}
+                    onCreateInProject={target => onCreateInProject(target.hostId, target.directory)}
+                  />
+                  {group.hostId !== LOCAL_HOST_ID && <HostStaleNote hostId={group.hostId} />}
+                  <CappedSessionRows
+                    groupKey={`project:${group.key}`}
+                    testIdPrefix="sidebar-project"
+                    sessions={group.sessions}
+                    uncapped={searching}
+                    activeId={activeId}
+                    statuses={statuses}
+                    revealId={revealId}
+                    row={row}
+                    descendants={descendants}
+                  />
+                </>
+              );
+              return (
+                <Box key={group.key} data-testid="project-group">
+                  {group.hostId === LOCAL_HOST_ID ? (
+                    rows
+                  ) : (
+                    <HostProjectFrame hostId={group.hostId}>{rows}</HostProjectFrame>
+                  )}
+                </Box>
+              );
+            })}
+
+            {placeholderHosts.map(hostId => (
+              <HostListPlaceholder key={hostId} hostId={hostId} />
             ))}
 
             {sections.loose.length > 0 && (
