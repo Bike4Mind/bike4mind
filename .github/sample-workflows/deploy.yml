@@ -139,15 +139,6 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --recursive
 
-      - name: Cache Next.js build
-        uses: actions/cache@v4
-        with:
-          path: |
-            packages/client/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('packages/client/**/package-lock.json', 'packages/client/**/pnpm-lock.yaml') }}-${{ hashFiles('packages/client/**/*.js', 'packages/client/**/*.jsx', 'packages/client/**/*.ts', 'packages/client/**/*.tsx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('packages/client/**/package-lock.json', 'packages/client/**/pnpm-lock.yaml') }}-
-
       - name: Generate SST types
         # Specify a stage explicitlt to avoid questions during CI:
         run: pnpm sst types --stage ${{ steps.config.outputs.stage }}
