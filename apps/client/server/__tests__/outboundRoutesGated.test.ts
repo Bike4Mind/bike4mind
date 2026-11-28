@@ -37,7 +37,6 @@ const MIDDLEWARE_GATED: Array<[route: string, method: 'post']> = [
 
 const INLINE_GATED = [
   'agents/[id]/generate-description.ts',
-  'publish/artifacts/[id].ts',
   'agents/[id]/generate-avatar.ts',
   'agents/[id]/generate-system-prompt.ts',
   'agents/[id]/enhance-field.ts',
@@ -61,5 +60,11 @@ describe('outbound routes gate untrusted and moderated accounts', () => {
 
   it.each(INLINE_GATED)('%s calls assertOutboundActionAllowed', route => {
     expect(source(route)).toMatch(/\bawait assertOutboundActionAllowed\(req\.user, req\)/);
+  });
+
+  // The PATCH gate lives in the shared service, so the legacy and v1 routes cannot drift apart.
+  it('the shared publish PATCH service calls assertOutboundActionAllowed', () => {
+    const service = readFileSync(path.join(__dirname, '..', 'services', 'publish', 'managePublishedPages.ts'), 'utf8');
+    expect(service).toMatch(/await assertAllowed\(user, request\)/);
   });
 });
