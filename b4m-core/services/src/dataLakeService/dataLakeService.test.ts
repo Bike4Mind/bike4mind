@@ -82,7 +82,7 @@ const lakeScope = {
 };
 
 /**
- * What findIdsByDataLakeTag resolves for the `lake()` fixture. The second is the member a
+ * What the membership id lookups resolve for the `lake()` fixture. The second is the member a
  * meta-tag-keyed removal could never reach; that the Mongo predicate genuinely selects a
  * prefix-only file is proved real-DB in FabFileModel.dataLakeLifecycle.test.ts, not here.
  */
@@ -4159,7 +4159,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
         // Empty is the re-run shape - a crashed prior attempt already flipped these files, so the
         // flip reports nothing. Sourcing ids from it would send the index an empty set.
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
       },
     },
     logger: { warn: vi.fn() },
@@ -4191,13 +4191,17 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
   it('resolves no member ids when no index is wired', async () => {
     const adapters = makeAdapters();
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
-    expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] }),
+      expect.any(Date)
+    );
   });
 
   it('survives a member-id lookup that itself fails', async () => {
     const adapters = makeAdapters();
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
     await expect(
       deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
     ).resolves.toMatchObject({ status: 'deleted' });
@@ -4252,6 +4256,115 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
   });
 });
 
+describe('deleteDataLake - only the effective owner files no other lake holds', () => {
+  const makeAdapters = (grants: { principalType: string; principalId: string; role: string }[]) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue(grants) },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(['owned-file']),
+        unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('sweeps and de-indexes under the creator when no owner grant supersedes them', async () => {
+    const adapters = makeAdapters([]);
+    const retrievalIndex = indexPort();
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex } as never);
+
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] }),
+      expect.any(Date)
+    );
+    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['owner'] })
+    );
+    expect(removalInput(retrievalIndex).fabFileIds).toEqual(['owned-file']);
+  });
+
+  it("un-archives the kept members this lake's own archive stamped, after the sweep", async () => {
+    const archivedAt = new Date('2026-06-01T00:00:00.000Z');
+    const adapters = makeAdapters([]);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValue(lake({ status: 'archived', filesArchivedAt: archivedAt }));
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters as never);
+
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, archivedAt);
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag.mock.invocationCallOrder[0]).toBeGreaterThan(
+      adapters.db.fabFiles.softDeleteByDataLakeTag.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('leaves archive state alone when the lake recorded no archive stamp', async () => {
+    const adapters = makeAdapters([]);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters as never);
+
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it("keeps files another of the owner's lakes holds through its prefix, and registry prefixes", async () => {
+    const adapters = makeAdapters([]);
+    adapters.db.dataLakes.find = vi
+      .fn()
+      .mockResolvedValue([
+        lake(),
+        lake({ id: 'lake2', datalakeTag: 'datalake:beta', fileTagPrefix: 'beta:' }),
+        lake({ id: 'lake3', datalakeTag: 'datalake:no-prefix', fileTagPrefix: undefined }),
+      ]);
+    const retrievalIndex = indexPort();
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex } as never);
+
+    const teardown = adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1];
+    expect(teardown.otherLakes).toContainEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:beta',
+      fileTagPrefix: 'beta:',
+      creatorUserId: 'owner',
+    });
+    expect(teardown.otherLakes).toContainEqual(expect.objectContaining({ kind: 'registry', fileTagPrefix: 'opti:' }));
+    expect(teardown.otherLakes.map((l: { datalakeTag: string }) => l.datalakeTag)).not.toContain('datalake:lake');
+    expect(teardown.otherLakes.map((l: { datalakeTag: string }) => l.datalakeTag)).not.toContain('datalake:no-prefix');
+    expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(lakeScope, teardown);
+  });
+
+  it('sweeps under the transferred owner, not the creator or the curator who asked', async () => {
+    const adapters = makeAdapters([
+      { principalType: 'user', principalId: 'new-owner', role: 'owner' },
+      { principalType: 'user', principalId: 'curator', role: 'curator' },
+    ]);
+
+    await deleteDataLake({ userId: 'curator', isAdmin: false }, 'lake1', adapters as never);
+
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+      lakeScope,
+      expect.objectContaining({ ownerUserIds: ['new-owner'] }),
+      expect.any(Date)
+    );
+  });
+});
+
 /**
  * The teardown's own half of the membership log. The restore door records an `added` per revived
  * file; without these rows a reader replaying the log sees those files rejoin a lake they are
@@ -4280,7 +4393,7 @@ describe('deleteDataLake - membership change log', () => {
         softDeleteByDataLakeTag: vi
           .fn()
           .mockResolvedValue(sweptIds.map(id => ({ id, userId: 'owner', fileSize: 100 }))),
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
       },
     },
     logger: { warn: vi.fn() },
@@ -4391,7 +4504,7 @@ describe('deleteDataLake - owner storage quota sync', () => {
       },
       fabFiles: {
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue(swept),
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue(swept.map(f => f.id)),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(swept.map(f => f.id)),
       },
     },
     logger: { warn: vi.fn() },
@@ -4461,7 +4574,7 @@ describe('deleteDataLake - Drive connection disable', () => {
       },
       fabFiles: {
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
       },
     },
     logger: { warn: vi.fn() },
@@ -4583,8 +4696,8 @@ describe('teardown stamp bookkeeping', () => {
       await deleteDataLake(owner, 'lake1', adapters);
 
       const offered = adapters.db.dataLakes.claimFilesDeletedAt.mock.calls[0][1];
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).not.toBe(offered);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][2]).toBe(RECORDED);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][2]).not.toBe(offered);
     });
 
     it('settles to deleted without touching the stamp', async () => {
@@ -4613,7 +4726,11 @@ describe('teardown stamp bookkeeping', () => {
       await deleteDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        expect.objectContaining({ ownerUserIds: ['owner'] }),
+        undefined
+      );
     });
 
     it('warns when no stamp comes back, since that lake restores unbounded', async () => {
@@ -4626,7 +4743,11 @@ describe('teardown stamp bookkeeping', () => {
 
       await deleteDataLake(owner, 'lake1', { ...adapters, logger });
 
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        expect.objectContaining({ ownerUserIds: ['owner'] }),
+        undefined
+      );
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('restore unbounded'), {
         dataLakeId: 'lake1',
       });
@@ -4976,7 +5097,7 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
         markTerminalIfActive: vi.fn(),
       },
       fabFiles: {
-        softDeleteByDataLakeTag: vi.fn().mockImplementation(async (_scope: unknown, at?: Date) => {
+        softDeleteByDataLakeTag: vi.fn().mockImplementation(async (_scope: unknown, _owners: unknown, at?: Date) => {
           sweptWith.push(at);
           return [];
         }),
@@ -5050,6 +5171,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
       dataLakes: {
         findById: vi.fn().mockResolvedValue(lake({ status })),
         delete: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockResolvedValue([]),
       },
       dataLakeAccessGrants: {
         listByLake: vi.fn().mockResolvedValue([]),
@@ -5058,9 +5180,11 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
       batches: { find: vi.fn().mockResolvedValue([{ id: 'b1' }]), delete: vi.fn().mockResolvedValue(undefined) },
       fabFiles: {
         // Second call is the post-purge survivor resolve: nothing joined mid-sweep by default.
-        findIdsByDataLakeTag: vi.fn().mockResolvedValueOnce(['f1', 'f2']).mockResolvedValue([]),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
         hardDeleteOneById: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue(null),
+        findAllByIds: vi.fn().mockResolvedValue([]),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         findStorageKeysByIds: vi.fn().mockResolvedValue([]),
       },
@@ -5213,7 +5337,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
 
   it('hands the index the whole membership scope and every member id, before it destroys any of them', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
     const retrievalIndex = indexPort();
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
@@ -5230,7 +5354,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
 
   it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
     const retrievalIndex = indexPort();
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
@@ -5242,7 +5366,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
     // Resolved once for the purge and reused. Re-resolving BEFORE the hard delete would pass the
     // assertions above while reopening the window they exist to close; the only other resolve is
     // the survivor sweep, which runs after.
-    const resolves = adapters.db.fabFiles.findIdsByDataLakeTag.mock.invocationCallOrder;
+    const resolves = adapters.db.fabFiles.findTeardownIdsByDataLakeTag.mock.invocationCallOrder;
     const hardDelete = adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0];
     expect(resolves.filter(order => order < hardDelete)).toHaveLength(1);
   });
@@ -5250,8 +5374,10 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
   it('strips its own membership signals off a mid-sweep joiner, so no tag outlives the lake', async () => {
     const adapters = makeAdapters('deleted');
     const joiner = { id: 'joiner', userId: 'owner', tags: [{ name: 'lk:late' }, { name: 'unrelated' }] };
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['joiner']);
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['joiner']);
     adapters.db.fabFiles.findById = vi.fn().mockResolvedValue(joiner);
+    adapters.db.fabFiles.findAllByIds.mockResolvedValue([joiner]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
@@ -5265,10 +5391,14 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
 
   it('leaves a stranger-owned same-prefix file alone: the prefix arm never admitted it', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['theirs']);
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['theirs']);
     adapters.db.fabFiles.findById = vi
       .fn()
       .mockResolvedValue({ id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] });
+    adapters.db.fabFiles.findAllByIds.mockResolvedValue([
+      { id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] },
+    ]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
@@ -5295,7 +5425,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
 
   it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(['f1', 'f2', 'f3']).mockResolvedValue([]);
+    adapters.db.fabFiles.findTeardownIdsByDataLakeTag = vi.fn().mockResolvedValue(['f1', 'f2', 'f3']);
     adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });
@@ -6253,7 +6383,7 @@ describe('terminal lifecycle settles are conditional on the claimed transitional
       batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
       fabFiles: {
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
       },
     };
 
@@ -6365,6 +6495,7 @@ describe('terminal lifecycle settles are conditional on the claimed transitional
         }),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
         findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
         hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
       },
     };

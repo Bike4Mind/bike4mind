@@ -1,5 +1,7 @@
 import type {
   IDataLakeAccessGrantRepository,
+  DataLakeMembershipScope,
+  IFabFileDocument,
   IDataLakeCorpusActionRepository,
   IDataLakeFindingRepository,
   IDataLakeProposalRepository,
@@ -17,9 +19,12 @@ import type {
 import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
-import { resolveCanManageLake } from './authorizeLakeManage';
-import { lakeMembershipScope } from './lakeMembershipScope';
-import { lakeMembershipSignals } from './lakeMembership';
+import { loadActiveLakeGrants, resolveCanManageLake } from './authorizeLakeManage';
+import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
+import { resolveLakeTeardownScope } from './lakeTeardownScope';
+import { lakeMembershipSignals, satisfiesMembershipScope } from './lakeMembership';
+import { loadPrefixArmCandidateLakes } from './prefixArmMembership';
+import { registryCandidateLakes } from './registryCandidateLakes';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 import { reassignStorageOwner, type StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
@@ -73,7 +78,11 @@ interface CleanupDeletedDataLakeAdapters {
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
-      'findIdsByDataLakeTag' | 'hardDeleteOneById' | 'findById' | 'pullTagsByFabFileId'
+      | 'findIdsByDataLakeTag'
+      | 'findTeardownIdsByDataLakeTag'
+      | 'hardDeleteOneById'
+      | 'findAllByIds'
+      | 'pullTagsByFabFileId'
     > &
       Required<Pick<IFabFileRepository, 'findStorageKeysByIds'>>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'clearRetrievalIndexConfirmedByFabFileIds'>;
@@ -206,11 +215,13 @@ export const cleanupDeletedDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
-  // Deliberately unbounded, unlike restore's stamp-keyed reversal: purge destroys the lake and
-  // everything the membership predicate still names, a member the creator deleted on their own
-  // included. The stamp bound only stops restore from reviving what it never deleted; it is not a
-  // claim that such a file outlives its lake.
-  const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
+  // The same owner-and-no-other-lake rule phase 1 swept under (softDeleteByDataLakeTag), and only
+  // rows already soft-deleted: a file phase 1 kept live stays live even if the rule now differs
+  // (its other lake let it go, or the owner changed). Every live member is let go in step 2b.
+  // Not bounded by restore's stamp: an owner's member they deleted on their own does not outlive
+  // the lake.
+  const teardown = await resolveLakeTeardownScope(existing, await loadActiveLakeGrants(existing, { db }), { db });
+  const fileIds = await db.fabFiles.findTeardownIdsByDataLakeTag(scope, teardown);
 
   // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds }, db.fabFileChunks, logger);
@@ -348,28 +359,59 @@ export const cleanupDeletedDataLake = async (
     }
   );
 
-  // 2b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
-  // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it
-  // points at. A later lake claiming the same prefix then adopts it silently, because the
-  // create-time collision guard (`findCollidingPrefixLakes`) only compares against lakes that
-  // still exist. Clearing this lake's signals off the survivor is what makes the sparing durable:
-  // the file keeps its bytes and its chunks, and stops being a member of a lake that is gone.
+  // 2b. Whatever the predicate STILL names was spared: a member owned by someone else or held by
+  // another lake, or a joiner that arrived mid-sweep. Sparing it is only half a decision: step 5
+  // deletes the lake, so its prefix tag would outlive the lake it points at. A later lake claiming
+  // the same prefix then adopts it silently, because the create-time collision guard
+  // (`findCollidingPrefixLakes`) only compares against lakes that still exist. Clearing this lake's
+  // independent signals off the survivor makes the sparing durable. A legacy prefix signal
+  // another lake still needs is retained so cleanup does not evict the file from that lake.
   //
   // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'purging' (the
   // status the accept claimed - NOT 'deleted', so it is not restorable here) and a DLQ retry
-  // re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
-  // front and torn down with its chunks and index entry like any other.
+  // re-runs the whole sweep and reaches the survivor here again.
   const survivors = await db.fabFiles.findIdsByDataLakeTag(scope);
-  await inChunks(survivors, chunkSize, async id => {
-    const file = await db.fabFiles.findById(id);
-    const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
-    if (!file || !inLake) return;
-    // Restamped before the pull as well as after: a redelivery no longer lists this file once the pull
-    // lands, and this lake (deleted or purging) is already ignored by the owner resolution.
-    await reassignStorageOwner(file.id, db);
-    await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
-    await reassignStorageOwner(file.id, db);
-  });
+  let survivorFilesById = new Map<string, IFabFileDocument>();
+  let survivorMembershipScopes: DataLakeMembershipScope[] = [];
+  await inChunks(
+    survivors,
+    chunkSize,
+    async id => {
+      const file = survivorFilesById.get(id);
+      const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
+      if (!file || !inLake) return;
+      // Legacy overlapping prefixes can be another lake's only signal. Keep those exact names,
+      // but always remove the deleted lake's own meta-tag and its independent prefix signals.
+      const independentTags = tagsToPull.filter(
+        name =>
+          name === existing.datalakeTag ||
+          !survivorMembershipScopes.some(other =>
+            satisfiesMembershipScope(other, { userId: file.userId, tags: file.tags?.filter(tag => tag.name === name) })
+          )
+      );
+      // The helper re-reads live state and skips tombstones. Call it on both sides of the pull
+      // even for a tombstone snapshot: a concurrent restore may make this a charged live file.
+      await reassignStorageOwner(file.id, db);
+      await db.fabFiles.pullTagsByFabFileId(file.id, independentTags);
+      await reassignStorageOwner(file.id, db);
+    },
+    async ids => {
+      const files = await db.fabFiles.findAllByIds(ids, { includeDeleted: true });
+      survivorFilesById = new Map(files.map(file => [file.id, file]));
+      // Survivors may belong to someone other than the teardown owners. Resolve their own
+      // candidate lakes, including restorable deleted lakes, once per bounded slice.
+      const candidates = await loadPrefixArmCandidateLakes(
+        files.map(file => file.userId),
+        { db }
+      );
+      survivorMembershipScopes = [
+        ...candidates.filter(lake => lake.id !== existing.id && lake.fileTagPrefix).map(lakeMembershipScope),
+        ...registryCandidateLakes()
+          .filter(lake => lake.fileTagPrefix)
+          .map(registryMembershipScope),
+      ];
+    }
+  );
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
   const batches = await db.batches.find({ dataLakeId });

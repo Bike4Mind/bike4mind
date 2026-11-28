@@ -6,6 +6,7 @@ import {
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  DataLakeTeardownScope,
   type DataLakeMembershipFileCounts,
   type DataLakeLiveMember,
   type DataLakeSweptFile,
@@ -57,6 +58,7 @@ import {
   buildDataLakeMembershipQuery,
   buildDataLakePrefixOnlyMembershipFilter,
   buildLacksContentPrefixTagFilter,
+  buildDataLakeTeardownFilter,
   buildNoOtherLakeMetaTagFilter,
   LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
@@ -3530,9 +3532,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return restored;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
+  async softDeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    teardown: DataLakeTeardownScope,
+    at: Date = new Date()
+  ): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { ...buildDataLakeTeardownFilter(scope, teardown), deletedAt: null },
       { _id: 1, userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
@@ -3548,7 +3554,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // undeleteByDataLakeTag's own per-row modifiedCount gate for the identical reason.
     const flipped: DataLakeSweptFile[] = [];
     for (const doc of docs) {
-      const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
+      // Membership can change after enumeration; only the final write may decide to delete.
+      const result = await this.fabFileModel.updateOne(
+        { $and: [buildDataLakeTeardownFilter(scope, teardown), { _id: doc._id, deletedAt: null }] },
+        { $set: { deletedAt: at } }
+      );
       if (result.modifiedCount === 1) {
         flipped.push(toSweptFile(doc));
       }
@@ -3658,6 +3668,16 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     const docs = await this.fabFileModel
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
+      .setOptions({ includeDeleted: true });
+    return docs.map(d => d._id.toString());
+  }
+
+  async findTeardownIdsByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    teardown: DataLakeTeardownScope
+  ): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ ...buildDataLakeTeardownFilter(scope, teardown), deletedAt: { $ne: null } }, { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }
