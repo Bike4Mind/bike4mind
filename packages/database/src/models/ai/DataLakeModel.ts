@@ -945,6 +945,29 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Every non-blank requiredUserTag and requiredEntitlement value stored on any lake, whatever its
+   * status: an archived or deleted lake can be restored with its gate intact.
+   */
+  async findGateValues(): Promise<{ userTags: string[]; entitlements: string[] }> {
+    const gated = await this.dataLakeModel
+      .find({
+        $or: [
+          { requiredUserTag: { $exists: true, $nin: [null, ''] } },
+          { requiredEntitlement: { $exists: true, $nin: [null, ''] } },
+        ],
+      })
+      .select({ _id: 0, requiredUserTag: 1, requiredEntitlement: 1 })
+      .lean<{ requiredUserTag?: unknown; requiredEntitlement?: unknown }[]>();
+    const nonBlank = (values: unknown[]): string[] => [
+      ...new Set(values.filter((v): v is string => typeof v === 'string' && v.trim() !== '')),
+    ];
+    return {
+      userTags: nonBlank(gated.map(lake => lake.requiredUserTag)),
+      entitlements: nonBlank(gated.map(lake => lake.requiredEntitlement)),
+    };
+  }
+
   async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
     const results = await this.dataLakeModel.find({ organizationId: orgId }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
