@@ -11,6 +11,9 @@ import { childChipState } from './ChildrenStrip';
 /** What a child's card says it is doing now. */
 export type ChildCardState = 'needs-you' | 'working' | 'failed' | 'finished';
 
+/** Why a child is no longer in the sidebar: archived, or deleted (missing from a loaded list). */
+export type ChildCardGone = 'archived' | 'deleted';
+
 // Whatever wants the user sorts first; finished work last, where it is dimmed.
 const STATE_RANK: Record<ChildCardState, number> = { 'needs-you': 0, working: 1, failed: 2, finished: 3 };
 
@@ -27,6 +30,8 @@ export interface ChildCard {
   report?: { message: ChatMessage; report: ChatChildReport };
   /** Every notice and report it left in this thread, oldest first. */
   history: ChatMessage[];
+  /** Set once the child has left the sidebar; its card then folds into the archived/deleted list. */
+  gone?: ChildCardGone;
 }
 
 export interface ChildCardsLive {
@@ -46,6 +51,18 @@ export interface ChildCardLayout {
 export function noticeChildId(message: ChatMessage): string | undefined {
   if (!message.system) return undefined;
   return message.childWaiting?.sessionId ?? message.reportedChildId ?? message.childReport?.sessionId;
+}
+
+function goneReason(
+  sessionId: string,
+  live: ChildCardsLive | undefined,
+  session: ChatSessionSummary | undefined
+): ChildCardGone | undefined {
+  if (session?.archived) return 'archived';
+  // The list carries the open session's whole spawn family (shared/sessionPage.ts relatedTo), so a
+  // child missing from a loaded list was deleted. An empty list is still loading, not a deletion.
+  if (!session && live && live.sessions.length > 0 && live.statuses.get(sessionId) === undefined) return 'deleted';
+  return undefined;
 }
 
 function cardState(
@@ -96,6 +113,7 @@ export function childCardLayout(messages: readonly ChatMessage[], live?: ChildCa
     const session = sessions.get(sessionId);
     const state = cardState(sessionId, latest, report, live, session);
     const title = session?.title ?? report?.title;
+    const gone = goneReason(sessionId, live, session);
     const card: ChildCard = {
       sessionId,
       ...(title ? { title } : {}),
@@ -104,6 +122,7 @@ export function childCardLayout(messages: readonly ChatMessage[], live?: ChildCa
       asks: history.filter(message => message.childWaiting).length,
       ...(reportMessage && report ? { report: { message: reportMessage, report } } : {}),
       history,
+      ...(gone ? { gone } : {}),
     };
     return { card, last };
   });

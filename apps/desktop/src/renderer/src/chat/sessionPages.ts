@@ -68,7 +68,8 @@ export function laggingHosts(paging: ReadonlyMap<string, SessionPaging>, pagingH
  * the watermark are held back until the host behind it pages that far, so the list never has a
  * hole a later page would fill from the middle. Rows carried with a page (pinned, live, kept,
  * spawn family) are never held back, as with one host, and neither are `kept` ids (the open
- * session), which a host joining with a shallower first page would otherwise hide.
+ * session) or their children, which a host joining with a shallower first page would otherwise
+ * hide (the parent thread would then show a live child as deleted, see childCardLayout.ts).
  */
 export function mergeHostRows(
   byHost: ReadonlyMap<string, ChatSessionSummary[]>,
@@ -83,7 +84,13 @@ export function mergeHostRows(
   const shown = lists.flatMap(([hostId, rows]) => {
     const pageIds = paging.get(hostId)?.pageIds;
     if (watermark === null || !pageIds) return rows;
-    return rows.filter(row => !pageIds.has(row.id) || row.updatedAt >= watermark || kept.has(row.id));
+    return rows.filter(
+      row =>
+        !pageIds.has(row.id) ||
+        row.updatedAt >= watermark ||
+        kept.has(row.id) ||
+        kept.has(row.origin?.parentSessionId ?? '')
+    );
   });
   return shown.sort(byUpdatedDesc);
 }

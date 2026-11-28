@@ -66,7 +66,11 @@ describe('ChildSessionCards in the thread', () => {
     session('wulfric', 'PR#8536 | scripts test', { lastOutcome: 'finished' }),
   ];
 
-  const render = (messages: ChatMessage[], statuses: Array<[string, ChatSessionStatus]>) =>
+  const render = (
+    messages: ChatMessage[],
+    statuses: Array<[string, ChatSessionStatus]>,
+    listed: ChatSessionSummary[] = sessions
+  ) =>
     act(() => {
       root.render(
         <MessageThread
@@ -75,15 +79,19 @@ describe('ChildSessionCards in the thread', () => {
           streaming={false}
           onRespond={() => undefined}
           onContinue={() => undefined}
-          childSessions={{ sessions, statuses: new Map(statuses) }}
+          childSessions={{ sessions: listed, statuses: new Map(statuses) }}
         />
       );
     });
 
   const cards = () => [...container.querySelectorAll<HTMLElement>('[data-testid="child-session-card"]')];
+  const rows = () => [...container.querySelectorAll<HTMLElement>('[data-testid="child-session-row"]')];
   const cardOf = (id: string) => cards().find(card => card.dataset.sessionId === id)!;
-  const text = (card: HTMLElement, testId: string) =>
-    card.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
+  const rowOf = (id: string) => rows().find(row => row.dataset.sessionId === id)!;
+  const text = (element: HTMLElement, testId: string) =>
+    element.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
+  const click = (element: ParentNode, testId: string) =>
+    act(() => element.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!.click());
 
   const flood = [
     { id: 'prompt', role: 'user', content: 'Review and land these PRs', createdAt: at() } as ChatMessage,
@@ -96,7 +104,7 @@ describe('ChildSessionCards in the thread', () => {
     waiting('veyra', 'bash gh pr merge 8514'),
   ];
 
-  it('draws one card per child instead of a card per notice, most urgent first', () => {
+  it('gives a child that needs you a full card and lists the rest one line each', () => {
     render(flood, [
       ['veyra', 'needs-action'],
       ['fiora', 'processing'],
@@ -104,11 +112,12 @@ describe('ChildSessionCards in the thread', () => {
 
     expect(container.querySelectorAll('[data-testid="chat-message-system"]')).toHaveLength(0);
     expect(container.querySelectorAll('[data-testid="child-session-cards"]')).toHaveLength(1);
-    expect(cards().map(card => [card.dataset.sessionId, card.dataset.state])).toEqual([
-      ['veyra', 'needs-you'],
+    expect(cards().map(card => [card.dataset.sessionId, card.dataset.state])).toEqual([['veyra', 'needs-you']]);
+    expect(rows().map(row => [row.dataset.sessionId, row.dataset.state])).toEqual([
       ['fiora', 'working'],
       ['wulfric', 'finished'],
     ]);
+    expect(text(container, 'child-session-list-summary')).toBe('2 sub-sessions · 1 working · 1 finished');
     expect(container.textContent).toContain('Review and land these PRs');
   });
 
@@ -118,34 +127,79 @@ describe('ChildSessionCards in the thread', () => {
     expect(veyra.textContent).toContain('PR#8514 | payment-action');
     expect(text(veyra, 'child-session-card-headline')).toBe('Approve: bash gh pr merge 8514');
     expect(text(veyra, 'child-session-card-asks')).toBe('3 asks');
-    // One ask needs no count.
-    expect(text(cardOf('wulfric'), 'child-session-card-asks')).toBeNull();
   });
 
-  it('updates the same card in place once the ask is answered, and on a new ask', () => {
+  it('moves a child between its card and its row as the ask is answered and asked again', () => {
     render(flood, [['veyra', 'needs-action']]);
-    const before = cardOf('veyra');
+    expect(cardOf('veyra')).toBeDefined();
 
     render(flood, [['veyra', 'processing']]);
-    expect(cardOf('veyra')).toBe(before);
-    expect(before.dataset.state).toBe('working');
-    expect(text(before, 'child-session-card-headline')).toBeNull();
+    expect(cards()).toHaveLength(0);
+    expect(rowOf('veyra').dataset.state).toBe('working');
+    expect(text(rowOf('veyra'), 'child-session-row-meta')).toBe('working');
 
     render([...flood, waiting('veyra', 'bash gh pr merge 8514 --squash')], [['veyra', 'needs-action']]);
-    expect(cards()).toHaveLength(3);
     expect(text(cardOf('veyra'), 'child-session-card-headline')).toBe('Approve: bash gh pr merge 8514 --squash');
     expect(text(cardOf('veyra'), 'child-session-card-asks')).toBe('4 asks');
   });
 
-  it('keeps every earlier notice and report one click away', () => {
+  it('keeps a finished child report and every earlier notice one click away', () => {
     render(flood, []);
-    const wulfric = cardOf('wulfric');
-    expect(wulfric.querySelector('[data-testid="child-session-card-history"]')).toBeNull();
-    act(() => wulfric.querySelector<HTMLButtonElement>('[data-testid="child-session-card-history-btn"]')!.click());
+    const wulfric = rowOf('wulfric');
+    expect(wulfric.querySelector('[data-testid="child-session-row-detail"]')).toBeNull();
+    click(wulfric, 'child-session-row-expand-btn');
 
-    const history = wulfric.querySelector('[data-testid="child-session-card-history"]')!;
+    const history = wulfric.querySelector('[data-testid="child-session-row-history"]')!;
     expect(history.querySelectorAll('[data-testid="child-session-card-history-entry"]')).toHaveLength(1);
     expect(history.textContent).toContain('Approve: bash pnpm test');
     expect(history.querySelectorAll('[data-testid="child-report-card"]')).toHaveLength(1);
+  });
+
+  it('folds archived and deleted children behind one toggle, and links only the ones that still exist', () => {
+    const shelved = session('shelved', 'PR#8790 | settings ux', { archived: true });
+    render([report('wulfric'), report('shelved'), report('removed')], [], [...sessions, shelved]);
+
+    expect(rows().map(row => row.dataset.sessionId)).toEqual(['wulfric']);
+    expect(text(container, 'child-session-list-summary')).toBe('1 sub-session · 1 finished');
+    const toggle = container.querySelector<HTMLElement>('[data-testid="child-session-gone-toggle"]')!;
+    expect(toggle.textContent).toBe('Show 2 archived or deleted');
+
+    click(container, 'child-session-gone-toggle');
+    expect(toggle.textContent).toBe('Hide 2 archived or deleted');
+    const goneRows = [...container.querySelectorAll<HTMLElement>('[data-testid="child-session-gone-list"] [data-testid="child-session-row"]')];
+    expect(goneRows.map(row => [row.dataset.sessionId, row.dataset.gone])).toEqual(
+      expect.arrayContaining([
+        ['shelved', 'archived'],
+        ['removed', 'deleted'],
+      ])
+    );
+    const removed = goneRows.find(row => row.dataset.sessionId === 'removed')!;
+    expect(removed.querySelector('[data-testid="child-session-row-open-link"]')).toBeNull();
+    expect(removed.textContent).toContain('removed');
+    const shelvedRow = goneRows.find(row => row.dataset.sessionId === 'shelved')!;
+    expect(text(shelvedRow, 'child-session-row-gone')).toBe('archived');
+  });
+
+  it('keeps a stopped child as a full card with its error', () => {
+    const failed: ChatMessage = {
+      ...report('fiora'),
+      display: 'The session "fiora" stopped with an error: boom',
+      childReport: { sessionId: 'fiora', title: 'fiora', outcome: 'failed', branch: 'agent/fiora', headSha: 'abc1234' },
+    };
+    render([failed], []);
+    const fiora = cardOf('fiora');
+    expect(fiora.dataset.state).toBe('failed');
+    expect(text(fiora, 'child-session-card-headline')).toBe('The session "fiora" stopped with an error: boom');
+    expect(text(fiora, 'child-session-card-workspace')).toBe('agent/fiora @ abc1234');
+  });
+
+  it('drops a stale "has finished." from a child whose live state says it stopped', () => {
+    const stopped = session('wulfric', 'PR#8536 | scripts test', { lastOutcome: 'failed' });
+    render([report('wulfric')], [], [stopped]);
+    const wulfric = cardOf('wulfric');
+    expect(wulfric.dataset.state).toBe('failed');
+    expect(text(wulfric, 'child-session-card-headline')).toBeNull();
+    click(wulfric, 'child-session-card-history-btn');
+    expect(wulfric.querySelector('[data-testid="child-session-card-history"]')!.textContent).toContain('has finished');
   });
 });
