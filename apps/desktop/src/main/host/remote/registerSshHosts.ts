@@ -51,7 +51,7 @@ export function registerSshHosts(manager: ConnectionManager, options: SshHostsOp
   const openTransport = async (alias: string) =>
     createProcessTransport(await sshSpec(alias), { onProtocolError: detail => log(`HOST: ${detail}`) });
   const client = { clientId: randomUUID(), clientName: 'Bike4Mind Desktop installer', clientVersion: version };
-  const provisioner = new HostProvisioner({
+  const provisioner: HostProvisioner = new HostProvisioner({
     installer: new HostInstaller({ scriptSpec: sshScriptSpec }),
     artifact: hostArtifactProvider(options.artifactSource, version),
     version,
@@ -65,7 +65,7 @@ export function registerSshHosts(manager: ConnectionManager, options: SshHostsOp
     onProgress: broadcastInstallProgress,
     log,
   });
-  const directory = new SshHostDirectory({
+  const directory: SshHostDirectory = new SshHostDirectory({
     manager,
     store: sshHostsFile(join(options.dataDirectory, SSH_HOSTS_FILE_NAME), log),
     openTransport,

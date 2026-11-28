@@ -134,3 +134,51 @@ jobs:
             {
               "text": ":red_circle: Nightly pure-tsc baseline failed — classic tsc rejects something `typecheck` (tsgo) is letting through. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
             }
+
+      # The open failure issue is the "was failing" state, so a pass announces
+      # recovery once. Main only: a manual run on a fix branch passing does not
+      # mean main has recovered.
+      - name: Close failure issue on recovery
+        id: recovery
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const marker = '<!-- nightly-tsc-baseline -->';
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            // listForRepo returns PRs too; a PR quoting the marker must not be closed.
+            const found = open.find(i => !i.pull_request && i.body && i.body.includes(marker));
+            if (!found) return;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: found.number,
+              body: `Recovered as of ${runUrl}`,
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: found.number,
+              state: 'closed',
+            });
+            core.setOutput('recovered', 'true');
+
+      - name: Notify Slack on recovery
+        if: success() && steps.recovery.outputs.recovered == 'true' && env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":large_green_circle: Nightly pure-tsc baseline recovered: classic tsc passes again on main. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
