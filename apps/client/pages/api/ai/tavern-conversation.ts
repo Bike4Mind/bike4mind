@@ -187,10 +187,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         memorySections = {};
         for (const [charId, agentId] of Object.entries(agentIds)) {
           try {
-            // Object-level authz: only read memory for agents the caller can access
-            const agent = await agentRepository.shareable.findAccessibleById(req.user, agentId as string);
+            // Memory is owner-only, like on the agent read routes: a share does not reach it.
+            const agent = await agentRepository.findByIdAndUserId(agentId as string, req.user.id);
             if (!agent) continue;
-            const memories = await agentRepository.getMemoryJournal(agentId as string, 20);
+            const memories = await agentRepository.getMemoryJournal(agent.id, 20);
             if (memories.length > 0) {
               memorySections[charId] = agentMemoryService.buildMemoryPromptSection(memories);
             }
@@ -251,8 +251,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
           for (const [charId, agentId] of Object.entries(agentIds)) {
             try {
-              // Object-level authz: appending memory is a write, so require update access
-              const agent = await agentRepository.shareable.findUpdateAccessById(req.user, agentId as string);
+              const agent = await agentRepository.findByIdAndUserId(agentId as string, req.user.id);
               if (!agent) continue;
               const char = (characters as { id: string; name: string; personality: string }[]).find(
                 c => c.id === charId
@@ -267,7 +266,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
               );
 
               for (const mem of newMemories) {
-                await agentRepository.appendMemory(agentId as string, mem);
+                await agentRepository.appendMemory(agent.id, mem);
               }
             } catch (err) {
               // Non-fatal, but a credit refusal would repeat for every remaining agent
