@@ -1321,19 +1321,54 @@ describe('web session sync', () => {
       expect((await service.state()).web.progress).toBeUndefined();
     });
 
+    // Every background task the service starts (a focus sync, a poll tick, a hint count) is
+    // recorded so a test awaits the work itself: it runs real file I/O, which no fake clock flushes.
+    function trackBackground(service: object) {
+      const pending: Promise<unknown>[] = [];
+      const target = service as { runBackground: (work: () => Promise<unknown>) => void };
+      const runBackground = target.runBackground.bind(service);
+      target.runBackground = work =>
+        runBackground(() => {
+          const run = work();
+          pending.push(run.catch(() => undefined));
+          return run;
+        });
+      return async () => {
+        while (pending.length > 0) await pending.shift();
+      };
+    }
+    const listReads = (web: ReturnType<typeof fakeWeb>) =>
+      web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/v1/sessions').length;
+    // Holds every web read until released; `reached` resolves once the first one is waiting.
+    function gateWeb(web: ReturnType<typeof fakeWeb>) {
+      const inner = web.get.getMockImplementation()!;
+      let release!: () => void;
+      let enter!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      const reached = new Promise<void>(resolve => (enter = resolve));
+      web.get.mockImplementation(async url => {
+        enter();
+        await gate;
+        return inner(url);
+      });
+      return { release, reached };
+    }
+
     describe('on window focus', () => {
       afterEach(() => vi.useRealTimers());
-      const listReads = (web: ReturnType<typeof fakeWeb>) =>
-        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/v1/sessions').length;
-      const settle = () => new Promise(resolve => setTimeout(resolve, 25));
 
-      it('syncs at most once a minute', async () => {
+      async function syncedService(web: ReturnType<typeof fakeWeb>) {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
-        const web = fakeWeb(oneNotebook());
         const { service } = await setup(new Map([['account-a', web.api]]));
         await service.setWebSettings({ enabled: true });
         await service.syncWeb();
+        return { service, settle: trackBackground(service) };
+      }
+
+      it('syncs at most once a minute', async () => {
+        const web = fakeWeb(oneNotebook());
+        const { service, settle } = await syncedService(web);
         const base = listReads(web);
 
         vi.advanceTimersByTime(30_000);
@@ -1343,55 +1378,37 @@ describe('web session sync', () => {
 
         vi.advanceTimersByTime(31_000);
         service.onWindowFocus();
-        await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+        await settle();
+        expect(listReads(web)).toBe(base + 1);
       });
 
       it('does nothing while a web sync is already running', async () => {
-        vi.useFakeTimers({ toFake: ['Date'] });
-        vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
         const web = fakeWeb(oneNotebook());
-        const { service } = await setup(new Map([['account-a', web.api]]));
-        await service.setWebSettings({ enabled: true });
-        await service.syncWeb();
+        const { service, settle } = await syncedService(web);
         const base = listReads(web);
 
-        const inner = web.get.getMockImplementation()!;
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => (release = resolve));
-        web.get.mockImplementation(async url => {
-          await gate;
-          return inner(url);
-        });
+        const { release, reached } = gateWeb(web);
         vi.advanceTimersByTime(61_000);
         service.onWindowFocus();
-        await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+        await reached;
+        expect(listReads(web)).toBe(base + 1);
         vi.advanceTimersByTime(120_000);
         service.onWindowFocus();
         release();
-        await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
         await settle();
         expect(listReads(web)).toBe(base + 1);
       });
 
       it('counts the minute from the end of a run that outlasted it', async () => {
-        vi.useFakeTimers({ toFake: ['Date'] });
-        vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
         const web = fakeWeb(oneNotebook());
-        const { service } = await setup(new Map([['account-a', web.api]]));
-        await service.setWebSettings({ enabled: true });
-        await service.syncWeb();
+        const { service, settle } = await syncedService(web);
         const base = listReads(web);
 
-        const inner = web.get.getMockImplementation()!;
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => (release = resolve));
-        web.get.mockImplementation(async url => {
-          await gate;
-          return inner(url);
-        });
+        const { release, reached } = gateWeb(web);
         vi.advanceTimersByTime(61_000);
         const run = service.syncWeb();
-        await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+        await reached;
+        expect(listReads(web)).toBe(base + 1);
         vi.advanceTimersByTime(90_000);
         release();
         await run;
@@ -1403,65 +1420,63 @@ describe('web session sync', () => {
 
         vi.advanceTimersByTime(56_000);
         service.onWindowFocus();
-        await vi.waitFor(() => expect(listReads(web)).toBe(base + 2));
+        await settle();
+        expect(listReads(web)).toBe(base + 2);
       });
     });
 
     describe('while a window stays focused', () => {
-      // File I/O resolves on real time, so waits use the timer captured before the clock is faked.
-      const realSetTimeout = globalThis.setTimeout;
-      const realSleep = (ms: number) => new Promise(resolve => realSetTimeout(resolve, ms));
-      const until = async (check: () => boolean) => {
-        for (let i = 0; i < 200 && !check(); i++) await realSleep(10);
-        expect(check()).toBe(true);
-      };
       const MINUTE = 60_000;
-      const listReads = (web: ReturnType<typeof fakeWeb>) =>
-        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/v1/sessions').length;
 
+      // A poll tick re-arms the next one only after its sync finishes, so each step advances the
+      // clock and then awaits the tick: advancing again before that would skip the re-armed timer.
       async function focusedService(web: ReturnType<typeof fakeWeb>) {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
         const { service } = await setup(new Map([['account-a', web.api]]));
         await service.setWebSettings({ enabled: true });
         await service.syncWeb();
+        const settle = trackBackground(service);
         service.onWindowFocus();
-        return service;
+        await settle();
+        const advance = async (ms: number) => {
+          await vi.advanceTimersByTimeAsync(ms);
+          await settle();
+        };
+        return { service, settle, advance };
       }
       afterEach(() => vi.useRealTimers());
 
       it('picks up the web every three minutes', async () => {
         const web = fakeWeb(oneNotebook());
-        await focusedService(web);
+        const { advance } = await focusedService(web);
         const base = listReads(web);
 
-        await vi.advanceTimersByTimeAsync(3 * MINUTE - 1000);
-        await realSleep(30);
+        await advance(3 * MINUTE - 1000);
         expect(listReads(web)).toBe(base);
-        await vi.advanceTimersByTimeAsync(1000);
-        await until(() => listReads(web) === base + 1);
-        await realSleep(30);
-        await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await until(() => listReads(web) === base + 2);
+        await advance(1000);
+        expect(listReads(web)).toBe(base + 1);
+        await advance(3 * MINUTE);
+        expect(listReads(web)).toBe(base + 2);
       });
 
       it('stops once no window of the app is focused, and resumes on the next focus', async () => {
         const web = fakeWeb(oneNotebook());
-        const service = await focusedService(web);
+        const { service, settle, advance } = await focusedService(web);
         const base = listReads(web);
 
         service.onAppBlur();
-        await vi.advanceTimersByTimeAsync(30 * MINUTE);
-        await realSleep(30);
+        await advance(30 * MINUTE);
         expect(listReads(web)).toBe(base);
 
         service.onWindowFocus();
-        await until(() => listReads(web) === base + 1);
+        await settle();
+        expect(listReads(web)).toBe(base + 1);
       });
 
       it('backs off after a failed poll and resets once one succeeds', async () => {
         const web = fakeWeb(oneNotebook());
-        const service = await focusedService(web);
+        const { advance } = await focusedService(web);
         const inner = web.get.getMockImplementation()!;
         let failing = true;
         web.get.mockImplementation(async url => {
@@ -1470,38 +1485,31 @@ describe('web session sync', () => {
         });
         const base = listReads(web);
 
-        await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await until(() => listReads(web) === base + 1);
-        await until(() => (service as unknown as { webPollTimer: unknown }).webPollTimer !== null);
-        failing = false;
-        await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await realSleep(30);
+        await advance(3 * MINUTE);
         expect(listReads(web)).toBe(base + 1);
-        await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await until(() => listReads(web) === base + 2);
-        await until(() => (service as unknown as { webPollTimer: unknown }).webPollTimer !== null);
-        await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await until(() => listReads(web) === base + 3);
+        failing = false;
+        await advance(3 * MINUTE);
+        expect(listReads(web)).toBe(base + 1);
+        await advance(3 * MINUTE);
+        expect(listReads(web)).toBe(base + 2);
+        await advance(3 * MINUTE);
+        expect(listReads(web)).toBe(base + 3);
       });
 
       it('never stacks a poll on a sync that is still running', async () => {
         const web = fakeWeb(oneNotebook());
-        await focusedService(web);
-        const inner = web.get.getMockImplementation()!;
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => (release = resolve));
-        web.get.mockImplementation(async url => {
-          await gate;
-          return inner(url);
-        });
+        const { settle } = await focusedService(web);
+        const { release, reached } = gateWeb(web);
         const base = listReads(web);
 
         await vi.advanceTimersByTimeAsync(3 * MINUTE);
-        await until(() => listReads(web) === base + 1);
+        await reached;
+        expect(listReads(web)).toBe(base + 1);
         await vi.advanceTimersByTimeAsync(10 * MINUTE);
-        await realSleep(30);
         expect(listReads(web)).toBe(base + 1);
         release();
+        await settle();
+        expect(listReads(web)).toBe(base + 1);
       });
     });
   });
