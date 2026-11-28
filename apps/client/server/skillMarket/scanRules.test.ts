@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { b4mLLMTools, UNTRUSTED_CLOSE, type ISkillSnapshot } from '@bike4mind/common';
 import {
   DEFAULT_HIGH_RISK_TOOLS,
@@ -384,11 +385,17 @@ describe('reviewStatusFor', () => {
 
 describe('DEFAULT_HIGH_RISK_TOOLS', () => {
   it('names only real tools, so the gate cannot silently pass everything', () => {
-    // A name an overlay supplies is real only where that overlay is mounted, so it may sit outside
-    // the enum; any further miss is a typo that would let the gate pass everything.
     const builtIn: readonly string[] = b4mLLMTools.options;
-    const outsideEnum = DEFAULT_HIGH_RISK_TOOLS.filter(t => !builtIn.includes(t));
-    expect(outsideEnum.length).toBeLessThanOrEqual(1);
+    const generated = Object.keys(premiumLlmTools);
+    // Names an overlay supplies are verifiable only where that overlay is mounted; with an empty
+    // generated map they cannot be told apart from a typo, so the check runs only when it is not empty.
+    const known = new Set<string>([...builtIn, ...generated]);
+    const unknown = DEFAULT_HIGH_RISK_TOOLS.filter(t => !known.has(t));
+    if (generated.length > 0) {
+      expect(unknown).toEqual([]);
+    } else {
+      expect(DEFAULT_HIGH_RISK_TOOLS.filter(t => builtIn.includes(t))).not.toHaveLength(0);
+    }
   });
 });
 

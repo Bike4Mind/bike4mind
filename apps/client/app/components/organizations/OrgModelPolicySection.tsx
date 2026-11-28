@@ -57,13 +57,17 @@ const toPolicy = (form: PolicyForm) =>
 
 const PROVIDERS: readonly string[] = Object.values(ModelBackend);
 
+// Stable fallback so the toolRows memo is not recomputed each render when the field is absent.
+const NO_CONTRIBUTED_TOOLS: readonly string[] = [];
+
 // A companion (e.g. retrieve_knowledge_content) is allowed with the tool it pairs with, so it is shown
 // beside that tool rather than as its own checkbox.
 const toolRows = (contributedTools: readonly string[]): ReadonlyArray<{ tool: string; companions: string[] }> => {
   const covered = new Set<string>();
   const rows: Array<{ tool: string; companions: string[] }> = [];
   for (const tool of [...b4mLLMTools.options, ...contributedTools]) {
-    if (covered.has(tool) || rows.some(row => row.tool === tool)) continue;
+    if (covered.has(tool)) continue;
+    covered.add(tool);
     const companions = [...expandOrgAllowedTools([tool])].filter(name => name !== tool);
     companions.forEach(name => covered.add(name));
     rows.push({ tool, companions });
@@ -138,7 +142,7 @@ const PolicyEditor: FC<{
   const busy = save.isPending || reset.isPending;
   const parsedPolicy = toPolicy(form);
   const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
-  const knownTools: ReadonlySet<string> = new Set([...b4mLLMTools.options, ...contributedTools]);
+  const knownTools: ReadonlySet<string> = new Set(TOOL_ROWS.flatMap(row => [row.tool, ...row.companions]));
   const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
   const canSave =
     !busy &&
@@ -307,7 +311,7 @@ const OrgModelPolicySection: FC<{ organization: IOrganizationDocument }> = ({ or
       orgId={organization.id}
       saved={toForm(data.policy)}
       invalidStored={data.invalidStored}
-      contributedTools={data.contributedTools ?? []}
+      contributedTools={data.contributedTools ?? NO_CONTRIBUTED_TOOLS}
     />
   );
 };

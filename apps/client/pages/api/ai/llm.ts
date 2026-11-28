@@ -34,7 +34,7 @@ import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { Request } from 'express';
-import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
 // (ChatCompletionInvoke -> dispatchQuest), so a key minted without chat access must not be able
@@ -167,7 +167,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
 
     const turnAuth = requestTurnAuth(req);
     const quest = await chatCompletion.invoke({
-      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      contributedToolNames: premiumLlmToolNames,
       body: {
         ...invokeParams,
         sessionId,

@@ -27,7 +27,7 @@ import {
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import { readOrgModelPolicy } from '@bike4mind/common';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import { orgDisallowedTools } from '@bike4mind/services/llm/orgToolPolicy';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
@@ -236,7 +236,7 @@ export async function startAgentExecution(
     const disallowed = orgDisallowedTools(
       input.enabledTools,
       readOrgModelPolicy(org?.modelPolicy),
-      new Set(Object.keys(premiumLlmTools))
+      premiumLlmToolNames
     );
     if (disallowed.length > 0) {
       return {

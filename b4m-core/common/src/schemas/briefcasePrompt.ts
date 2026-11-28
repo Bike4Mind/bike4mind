@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ToolNameSchema } from './llm';
 
 // Briefcase prompt validation
 //
@@ -32,13 +33,10 @@ export const BriefcaseRequiredToolsSchema = z
   .array(
     // Identifier-shaped names, not only built-ins: overlay tools resolve by name, and a prompt
     // stored with a name that has since left the enum must still round-trip through an edit.
-    z
-      .string()
-      .regex(/^[a-z][a-z0-9_]{0,63}$/, 'Invalid tool name')
-      .refine(
-        t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t),
-        'This tool is not permitted in a briefcase prompt'
-      )
+    ToolNameSchema.refine(
+      t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t),
+      'This tool is not permitted in a briefcase prompt'
+    )
   )
   .max(16);
 

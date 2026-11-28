@@ -98,6 +98,7 @@ import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/a
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import {
@@ -846,7 +847,7 @@ function withOrgToolPolicy<T extends { toolSchema: { name: string } }>(
   const { tools: kept, stripped } = applyOrgToolPolicy(
     tools,
     readOrgModelPolicy(organization?.modelPolicy),
-    new Set(Object.keys(premiumLlmTools))
+    premiumLlmToolNames
   );
   if (stripped.length > 0) {
     logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: stripped });
@@ -2627,7 +2628,7 @@ async function runExecution(
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
       orgToolPolicy: orgModelPolicy,
-      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      contributedToolNames: premiumLlmToolNames,
       sessionDisabledTools: mcpSessionDisabledTools(
         sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
@@ -5096,7 +5097,7 @@ async function processSubagentDispatch(
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       orgToolPolicy: orgModelPolicy,
-      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      contributedToolNames: premiumLlmToolNames,
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP

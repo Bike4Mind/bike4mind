@@ -184,6 +184,22 @@ describe('OrgModelPolicySection', () => {
     expect(mocks.save).toHaveBeenCalledWith({ ...UNRESTRICTED, allowedTools: ['web_search'] });
   });
 
+  it('does not flag a stored companion tool as unrecognized and keeps save enabled', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['image_generation', 'edit_image'] },
+      invalidStored: false,
+    };
+    renderSection();
+    expect(screen.queryByLabelText('edit_image (unrecognized; remove to save)')).toBeNull();
+    tick('org-model-policy-tool-web_search');
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({
+      ...UNRESTRICTED,
+      allowedTools: ['image_generation', 'edit_image', 'web_search'],
+    });
+  });
+
   it('shows obsolete selections and requires their explicit removal before a strict save', () => {
     mocks.view = {
       policy: {
