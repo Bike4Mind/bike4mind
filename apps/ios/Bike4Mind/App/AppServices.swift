@@ -18,6 +18,7 @@ final class AppServices {
     let cache: FileSessionListCache
     let transcriptCache: SettledTranscriptCache
     let media: MediaClient
+    let artifacts: ArtifactsClient
     let studio: StudioClient
     let capture: CaptureStack
     let account: AccountClient
@@ -341,6 +342,26 @@ final class AppServices {
     return current.media
   }
 
+  var artifacts: any ArtifactsAPI {
+    #if DEBUG
+      if FixtureServices.isEnabled { return FixtureServices.artifacts }
+    #endif
+    return current.artifacts
+  }
+
+  /// `features.artifacts` for the signed-in server; the drawer shows its Artifacts row only while this is on.
+  private(set) var artifactsFeatureEnabled = false
+  @ObservationIgnored private var artifactsFeatureEnvironment: ServerEnvironment?
+
+  func refreshArtifactsFeature() async {
+    let environment = auth.environment
+    // A different server has its own flag, so the last answer must not carry over.
+    if artifactsFeatureEnvironment != environment { artifactsFeatureEnabled = false }
+    guard let enabled = try? await artifacts.artifactsEnabled() else { return }
+    artifactsFeatureEnvironment = environment
+    artifactsFeatureEnabled = enabled
+  }
+
   var studio: any StudioAPI {
     #if DEBUG
       if FixtureServices.isEnabled { return FixtureServices.studio }
@@ -503,6 +524,7 @@ final class AppServices {
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
       transcriptCache: transcriptCache,
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
+      artifacts: ArtifactsClient(baseURL: environment.baseURL, tokens: auth),
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
       capture: .live(
         baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app,

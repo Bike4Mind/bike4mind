@@ -71,7 +71,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     // Checked over the whole request before any row is created, so a refused grant creates nobody.
     // Rows are unvalidated here; non-numeric credits and non-string tags fail per-row validation later.
     const rowTags = users.flatMap(row => (Array.isArray(row?.tags) ? row.tags.filter(t => typeof t === 'string') : []));
-    assertCanSeedAccount(req, {
+    await assertCanSeedAccount(req, {
       credits: grantPackage
         ? grantPackage.credits
         : users.reduce(

@@ -53,6 +53,7 @@ const SSH_ERROR = 255;
 const KIND_FOR_EXIT_CODE: ReadonlyMap<number, HostConnectFailureKind> = new Map([
   [HOST_EXIT_CODES.unsupportedPlatform, 'unsupportedPlatform'],
   [HOST_EXIT_CODES.nodeTooOld, 'nodeTooOld'],
+  [HOST_EXIT_CODES.nodeMissing, 'nodeMissing'],
   [HOST_EXIT_CODES.daemonVersionMismatch, 'daemonVersionMismatch'],
   [HOST_EXIT_CODES.daemonStartTimeout, 'daemonStartTimeout'],
   [HOST_EXIT_CODES.daemonAlreadyRunning, 'lost'],

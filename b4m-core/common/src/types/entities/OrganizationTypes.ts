@@ -44,6 +44,11 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * control. Like `adminUserIds`, an entry counts only with a `users[]` row; Manager wins on overlap.
    */
   billingManagerUserIds?: string[];
+  /**
+   * Users an administrator removed from the roster. Self-service joins (verified-domain, partner
+   * rule, share link) refuse them; an administrator's add or a named invite lifts the entry.
+   */
+  removedUserIds?: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -281,8 +286,14 @@ export interface IOrganizationRepository
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails and every role list (one targeted, idempotent update). */
-  removeMember(organizationId: string, userId: string): Promise<void>;
+  /**
+   * Remove a member from users/userDetails and every role list (one targeted, idempotent update).
+   * `block` also records them in `removedUserIds`.
+   */
+  removeMember(organizationId: string, userId: string, options?: { block?: boolean }): Promise<void>;
+
+  /** Drop the user from `removedUserIds` (idempotent). */
+  clearRemovedMember(organizationId: string, userId: string): Promise<void>;
 
   /**
    * Give one member one assignable role, keeping `adminUserIds` and `billingManagerUserIds` disjoint

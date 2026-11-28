@@ -13,9 +13,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -45,19 +49,35 @@ fun ApprovalCard(action: PendingAction, state: ApprovalCardState, onRespond: (Pe
         }
     }
     val lapsed = action.hasLapsed(now)
+    // Approve waits until every argument has been shown in full, so nothing clipped is approved unseen.
+    var expanded by remember(action) { mutableStateOf(false) }
+    var clipped by remember(action) { mutableStateOf(false) }
 
     OutlinedCard(modifier = Modifier.fillMaxWidth().testTag("message-pending-action")) {
         Column(modifier = Modifier.padding(Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
             Text(action.tool, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            action.connector?.let { connector ->
+                Text(
+                    stringResource(R.string.approval_connector, connector.displayName, connector.urlHost),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("message-approval-connector"),
+                )
+            }
             action.params.toSortedMap().forEach { (name, value) ->
                 Text(
                     stringResource(R.string.approval_param, name, value),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_PARAM_LINES,
                     overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (it.hasVisualOverflow) clipped = true },
                 )
+            }
+            if (clipped) {
+                TextButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("message-approval-expand-btn")) {
+                    Text(stringResource(if (expanded) R.string.approval_show_less else R.string.approval_show_all))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -70,7 +90,11 @@ fun ApprovalCard(action: PendingAction, state: ApprovalCardState, onRespond: (Pe
             }
             if (state.offersDecision && !lapsed) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-                    Button(onClick = { onRespond(PendingActionDecision.APPROVE) }, modifier = Modifier.testTag("message-approve-btn")) {
+                    Button(
+                        onClick = { onRespond(PendingActionDecision.APPROVE) },
+                        enabled = !clipped || expanded,
+                        modifier = Modifier.testTag("message-approve-btn"),
+                    ) {
                         Text(stringResource(R.string.approval_approve))
                     }
                     OutlinedButton(
@@ -116,3 +140,4 @@ private fun failure(failure: PendingActionFailure): String = when (failure) {
 }
 
 private const val LAPSE_CHECK_MS = 30_000L
+private const val COLLAPSED_PARAM_LINES = 2

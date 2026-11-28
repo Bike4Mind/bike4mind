@@ -13,6 +13,10 @@ src/main/kotlin/com/bike4mind/client/infrastructure/RequestConfig.kt
 src/main/kotlin/com/bike4mind/client/infrastructure/RequestMethod.kt
 src/main/kotlin/com/bike4mind/client/models/ErrorResponse.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Catalog.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200CatalogModelsInner.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200CatalogModelsInnerAccess.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200CatalogSupersededModelsInner.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Features.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Limits.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Models.kt
@@ -28,10 +32,13 @@ src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200ModelsAvai
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200ModelsAvailableInnerImageSizingOneOf4.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200ModelsAvailableInnerImageSizingOneOf5.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200ModelsAvailableInnerImageSupports.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200PublicConfig.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Server.kt
+src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Transport.kt
 src/main/kotlin/com/bike4mind/client/models/GetCreditBalanceResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetMeResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetMeResponse200Credits.kt
+src/main/kotlin/com/bike4mind/client/models/GetMeResponse200CreditsExpiringInner.kt
 src/main/kotlin/com/bike4mind/client/models/GetMeResponse200Subscription.kt
 src/main/kotlin/com/bike4mind/client/models/GetQuestResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetQuestResponse200FallbackInfo.kt
@@ -46,6 +53,7 @@ src/main/kotlin/com/bike4mind/client/models/ListCreditTransactionsResponse200Dat
 src/main/kotlin/com/bike4mind/client/models/ListSessionQuestsResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/ListSessionQuestsResponse200DataInner.kt
 src/main/kotlin/com/bike4mind/client/models/ListSessionQuestsResponse200DataInnerPendingAction.kt
+src/main/kotlin/com/bike4mind/client/models/ListSessionQuestsResponse200DataInnerPendingActionCustomConnector.kt
 src/main/kotlin/com/bike4mind/client/models/ListSessionsResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/ListSessionsResponse200DataInner.kt
 src/main/kotlin/com/bike4mind/client/models/ScopeForbiddenResponse.kt

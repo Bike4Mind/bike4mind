@@ -299,7 +299,18 @@ export const SessionQuestPendingActionSchema = z.object({
   tool: z.string().describe('The tool awaiting approval.'),
   params: z.record(z.string(), z.unknown()).describe('The arguments the tool would run with.'),
   ts: z.number().describe('When the approval was requested, in Unix milliseconds. It lapses after 15 minutes.'),
+  customConnector: z
+    .object({
+      displayName: z.string().describe('The connection the call goes to, as named in the product.'),
+      urlHost: z.string().describe('The host the connection sends the call to.'),
+    })
+    .optional()
+    .describe(
+      'Set when the tool belongs to a custom connector. Show it, so the call target is visible before approval.'
+    ),
 });
+
+export type SessionQuestPendingAction = z.infer<typeof SessionQuestPendingActionSchema>;
 
 /**
  * One turn of a session's conversation. A deliberately small projection of the stored quest: the

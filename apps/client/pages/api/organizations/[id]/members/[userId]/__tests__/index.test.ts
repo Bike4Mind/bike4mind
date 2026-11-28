@@ -101,7 +101,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {}, userApiKeyRepository: {} }));
-vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
+vi.mock('@bike4mind/database/social', () => ({ groupRepository: {}, inviteRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '@pages/api/organizations/[id]/members/[userId]/index';

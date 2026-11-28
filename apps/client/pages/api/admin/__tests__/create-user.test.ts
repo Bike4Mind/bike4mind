@@ -28,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
     }
   },
   userRepository: {},
+  dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
   pendingOtcTokenRepository: {
     storeNonce: (...args: unknown[]) => mockStoreNonce(...args),
   },
@@ -313,6 +314,17 @@ describe('admin/create-user', () => {
         user: { isAdmin: false, adminPermissions: ['settings:manage'] },
       };
       await expect(runHandler(req, makeRes())).rejects.toThrow('Missing permission: credits:adjust');
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a lake gate tag from a settings:manage delegate before any write', async () => {
+      const req = {
+        ...makeReq({ ...base, tags: ['beta', 'Lake-Gate'] }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow(
+        'Only full administrators can assign tags that gate data lake access'
+      );
       expect(mockCreateUser).not.toHaveBeenCalled();
     });
 

@@ -18,7 +18,7 @@ import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/e
 export const executeApprovedUsersBulk: ApprovalExecutor = async (params, { req, approval }) => {
   const request = AdminUsersBulkExecuteRequestSchema.parse(params);
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
-  assertCanRunUsersBulkAction(req, request.action.type, {
+  await assertCanRunUsersBulkAction(req, request.action.type, {
     blocks: blocksEmailDomains(request.action),
     tags: tagsAddedBy(request.action),
   });

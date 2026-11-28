@@ -23,10 +23,13 @@
 
 package com.bike4mind.client.models
 
+import com.bike4mind.client.models.GetClientConfigResponse200Catalog
 import com.bike4mind.client.models.GetClientConfigResponse200Features
 import com.bike4mind.client.models.GetClientConfigResponse200Limits
 import com.bike4mind.client.models.GetClientConfigResponse200Models
+import com.bike4mind.client.models.GetClientConfigResponse200PublicConfig
 import com.bike4mind.client.models.GetClientConfigResponse200Server
+import com.bike4mind.client.models.GetClientConfigResponse200Transport
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -37,6 +40,9 @@ import kotlinx.serialization.Contextual
  * @param features
  * @param limits
  * @param models
+ * @param publicConfig
+ * @param transport
+ * @param catalog
  */
 @Serializable
 
@@ -52,7 +58,16 @@ data class GetClientConfigResponse200 (
     val limits: GetClientConfigResponse200Limits,
 
     @SerialName(value = "models")
-    val models: GetClientConfigResponse200Models
+    val models: GetClientConfigResponse200Models,
+
+    @SerialName(value = "public_config")
+    val publicConfig: GetClientConfigResponse200PublicConfig? = null,
+
+    @SerialName(value = "transport")
+    val transport: GetClientConfigResponse200Transport? = null,
+
+    @SerialName(value = "catalog")
+    val catalog: GetClientConfigResponse200Catalog? = null
 
 ) {
 

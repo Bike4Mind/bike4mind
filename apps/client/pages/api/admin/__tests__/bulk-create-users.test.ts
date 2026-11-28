@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { update: h.update, claimFreeCreditGrant: h.claim },
   grantPackageRepository: { reserveRedemption: h.reserve, findById: h.findPackage },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
+  dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
 }));
 vi.mock('@bike4mind/services', () => ({
   userService: { createUser: h.createUser },
@@ -333,6 +334,13 @@ describe('POST /api/admin/bulk-create-users', () => {
       await expect(
         h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', tags: ['managed'] }]), res())
       ).rejects.toThrow('Only full administrators can assign managed tags');
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a lake gate tag on a single row and creates no rows', async () => {
+      await expect(
+        h.handler!(delegateReq([{ email: 'a@b.test' }, { email: 'c@b.test', tags: ['Lake-Gate'] }]), res())
+      ).rejects.toThrow('Only full administrators can assign tags that gate data lake access');
       expect(h.createUser).not.toHaveBeenCalled();
     });
 

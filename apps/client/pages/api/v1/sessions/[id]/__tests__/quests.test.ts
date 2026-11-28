@@ -75,7 +75,12 @@ const QUESTS = [
 }));
 
 type Quest = (typeof QUESTS)[number] & {
-  pendingAction?: { tool: string; params: Record<string, unknown>; ts: number };
+  pendingAction?: {
+    tool: string;
+    params: Record<string, unknown>;
+    ts: number;
+    customConnector?: { connectionId: string; slug: string; displayName: string; urlHost: string };
+  };
 };
 
 function sessionFor(userId: string) {
@@ -198,6 +203,23 @@ describe('GET /api/v1/sessions/{id}/quests', () => {
 
     const sharee = (await run({ user: { id: SHAREE_ID } }))._getJSONData();
     expect(sharee.data[2]).not.toHaveProperty('pendingAction');
+  });
+
+  it("names a custom connector action's connection and host, and nothing else of its stored reference", async () => {
+    const customConnector = { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' };
+    stored[2] = {
+      ...stored[2],
+      status: 'running' as never,
+      pendingAction: { tool: 'create', params: { title: 't' }, ts: 1_780_000_000_000, customConnector },
+    };
+
+    const owner = (await run())._getJSONData();
+    expect(owner.data[2].pendingAction).toEqual({
+      tool: 'create',
+      params: { title: 't' },
+      ts: 1_780_000_000_000,
+      customConnector: { displayName: 'Acme', urlHost: 'mcp.acme.test' },
+    });
   });
 
   it('reports errorCode only on a failed turn', async () => {
