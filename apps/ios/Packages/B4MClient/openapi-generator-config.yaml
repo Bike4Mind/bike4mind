@@ -20,6 +20,8 @@ filter:
     - getMe
     - updateSession
     - deleteSession
+    - listArtifacts
+    - getArtifact
   # Left out on purpose: sendChatMessage. Its request schema declares both `max_tokens` and `maxTokens`,
   # which collide under the idiomatic naming strategy and generate code that does not compile. M3 (chat)
   # must resolve that (spec fix, or a `maxTokens` rename via the generator's name overrides) when it

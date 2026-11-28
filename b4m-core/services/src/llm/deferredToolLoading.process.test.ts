@@ -98,6 +98,7 @@ vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   sharedAdminKeyProviders: vi.fn(),
+  userKeyProviders: vi.fn(() => new Set()),
   getOpenWeatherKey: vi.fn().mockResolvedValue(undefined),
   getWolframAlphaKey: vi.fn().mockResolvedValue(undefined),
   getFmpApiKey: vi.fn().mockResolvedValue(undefined),

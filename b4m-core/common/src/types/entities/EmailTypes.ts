@@ -215,6 +215,10 @@ export interface IEmailSendAttempt {
   // Error handling
   errorMessage?: string;
   retryCount: number;
+
+  // Batch send lease and sent marker (apps/workers/src/queueHandlers/emailBatch.ts)
+  claimedAt?: Date;
+  sendAccepted?: { at: Date; queued: boolean };
 }
 
 /**
@@ -239,7 +243,6 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
       endDate?: Date;
     }
   ) => Promise<PaginatedResponse<IEmailSendAttemptDocument>>;
-  updateStatus: (id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttempt>) => Promise<void>;
   markQueued: (id: string, updates: { sentAt: Date; retryCount: number }) => Promise<boolean>;
   recordDeliveryOutcome: (
     id: string,
@@ -247,6 +250,11 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
     options?: { retryCount?: number }
   ) => Promise<string | null>;
   markSendFailed: (id: string, updates: { errorMessage: string; retryCount: number }) => Promise<boolean>;
+  claimForSend: (
+    id: string,
+    options: { now: Date; staleBefore: Date; renderedSubject: string; renderedHtml: string }
+  ) => Promise<boolean>;
+  markSendAccepted: (id: string, accepted: { at: Date; queued: boolean }) => Promise<boolean>;
   markOpened: (trackingToken: string) => Promise<IEmailSendAttemptDocument | null>;
   recordClick: (trackingToken: string, link: string) => Promise<IEmailSendAttemptDocument | null>;
   getJobSummary: (jobId: string) => Promise<{

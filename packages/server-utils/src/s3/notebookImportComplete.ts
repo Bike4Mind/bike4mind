@@ -37,6 +37,7 @@ import { parseNotebookImportKey } from '../utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { getFilesStorage } from '../utils/storage/index';
 import { updateImportProgress, markImportComplete, markImportFailed } from '../utils/importHistoryProgress';
+import { findImportableMediaKeys } from '../sessions/findImportableMediaKeys';
 
 const { NotebookImportService } = notebookImportService;
 
@@ -255,6 +256,7 @@ const processNotebookImport = async (
         // the process-wide settings cache - but a `skipCache` read or any settings WRITE added here
         // would be joining the transaction, not standing outside it.
         adminSettings: adminSettingsRepository,
+        findOwnedMediaKeys: findImportableMediaKeys,
         fileStorageService: {
           getFileContent: async (path: string) => {
             try {

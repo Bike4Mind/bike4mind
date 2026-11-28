@@ -1,7 +1,10 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HOST_PROTOCOL_VERSION, HostConnectError } from '@shared/hostProtocol';
+import { hostArtifactProvider, scriptArtifactBuilder } from './install/hostArtifact';
+import { HostInstaller } from './install/HostInstaller';
 import { createProcessTransport } from './processTransport';
-import { describeSshHost, sshSpec } from './sshCommand';
+import { describeSshHost, sshScriptSpec, sshSpec } from './sshCommand';
 import { listSshHosts } from './sshConfig';
 
 /**
@@ -9,6 +12,12 @@ import { listSshHosts } from './sshConfig';
  * authentication reaches without a prompt (`ssh localhost` works). Skipped otherwise, and in CI.
  */
 const alias = process.env.B4M_E2E_SSH_ALIAS;
+/**
+ * Also set B4M_E2E_SSH_INSTALL=1 to install a fresh build of this checkout on that machine. It
+ * replaces whatever ~/.b4m/host holds there and stops a daemon running from it, so point it at a
+ * machine (or account) used for nothing else.
+ */
+const install = alias !== undefined && process.env.B4M_E2E_SSH_INSTALL === '1';
 
 describe.skipIf(!alias)('a real ssh connection', () => {
   const target = alias ?? '';
@@ -39,4 +48,40 @@ describe.skipIf(!alias)('a real ssh connection', () => {
       transport.close();
     }
   }, 60_000);
+});
+
+describe.skipIf(!install)('installing over a real ssh connection', () => {
+  const target = alias ?? '';
+  const version = `0.0.0-e2e.${Date.now()}`;
+  const appPath = resolve(__dirname, '../../../..');
+
+  it('installs this checkout, then connects to it', async () => {
+    const artifact = await hostArtifactProvider(
+      { packaged: false, appPath, build: scriptArtifactBuilder(appPath) },
+      version
+    )();
+    const installer = new HostInstaller({ scriptSpec: sshScriptSpec });
+    await installer.stopDaemon(target);
+    const probe = await installer.probe(target);
+    await installer.install(target, artifact, probe);
+
+    expect(await installer.probe(target)).toMatchObject({
+      launcher: { state: 'works', version },
+      installedVersions: [version],
+    });
+
+    const transport = await createProcessTransport(await sshSpec(target));
+    try {
+      const result = await transport.request('host/initialize', {
+        clientId: 'real-ssh-e2e',
+        clientName: 'real ssh e2e',
+        clientVersion: version,
+        protocol: HOST_PROTOCOL_VERSION,
+      });
+      expect(result).toMatchObject({ hostVersion: version });
+    } finally {
+      transport.close();
+      await installer.stopDaemon(target);
+    }
+  }, 300_000);
 });

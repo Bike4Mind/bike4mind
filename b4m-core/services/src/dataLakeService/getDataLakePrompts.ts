@@ -1,4 +1,10 @@
-import { DATA_LAKES, DATALAKE_TAG_PREFIX, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  DATALAKE_TAG_PREFIX,
+  lakeMatchesAccess,
+  normalizeEntitlementKey,
+  registryOverridingSlugs,
+} from '@bike4mind/common';
 import type { DataLakeConfig, IDataLakeDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
@@ -196,10 +202,10 @@ async function injectionSupersededOwnLakeIds(context: DataLakeAccessContext, use
  * entries only - a gateless one can never pass `isTrustedForInjection`'s org arm, so fetching its
  * overlay would be pure waste. `context.db.fallbackLakeSettings` is optional and read-failure-safe
  * like every other adapter here: absent or a failed batch read means zero registry prompts, never
- * a thrown turn. A registry id already present among the DB-matched `lakes`' slugs is skipped - the
- * one (structurally rare; `disambiguateSlug` refuses to mint a NEW lake at a registry-owned slug,
- * so this only arises from a lake that predates the registry entry) case where a real document has
- * since taken over that identity and the registry entry is otherwise unreachable.
+ * a thrown turn. A registry id already held by an ORG-SCOPED DB-matched lake's slug is skipped - the
+ * one (structurally rare; `disambiguateSlug` refuses to mint a NEW lake at a registry key, so this
+ * only arises from a lake that predates that reservation) case where a real document has since
+ * taken over that identity for its org. An org-less row never does (`registryOverridingSlugs`).
  *
  * Prompt text is read off the raw lake documents ON PURPOSE: `DataLakeConfig` is the shared
  * actor-less projection, so putting `systemPrompt` there would leak the text to every lake user
@@ -469,7 +475,7 @@ export async function getAccessibleDataLakePrompts(
   // Registry candidates (Phase 2) - see the function doc comment. Deliberately NOT gated behind
   // `lakes.length === 0`: a caller with zero matching DB lakes but org membership on a registry
   // lake must still reach this branch, or the injection silently never fires for that caller.
-  const dynamicSlugIds = new Set(lakes.map(lake => lake.slug));
+  const dynamicSlugIds = registryOverridingSlugs(lakes);
   const orgScopedRegistryCandidates: DataLakeConfig[] = DATA_LAKES.filter(
     dl =>
       !dynamicSlugIds.has(dl.id) &&
