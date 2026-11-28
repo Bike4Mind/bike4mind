@@ -97,7 +97,7 @@ describe('SRE provider accounting', () => {
       if (failure === 'register') h.accounting.register.mockRejectedValue(new Error('database unavailable'));
       else h.accounting.claimDispatch.mockResolvedValue(false);
       await expect(h.meter.complete(h.backend, model(), messages, {}, h.text)).rejects.toMatchObject({
-        reason: 'admission_failed',
+        reason: failure === 'register' ? 'admission_failed' : 'admission_refused',
       });
       expect(h.complete).not.toHaveBeenCalled();
     }

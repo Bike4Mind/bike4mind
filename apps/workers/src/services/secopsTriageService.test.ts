@@ -50,13 +50,31 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return {
     ...actual,
     resolveDeprecatedModelId: vi.fn((_id: string) => 'claude-3-5-haiku-20241022'),
-    getAvailableModels: vi.fn().mockResolvedValue([{ id: 'claude-3-5-haiku-20241022' }]),
-    getLlmByModel: vi.fn(() => ({ complete: mockLlmComplete })),
+    getAvailableModels: vi.fn().mockResolvedValue([
+      {
+        id: 'claude-3-5-haiku-20241022',
+        name: 'Test model',
+        type: 'text',
+        backend: 'anthropic',
+        contextWindow: 100000,
+        max_tokens: 2000,
+        pricing: { 100000: { input: 1e-6, output: 2e-6 } },
+      },
+    ]),
+    getLlmByModel: vi.fn(() => ({
+      complete: async (...args: unknown[]) => {
+        const callback = args[3] as (texts: string[], info: unknown) => Promise<void>;
+        args[3] = (texts: string[]) => callback(texts, { inputTokens: 10, outputTokens: 2 });
+        return mockLlmComplete(...args);
+      },
+    })),
   };
 });
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   apiKeyService: {
+    sharedAdminKeyProviders: vi.fn(),
     getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({
       anthropic: 'sk-ant-test',
     }),
@@ -78,6 +96,8 @@ import {
   type SecopsTriageFinding,
   type SecopsTriagePayload,
 } from './secopsTriageService';
+import { apiKeyService, type PlatformCompletionAccountingContext } from '@bike4mind/services';
+import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import type { SecopsTriageConfig } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
@@ -146,10 +166,31 @@ const closedIssue = (number: number, id: string, stateReason: string | null): Fa
 describe('createSecopsTriageService', () => {
   let service: ReturnType<typeof createSecopsTriageService>;
   const logger = new Logger({ metadata: {} });
+  const accounting = {
+    diagnostics: vi.fn().mockResolvedValue({ attempts: [], total: 0, byState: {} }),
+    register: vi.fn(async input => ({ ...input, state: 'registered', createdAt: new Date(), updatedAt: new Date() })),
+    claimDispatch: vi.fn().mockResolvedValue(true),
+    settle: vi.fn().mockResolvedValue(undefined),
+    unresolved: vi.fn().mockResolvedValue(undefined),
+  };
+  const context = (): PlatformCompletionAccountingContext => ({
+    accounting: accounting as unknown as PlatformCompletionAccountingContext['accounting'],
+    attribution: {
+      kind: 'platform_operation',
+      operation: 'secops_triage',
+      environment: 'test',
+      logicalJobId: 'test-job',
+      executionId: 'test-execution',
+    },
+    deadlineAt: Date.now() + 180_000,
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = createSecopsTriageService(logger);
+    service = createSecopsTriageService(logger, context());
+    accounting.settle.mockResolvedValue(undefined);
+    accounting.claimDispatch.mockResolvedValue(true);
+    accounting.unresolved.mockResolvedValue(undefined);
     mockOpenIssues([]);
     mockGitHubService.createIssue.mockResolvedValue({
       number: 1,
@@ -860,6 +901,8 @@ describe('createSecopsTriageService', () => {
         llmConfig
       );
 
+      expect(accounting.register).not.toHaveBeenCalled();
+      expect(mockLlmComplete).not.toHaveBeenCalled();
       // Triage still runs without enrichment
       expect(result.issuesCreated).toBe(1);
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -970,39 +1013,282 @@ describe('createSecopsTriageService', () => {
     });
   });
 
-  // ── callLLM timeout guard ──────────────────────────────────────────────────
+  describe('durable SecOps metering', () => {
+    const config = { ...baseConfig, llmEnrichment: true, modelId: 'claude-3-5-haiku-20241022' };
+    const successfulResponses = () => {
+      mockLlmComplete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['{"whatThisMeans":"risk","howToFix":"fix","assessment":"healthy"}']);
+      });
+    };
+
+    it('requires trusted accounting context before initialization or a paid send', async () => {
+      const missing = createSecopsTriageService(logger);
+      await expect(
+        missing.run(makePayload([makeHighFinding('missing')]), mockGitHubService as never, config)
+      ).rejects.toMatchObject({ reason: 'missing_context' });
+      expect(mockLlmComplete).not.toHaveBeenCalled();
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+    });
+
+    it('preserves non-enriched triage without recording a paid attempt', async () => {
+      await service.run(makePayload([makeHighFinding('plain')]), mockGitHubService as never, baseConfig);
+      expect(accounting.register).not.toHaveBeenCalled();
+      expect(mockLlmComplete).not.toHaveBeenCalled();
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+    });
+
+    it('continues deterministic triage and disables subsequent enrichment after durable unknown usage', async () => {
+      mockLlmComplete.mockResolvedValueOnce(undefined);
+      await service.run(
+        makePayload([makeHighFinding('unknown'), makeHighFinding('next')]),
+        mockGitHubService as never,
+        config
+      );
+      expect(accounting.unresolved).toHaveBeenCalledWith(expect.any(String), 'missing_usage');
+      expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+      expect(mockLlmComplete).toHaveBeenCalledOnce();
+    });
+
+    it.each(['429', '503', 'network unavailable'])(
+      'continues issue filing, autoclose and Slack after %s without usage',
+      async message => {
+        mockLlmComplete.mockRejectedValueOnce(new Error(message));
+        mockOpenIssues([{ number: 99, title: 'stale', body: makeFakeIssueBody(fingerprintFor('stale')) }]);
+        await service.run(
+          makePayload([makeHighFinding('new'), makeHighFinding('next')]),
+          mockGitHubService as never,
+          { ...config, slackChannelId: 'test-channel' },
+          'test-token'
+        );
+        expect(accounting.unresolved).toHaveBeenCalledOnce();
+        expect(mockLlmComplete).toHaveBeenCalledOnce();
+        expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+        expect(mockGitHubService.closeIssue).toHaveBeenCalledOnce();
+        expect(mockSlackClient.sendMessage).toHaveBeenCalledOnce();
+      }
+    );
+
+    it('waits for unresolved persistence before deterministic fallback', async () => {
+      mockLlmComplete.mockResolvedValueOnce(undefined);
+      const unresolved = Promise.withResolvers<void>();
+      accounting.unresolved.mockReturnValueOnce(unresolved.promise);
+      const pending = service.run(makePayload([makeHighFinding('pending')]), mockGitHubService as never, config);
+      await vi.waitFor(() => expect(accounting.unresolved).toHaveBeenCalledOnce());
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      unresolved.resolve();
+      await pending;
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+    });
+
+    it('keeps unresolved persistence failure fatal', async () => {
+      mockLlmComplete.mockResolvedValueOnce(undefined);
+      accounting.unresolved.mockRejectedValueOnce(new Error('store unavailable'));
+      await expect(
+        service.run(makePayload([makeHighFinding('pending')]), mockGitHubService as never, config)
+      ).rejects.toMatchObject({ reason: 'unresolved_persistence_failed' });
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+    });
+
+    it('continues Slack after durable unresolved health without repeating an inference', async () => {
+      successfulResponses();
+      mockLlmComplete
+        .mockImplementationOnce(async (_model, _messages, _options, callback) => {
+          await callback(['{"whatThisMeans":"risk","howToFix":"fix"}']);
+        })
+        .mockResolvedValueOnce(undefined);
+      await service.run(
+        makePayload([makeHighFinding('late')]),
+        mockGitHubService as never,
+        { ...config, slackChannelId: 'test-channel' },
+        'test-token'
+      );
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+      expect(mockLlmComplete).toHaveBeenCalledTimes(2);
+      expect(accounting.unresolved).toHaveBeenCalledOnce();
+      expect(mockSlackClient.sendMessage).toHaveBeenCalledOnce();
+    });
+
+    it('disables enrichment for the run when the deadline is exhausted before dispatch', async () => {
+      const expired = context();
+      expired.deadlineAt = Date.now();
+      await createSecopsTriageService(logger, expired).run(
+        makePayload([makeHighFinding('first'), makeHighFinding('second')]),
+        mockGitHubService as never,
+        config
+      );
+      expect(mockLlmComplete).not.toHaveBeenCalled();
+      expect(accounting.register).not.toHaveBeenCalled();
+      expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+    });
+
+    it('continues remaining issues and Slack when the deadline expires after a settled finding', async () => {
+      vi.useFakeTimers();
+      try {
+        const expiring = context();
+        mockLlmComplete.mockImplementationOnce(async (_model, _messages, _options, callback) => {
+          await callback(['{"whatThisMeans":"risk","howToFix":"fix"}']);
+          vi.setSystemTime(expiring.deadlineAt);
+        });
+        await createSecopsTriageService(logger, expiring).run(
+          makePayload([makeHighFinding('first'), makeHighFinding('second')]),
+          mockGitHubService as never,
+          { ...config, slackChannelId: 'test-channel' },
+          'test-token'
+        );
+        expect(accounting.settle).toHaveBeenCalledOnce();
+        expect(mockLlmComplete).toHaveBeenCalledOnce();
+        expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+        expect(mockSlackClient.sendMessage).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not retry provider dispatch after admission refusal', async () => {
+      accounting.claimDispatch.mockResolvedValueOnce(false);
+      await service.run(
+        makePayload([makeHighFinding('first'), makeHighFinding('second')]),
+        mockGitHubService as never,
+        config
+      );
+      expect(accounting.claimDispatch).toHaveBeenCalledOnce();
+      expect(mockLlmComplete).not.toHaveBeenCalled();
+      expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['diagnostics', 'register', 'claimDispatch'] as const)(
+      'keeps %s datastore failure fatal before dispatch',
+      async phase => {
+        accounting[phase].mockRejectedValueOnce(new Error('database unavailable'));
+        await expect(
+          service.run(makePayload([makeHighFinding('blocked')]), mockGitHubService as never, config)
+        ).rejects.toMatchObject({ reason: 'admission_failed' });
+        expect(mockLlmComplete).not.toHaveBeenCalled();
+        expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      }
+    );
+
+    it('deduplicates semantic fingerprints before the limit, retaining the highest severity and first equal-severity finding', async () => {
+      successfulResponses();
+      const first = { ...makeHighFinding('duplicate'), title: 'first high' };
+      const critical = { ...first, title: 'critical version', severity: 'critical' as const };
+      await service.run(
+        makePayload([first, critical, { ...critical, title: 'later critical' }, makeHighFinding('other')]),
+        mockGitHubService as never,
+        { ...config, maxIssuesPerScan: 2 }
+      );
+      expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(2);
+      expect(mockGitHubService.createIssue.mock.calls[0][1].title).toContain('critical version');
+      expect(accounting.register).toHaveBeenCalledTimes(3);
+      expect(new Set(accounting.register.mock.calls.map(call => call[0].providerCallId)).size).toBe(3);
+    });
+
+    it.each(['gemini', 'xai', 'ollama', 'unsupported-family', 'federated'])(
+      'preflights %s without constructing or sending a backend',
+      async transport => {
+        const original = await getAvailableModels({});
+        const model = {
+          ...original[0],
+          backend: transport === 'unsupported-family' || transport === 'federated' ? 'anthropic' : transport,
+          ...(transport === 'unsupported-family' ? { adapterFamily: 'untrusted-proxy' } : {}),
+        };
+        vi.mocked(getAvailableModels).mockResolvedValueOnce([model as never]);
+        if (transport === 'federated') {
+          vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+          vi.mocked(apiKeyService.sharedAdminKeyProviders).mockReturnValueOnce({ anthropic: true, openai: false });
+        }
+        try {
+          expect(await service.prepare(config)).toBe(false);
+          await service.run(makePayload([makeHighFinding('plain')]), mockGitHubService as never, config);
+          expect(getLlmByModel).not.toHaveBeenCalled();
+          expect(mockLlmComplete).not.toHaveBeenCalled();
+          expect(accounting.register).not.toHaveBeenCalled();
+          expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      }
+    );
+
+    it('rejects attribution for another operation before a provider send', async () => {
+      const wrong = context();
+      wrong.attribution.operation = 'sre_diagnosis';
+      await expect(
+        createSecopsTriageService(logger, wrong).run(
+          makePayload([makeHighFinding('wrong')]),
+          mockGitHubService as never,
+          config
+        )
+      ).rejects.toMatchObject({ reason: 'invalid_operation' });
+      expect(mockLlmComplete).not.toHaveBeenCalled();
+    });
+
+    it('uses distinct semantic finding/health identities and meters dry runs without a user debit', async () => {
+      successfulResponses();
+      await service.run(makePayload([makeHighFinding('dry')]), mockGitHubService as never, { ...config, dryRun: true });
+      expect(accounting.register).toHaveBeenCalledTimes(2);
+      const registrations = accounting.register.mock.calls.map(call => call[0]);
+      expect(new Set(registrations.map(call => call.providerCallId)).size).toBe(2);
+      expect(registrations.every(call => call.attribution.operation === 'secops_triage')).toBe(true);
+      expect(accounting.settle).toHaveBeenCalledTimes(2);
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+    });
+
+    it('awaits settlement before parsing invalid JSON and falling back to the scanner recommendation', async () => {
+      mockLlmComplete.mockImplementation(async (_model, _messages, _options, callback) => callback(['not json']));
+      const settlement = Promise.withResolvers<void>();
+      accounting.settle.mockReturnValueOnce(settlement.promise);
+      const pending = service.run(makePayload([makeHighFinding('await')]), mockGitHubService as never, config);
+      await vi.waitFor(() => expect(accounting.settle).toHaveBeenCalledOnce());
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      settlement.resolve();
+      await pending;
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+      expect(accounting.settle).toHaveBeenCalledTimes(2);
+    });
+
+    it('propagates settlement errors through finding enrichment instead of producing successful fallback', async () => {
+      successfulResponses();
+      accounting.settle.mockRejectedValueOnce(new Error('private persistence detail'));
+      await expect(
+        service.run(makePayload([makeHighFinding('failed')]), mockGitHubService as never, config)
+      ).rejects.toMatchObject({ reason: 'settlement_failed' });
+      expect(mockGitHubService.createIssue).not.toHaveBeenCalled();
+      expect(mockLlmComplete).toHaveBeenCalledOnce();
+    });
+
+    it('propagates a late health accounting failure after an already completed GitHub write', async () => {
+      successfulResponses();
+      accounting.settle.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unavailable'));
+      await expect(
+        service.run(makePayload([makeHighFinding('late')]), mockGitHubService as never, config)
+      ).rejects.toMatchObject({ reason: 'settlement_failed' });
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+      expect(mockLlmComplete).toHaveBeenCalledTimes(2);
+    });
+  });
 
   describe('LLM timeout handling', () => {
-    it('treats LLM timeout as a non-fatal enrichment failure and still creates the issue', async () => {
+    it('aborts and joins a timed-out provider, persists unresolved usage and continues GitHub writes', async () => {
       vi.useFakeTimers();
-
-      const llmConfig: SecopsTriageConfig = {
-        ...baseConfig,
-        llmEnrichment: true,
-        modelId: 'claude-3-5-haiku-20241022',
-      };
-
-      // llm.complete never resolves (simulates a hung LLM call)
-      mockLlmComplete.mockImplementation(() => new Promise(() => {}));
-
-      const runPromise = service.run(
-        makePayload([makeHighFinding('xss-timeout')]),
-        mockGitHubService as never,
-        llmConfig
+      const llmConfig = { ...baseConfig, llmEnrichment: true, modelId: 'claude-3-5-haiku-20241022' };
+      let providerJoined = false;
+      mockLlmComplete.mockImplementation(
+        (_model, _messages, options) =>
+          new Promise((_resolve, reject) => {
+            options.abortSignal.addEventListener('abort', () => {
+              providerJoined = true;
+              reject(options.abortSignal.reason);
+            });
+          })
       );
-
-      // Advance past the 30s timeout for both finding enrichment and health assessment
-      await vi.runAllTimersAsync();
-
-      const result = await runPromise;
-
-      // Issue still created despite LLM timeout
-      expect(result.issuesCreated).toBe(1);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('LLM finding enrichment failed'),
-        expect.any(Object)
-      );
-
+      const pending = service.run(makePayload([makeHighFinding('timeout')]), mockGitHubService as never, llmConfig);
+      await vi.advanceTimersByTimeAsync(30_001);
+      await pending;
+      expect(providerJoined).toBe(true);
+      expect(accounting.unresolved).toHaveBeenCalledWith(expect.any(String), 'aborted_without_usage');
+      expect(mockGitHubService.createIssue).toHaveBeenCalledOnce();
+      expect(mockLlmComplete).toHaveBeenCalledOnce();
       vi.useRealTimers();
     });
   });

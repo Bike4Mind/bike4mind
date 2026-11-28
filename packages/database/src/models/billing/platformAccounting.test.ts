@@ -81,6 +81,21 @@ afterAll(async () => {
 });
 
 describe('platform accounting prerequisites', () => {
+  it('persists SecOps attribution through the journal and idempotent usage recorder without a credit holder', async () => {
+    const secops = { ...attribution, operation: 'secops_triage' as const };
+    await platformAttemptRepository.register({ ...registration(), attribution: secops });
+    expect(await platformAttemptRepository.claimDispatch('call-1', at)).toBe(true);
+    const event = { ...fact(), attribution: secops };
+    await accounting().settle('call-1', event);
+    await accounting().settle('call-1', event);
+    expect((await platformAttemptRepository.get('call-1'))?.state).toBe('recorded');
+    const recorded = await usageEventRepository.findPlatformCall('call-1');
+    expect(recorded).toMatchObject({ attribution: secops, source: 'system', creditsCharged: 0 });
+    expect(recorded).not.toHaveProperty('userId');
+    expect(recorded).not.toHaveProperty('ownerId');
+    expect(await UsageEvent.countDocuments()).toBe(1);
+  });
+
   it('validates a distinct actorless platform variant and keeps legacy ownership mandatory', () => {
     const input = { ...fact(), createdAt: new Date(), updatedAt: new Date() };
     expect(UsageEventValidator.parse(input).attribution?.kind).toBe('platform_operation');

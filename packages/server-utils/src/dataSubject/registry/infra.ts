@@ -555,6 +555,7 @@ export const infraHolders = {
       },
     ],
   },
+  SecopsTriageExecution: { kind: 'noUserData', note: 'Platform security triage execution marker.' },
   SecopsTriageRun: { kind: 'noUserData', note: 'Platform security triage run summary.' },
   SecretRotation: {
     kind: 'holder',

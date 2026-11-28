@@ -113,3 +113,10 @@ export * as prReportService from './prReportService';
 export * as ncmecService from './ncmecService';
 export * as adminAuditService from './adminAuditService';
 export * as spendFreezeService from './spendFreezeService';
+
+export {
+  PlatformCompletionMeter,
+  PlatformCompletionAccountingError,
+  isPlatformCompletionAccountingError,
+  type PlatformCompletionAccountingContext,
+} from './billing/platformCompletionMeter';

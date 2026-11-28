@@ -26,6 +26,8 @@ import {
   type SecopsTriageRepoIssue,
 } from '@bike4mind/server-utils/security/secopsTriageRepoCheck';
 import { createSecopsTriageService } from '@workers/services/secopsTriageService';
+import { createSecopsTriageAccounting, recoverSecopsTriageAccounting } from '@workers/services/secopsTriageAccounting';
+import { PlatformCompletionAccountingError, isPlatformCompletionAccountingError } from '@bike4mind/services';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
@@ -107,7 +109,7 @@ async function getSlackBotToken(logger: Logger, workspaceId?: string): Promise<s
   return null;
 }
 
-export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Context, logger: Logger) => {
+export const handler = dispatchWithLogger(async (event: SQSEvent, context: Context, logger: Logger) => {
   const stage = Resource.App.stage;
 
   const record = event.Records[0];
@@ -198,7 +200,6 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
     );
   }
 
-  const service = createSecopsTriageService(logger);
   const startTime = Date.now();
 
   try {
@@ -233,7 +234,33 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       return;
     }
 
+    const accounting = createSecopsTriageAccounting(record, Date.now() + context.getRemainingTimeInMillis(), stage);
+    const executionId = accounting.attribution.executionId;
+    let executionClaimed = false;
+    const service = createSecopsTriageService(logger, accounting);
+    try {
+      const status = await secopsTriageRunRepository.executionStatus(executionId);
+      await recoverSecopsTriageAccounting(accounting, status === 'completed');
+      if (status === 'completed') return;
+      if (status === 'running') throw new PlatformCompletionAccountingError('execution_requires_manual_recovery');
+      if (await service.prepare(config)) {
+        if (!(await secopsTriageRunRepository.claimExecution(executionId))) {
+          throw new PlatformCompletionAccountingError('execution_requires_manual_recovery');
+        }
+        executionClaimed = true;
+      }
+    } catch (error) {
+      if (isPlatformCompletionAccountingError(error)) throw error;
+      throw new PlatformCompletionAccountingError('execution_claim_failed', undefined, { cause: error });
+    }
     const result = await service.run(payload, githubService, config, slackBotToken ?? undefined);
+    if (executionClaimed) {
+      try {
+        await secopsTriageRunRepository.completeExecution(executionId);
+      } catch (error) {
+        throw new PlatformCompletionAccountingError('execution_completion_failed', undefined, { cause: error });
+      }
+    }
     const duration = Date.now() - startTime;
 
     // Emit CloudWatch metrics (skip for dry runs)
@@ -282,8 +309,12 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
       },
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('[SECOPS-WORKER] SecOps Triage failed', { error: errorMessage });
+    const accountingFailure = isPlatformCompletionAccountingError(error);
+    const errorMessage = accountingFailure ? error.reason : error instanceof Error ? error.message : String(error);
+    logger.error(
+      '[SECOPS-WORKER] SecOps Triage failed',
+      accountingFailure ? { reason: error.reason, providerCallId: error.providerCallId } : { error: errorMessage }
+    );
 
     await emitMetric(
       CLOUDWATCH_NAMESPACE,

@@ -29,12 +29,15 @@ export class PlatformAccountingPendingError extends Error {
 }
 
 export function createPlatformAttribution(
-  configuration: { environment: IPlatformAttribution['environment'] },
+  configuration: {
+    environment: IPlatformAttribution['environment'];
+    operation?: IPlatformAttribution['operation'];
+  },
   execution: { logicalJobId: string; executionId: string }
 ): IPlatformAttribution {
   return PlatformAttribution.parse({
     kind: 'platform_operation',
-    operation: 'sre_diagnosis',
+    operation: configuration.operation ?? 'sre_diagnosis',
     environment: configuration.environment,
     logicalJobId: execution.logicalJobId,
     executionId: execution.executionId,
