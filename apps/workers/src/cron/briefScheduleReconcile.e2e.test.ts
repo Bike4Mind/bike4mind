@@ -59,6 +59,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 const now = new Date();
 const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000);
 const schedule = { enabled: true, timeOfDay: '08:00', days: [0, 1, 2, 3, 4, 5, 6], timeZone: 'America/Los_Angeles' };
+// Next slot is 6-7 days out, so a wake-up asserted against it never loses to the regular slot at any time of day.
+const weeklySchedule = { ...schedule, days: [now.getUTCDay()], timeZone: 'UTC', timeOfDay: '00:00' };
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 const publishCompose = vi.fn().mockResolvedValue(undefined);
 
@@ -245,7 +247,7 @@ describe('runBriefScheduleReconcile', () => {
   });
 
   it('keeps a future reminder approved between the reminder read and slot advance', async () => {
-    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    const userId = await insertUser({ preferences: { briefSchedule: weeklySchedule }, nextBriefAt: minutesAgo(2) });
     const reminderAt = new Date(now.getTime() + 5 * 60_000);
     const read = assistantBriefRepository.findEarliestPendingReminderAt.bind(assistantBriefRepository);
     vi.spyOn(assistantBriefRepository, 'findEarliestPendingReminderAt').mockImplementationOnce(async (...args) => {
@@ -259,7 +261,7 @@ describe('runBriefScheduleReconcile', () => {
   });
 
   it('re-arms an accepted slot while an overdue reminder remains unlisted', async () => {
-    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    const userId = await insertUser({ preferences: { briefSchedule: weeklySchedule }, nextBriefAt: minutesAgo(2) });
     await insertApprovedReminder(userId, minutesAgo(1));
     expect((await run()).enqueued).toBe(1);
     expect(await nextBriefAtOf(userId)).toEqual(new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS));
@@ -268,8 +270,7 @@ describe('runBriefScheduleReconcile', () => {
   it('surfaces thirteen due reminders in two capped real compositions before the weekly slot', async () => {
     vi.useFakeTimers({ now, toFake: ['Date'] });
     try {
-      const weekly = { ...schedule, days: [now.getUTCDay()], timeZone: 'UTC', timeOfDay: '00:00' };
-      const userId = await insertUser({ preferences: { briefSchedule: weekly }, nextBriefAt: minutesAgo(2) });
+      const userId = await insertUser({ preferences: { briefSchedule: weeklySchedule }, nextBriefAt: minutesAgo(2) });
       for (let index = 0; index < 13; index++) await insertApprovedReminder(userId, minutesAgo(index + 1));
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
       const composePublished = async () => {
@@ -313,12 +314,12 @@ describe('runBriefScheduleReconcile', () => {
   });
 
   it.each([false, true])('retains accepted work after reminder read failure with disabled=%s', async disabled => {
-    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    const userId = await insertUser({ preferences: { briefSchedule: weeklySchedule }, nextBriefAt: minutesAgo(2) });
     await insertApprovedReminder(userId, minutesAgo(1));
     const read = assistantBriefRepository.findEarliestPendingReminderAt.bind(assistantBriefRepository);
     vi.spyOn(assistantBriefRepository, 'findEarliestPendingReminderAt').mockImplementation(async (...args) => {
       if (!args[1]) {
-        if (disabled) await userRepository.setBriefSchedule(userId, { ...schedule, enabled: false }, null);
+        if (disabled) await userRepository.setBriefSchedule(userId, { ...weeklySchedule, enabled: false }, null);
         throw new Error('reminder lookup unavailable');
       }
       return read(...args);
