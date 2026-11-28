@@ -9,6 +9,13 @@ const mockUseSideApps = vi.fn();
 const mockUseSideAppUsers = vi.fn();
 const mockDownloadApps = vi.fn();
 const mockDownloadUsers = vi.fn();
+const mockNavigate = vi.fn();
+let mockSearch: Record<string, unknown> = {};
+
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => mockSearch,
+  useNavigate: () => mockNavigate,
+}));
 
 vi.mock('../hooks/useSideApps', () => ({
   useSideApps: (...args: unknown[]) => mockUseSideApps(...args),
@@ -111,6 +118,7 @@ const ready = (data: unknown) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   useCreditAnalysisStore.setState({ sideAppClientId: null });
+  mockSearch = {};
   mockUseSideApps.mockReturnValue(ready(response));
   mockUseSideAppUsers.mockReturnValue(ready(undefined));
 });
@@ -121,6 +129,9 @@ const renderDashboard = () =>
       <SideAppsDashboard />
     </TestWrapper>
   );
+
+const navigatedSearch = (call: number, previous: Record<string, unknown> = { tab: 'credit-analytics' }) =>
+  (mockNavigate.mock.calls[call][0] as { search: (p: Record<string, unknown>) => unknown }).search(previous);
 
 describe('SideAppsDashboard', () => {
   it('shows the key numbers, the window note and an app row', () => {
@@ -178,6 +189,116 @@ describe('SideAppsDashboard', () => {
     expect(screen.getByTestId('side-apps-unattributed-org')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('side-apps-close-btn'));
     expect(useCreditAnalysisStore.getState().sideAppClientId).toBeNull();
+  });
+
+  it('keeps the user text shrinkable and the View button fixed, with the full email on hover', () => {
+    useCreditAnalysisStore.setState({ sideAppClientId: 'app-a' });
+    mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+    renderDashboard();
+    const text = screen.getByTestId('side-apps-user-text-u1');
+    expect(getComputedStyle(text).minWidth).toBe('0px');
+    expect(screen.getByText('one@example.test')).toHaveAttribute('title', 'one@example.test');
+    expect(getComputedStyle(screen.getByText('one@example.test')).textOverflow).toBe('ellipsis');
+    expect(getComputedStyle(screen.getByTestId('side-apps-user-action-u1')).flexShrink).toBe('0');
+  });
+
+  describe('selected app in the URL', () => {
+    it('opens the drill-down from the sideApp param', () => {
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+      renderDashboard();
+      expect(screen.getByTestId('side-apps-drilldown')).toBeInTheDocument();
+      expect(mockUseSideAppUsers).toHaveBeenLastCalledWith('app-a', 30);
+      expect(useCreditAnalysisStore.getState().sideAppClientId).toBe('app-a');
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('shows the plain board for an id that is not a loaded app', () => {
+      mockSearch = { creditTab: 'side-apps', sideApp: 'nope' };
+      renderDashboard();
+      expect(screen.getByTestId('side-apps-table')).toBeInTheDocument();
+      expect(screen.queryByTestId('side-apps-drilldown')).toBeNull();
+      expect(mockUseSideAppUsers).toHaveBeenLastCalledWith(null, 30);
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('does not crash while the apps are loading', () => {
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      mockUseSideApps.mockReturnValue({ ...ready(undefined), isLoading: true });
+      renderDashboard();
+      expect(screen.getByTestId('side-apps-loading')).toBeInTheDocument();
+    });
+
+    it('ignores an invalid param', () => {
+      mockSearch = { sideApp: 'bad id!' };
+      renderDashboard();
+      expect(screen.queryByTestId('side-apps-drilldown')).toBeNull();
+    });
+
+    it('pushes the param when an app row is clicked', () => {
+      renderDashboard();
+      fireEvent.click(screen.getByTestId('side-apps-row-app-a'));
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(mockNavigate.mock.calls[0][0]).toMatchObject({ to: '/admin', replace: false });
+      expect(navigatedSearch(0)).toEqual({ tab: 'credit-analytics', creditTab: 'side-apps', sideApp: 'app-a' });
+      expect(useCreditAnalysisStore.getState().sideAppClientId).toBe('app-a');
+    });
+
+    it('removes the param on Close and keeps the other params', () => {
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+      renderDashboard();
+      fireEvent.click(screen.getByTestId('side-apps-close-btn'));
+      expect(mockNavigate.mock.calls[0][0]).toMatchObject({ replace: false });
+      expect(navigatedSearch(0, { tab: 'credit-analytics', creditTab: 'side-apps', sideApp: 'app-a' })).toEqual({
+        tab: 'credit-analytics',
+        creditTab: 'side-apps',
+        sideApp: undefined,
+      });
+      expect(useCreditAnalysisStore.getState().sideAppClientId).toBeNull();
+    });
+
+    it('writes a store selection into the URL once with replace (View usage)', () => {
+      useCreditAnalysisStore.setState({ sideAppClientId: 'app-a' });
+      mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+      const { rerender } = renderDashboard();
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(mockNavigate.mock.calls[0][0]).toMatchObject({ to: '/admin', replace: true });
+      expect(navigatedSearch(0)).toEqual({ tab: 'credit-analytics', creditTab: 'side-apps', sideApp: 'app-a' });
+
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      rerender(
+        <TestWrapper>
+          <SideAppsDashboard />
+        </TestWrapper>
+      );
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('side-apps-drilldown')).toBeInTheDocument();
+    });
+
+    it('does not override an explicit URL value with the store', () => {
+      useCreditAnalysisStore.setState({ sideAppClientId: 'other' });
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+      renderDashboard();
+      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(mockUseSideAppUsers).toHaveBeenLastCalledWith('app-a', 30);
+    });
+
+    it('closes the drill-down when the param disappears (browser back)', () => {
+      mockSearch = { creditTab: 'side-apps', sideApp: 'app-a' };
+      mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+      const { rerender } = renderDashboard();
+      mockSearch = { creditTab: 'side-apps' };
+      rerender(
+        <TestWrapper>
+          <SideAppsDashboard />
+        </TestWrapper>
+      );
+      expect(screen.queryByTestId('side-apps-drilldown')).toBeNull();
+      expect(useCreditAnalysisStore.getState().sideAppClientId).toBeNull();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
   });
 
   it('exports both tables', () => {

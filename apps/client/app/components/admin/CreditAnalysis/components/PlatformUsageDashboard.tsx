@@ -50,13 +50,17 @@ const ConsumerOwner: React.FC<{ consumer: NamedPlatformConsumerUsage }> = ({ con
   const isOrg = consumer.ownerType === CreditHolderType.Organization;
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      <Chip size="sm" variant="soft" color={isOrg ? 'primary' : 'neutral'}>
+      <Chip size="sm" variant="soft" sx={{ flexShrink: 0 }} color={isOrg ? 'primary' : 'neutral'}>
         {isOrg ? 'Org' : 'User'}
       </Chip>
-      <Typography level="body-sm" title={consumer.ownerId}>
+      <Typography level="body-sm" noWrap title={consumer.ownerId} sx={{ flex: 1, minWidth: 0 }}>
         {consumer.ownerName ?? (isOrg ? 'Unknown organization' : 'Unknown user')}
       </Typography>
-      {!isOrg && <ViewUserProfile userId={consumer.ownerId} size="sm" />}
+      {!isOrg && (
+        <Box sx={{ flexShrink: 0 }} data-testid="platform-usage-owner-action">
+          <ViewUserProfile userId={consumer.ownerId} size="sm" />
+        </Box>
+      )}
     </Stack>
   );
 };

@@ -21,6 +21,8 @@ export interface SideAppAlertMessageInput {
   phase: AlertPhase;
   rule: SideAppAlertRule | typeof PLATFORM_RULE;
   appName?: string;
+  /** Client id of the failing app; the link opens its drill-down. Omitted for the platform alert. */
+  clientId?: string;
   verdict?: ClientVerdict;
   /** Names of the armed apps, for the platform alert. */
   armedAppNames?: string[];
@@ -70,8 +72,11 @@ export function formatSideAppAlertMessage(input: SideAppAlertMessageInput): { te
   }
 
   if (input.appUrl) {
+    const boardUrl = `${input.appUrl.replace(/\/$/, '')}/admin?tab=credit-analytics&creditTab=side-apps`;
     lines.push(
-      `<${input.appUrl.replace(/\/$/, '')}/admin?tab=credit-analytics&creditTab=side-apps|Open the Side apps board>`
+      rule !== PLATFORM_RULE && input.clientId
+        ? `<${boardUrl}&sideApp=${encodeURIComponent(input.clientId)}|Open ${subject} on the Side apps board>`
+        : `<${boardUrl}|Open the Side apps board>`
     );
   }
   const text = lines.join('\n');

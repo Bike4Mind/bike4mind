@@ -166,6 +166,8 @@ describe('PlatformUsageDashboard consumers', () => {
     expect(rows[0]).toHaveTextContent('b4m_ab12');
     expect(rows[0]).toHaveTextContent('Ada');
     expect(within(rows[0]).getByTestId('view-profile-u1')).toBeInTheDocument();
+    expect(getComputedStyle(within(rows[0]).getByTestId('platform-usage-owner-action')).flexShrink).toBe('0');
+    expect(getComputedStyle(within(rows[0]).getByText('Ada')).textOverflow).toBe('ellipsis');
 
     expect(rows[1]).toHaveTextContent('Partner sync');
     expect(rows[1]).toHaveTextContent('Org');

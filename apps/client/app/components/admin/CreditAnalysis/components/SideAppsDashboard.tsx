@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, Stack, Typography } from '@mui/joy';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
 import type { SideAppRow, SideAppUserRow } from '@client/shared/sideApps';
@@ -18,6 +19,7 @@ import { zeroFillDailySeries } from '../utils/dailySeries';
 import { downloadSideAppsCsv, downloadSideAppUsersCsv } from '../utils/sideAppsCsv';
 import { useSideAppUsers, useSideApps } from '../hooks/useSideApps';
 import { useCreditAnalysisStore } from '../store';
+import { parseSideApp } from '../creditTabSearch';
 import { DailyAreaChart } from './DailyAreaChart';
 import ViewUserProfile from './ViewUserProfile';
 
@@ -59,16 +61,20 @@ const UserTable: React.FC<{
         id: 'user',
         label: 'User',
         render: row => (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Box>
-              <Typography level="body-sm">{row.name ?? 'Unknown user'}</Typography>
+          <Stack direction="row" spacing={1} alignItems="center" data-testid={`side-apps-user-cell-${row.userId}`}>
+            <Box sx={{ flex: 1, minWidth: 0 }} data-testid={`side-apps-user-text-${row.userId}`}>
+              <Typography level="body-sm" noWrap title={row.name ?? undefined}>
+                {row.name ?? 'Unknown user'}
+              </Typography>
               {row.email && (
-                <Typography level="body-xs" color="neutral">
+                <Typography level="body-xs" color="neutral" noWrap title={row.email}>
                   {row.email}
                 </Typography>
               )}
             </Box>
-            <ViewUserProfile userId={row.userId} size="sm" />
+            <Box sx={{ flexShrink: 0 }} data-testid={`side-apps-user-action-${row.userId}`}>
+              <ViewUserProfile userId={row.userId} size="sm" />
+            </Box>
           </Stack>
         ),
       },
@@ -113,10 +119,55 @@ const UserTable: React.FC<{
 /** Per connected app: spend by payer tier, requests, outcomes and refusals, with a per-user drill-down. */
 export const SideAppsDashboard: React.FC = () => {
   const [days, setDays] = useState<number>(30);
-  const clientId = useCreditAnalysisStore(state => state.sideAppClientId);
-  const setClientId = useCreditAnalysisStore(state => state.setSideAppClientId);
+  const storeClientId = useCreditAnalysisStore(state => state.sideAppClientId);
+  const setStoreClientId = useCreditAnalysisStore(state => state.setSideAppClientId);
+  const search = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const urlClientId = parseSideApp(search.sideApp);
+  // An app handed over through the store (View usage) opens even with no activity in the window.
+  const [handedOverId] = useState(storeClientId);
+  const urlSeen = useRef(false);
 
   const { data, isLoading, isFetching, error, refetch } = useSideApps(days);
+  const urlClientKnown = !!urlClientId && !!data?.apps.some(app => app.clientId === urlClientId);
+  const clientId = urlClientId ? (urlClientKnown || urlClientId === handedOverId ? urlClientId : null) : storeClientId;
+
+  const writeClientId = useCallback(
+    (next: string | null, replace = false) =>
+      void navigate({
+        to: '/admin',
+        replace,
+        search: previous => ({
+          ...previous,
+          creditTab: 'side-apps',
+          sideApp: next ?? undefined,
+        }),
+      }),
+    [navigate]
+  );
+
+  // Arriving with a store selection and no link (View usage): put it in the URL once.
+  useEffect(() => {
+    if (!urlClientId && handedOverId) writeClientId(handedOverId, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only; later URL changes must not be overwritten
+  }, []);
+
+  // Keep the store following the URL, including browser back removing the param.
+  useEffect(() => {
+    if (clientId && clientId === urlClientId) {
+      urlSeen.current = true;
+      setStoreClientId(clientId);
+    } else if (!urlClientId && urlSeen.current) {
+      urlSeen.current = false;
+      setStoreClientId(null);
+    }
+  }, [clientId, urlClientId, setStoreClientId]);
+
+  const selectClient = (next: string | null) => {
+    setStoreClientId(next);
+    writeClientId(next);
+  };
+
   const users = useSideAppUsers(clientId, days);
 
   const chartData = useMemo(
@@ -257,7 +308,7 @@ export const SideAppsDashboard: React.FC = () => {
             getRowId={row => row.clientId}
             rowTestId={row => `side-apps-row-${row.clientId}`}
             activeRowId={clientId ?? undefined}
-            onRowActivate={row => setClientId(row.clientId)}
+            onRowActivate={row => selectClient(row.clientId)}
             pagination={false}
             maxHeight="420px"
             onRetry={() => void refetch()}
@@ -301,7 +352,7 @@ export const SideAppsDashboard: React.FC = () => {
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
                 <Typography level="title-sm">Users of {selected?.name ?? users.data?.name ?? clientId}</Typography>
                 <Box sx={{ flex: 1 }} />
-                <Button size="sm" variant="plain" onClick={() => setClientId(null)} data-testid="side-apps-close-btn">
+                <Button size="sm" variant="plain" onClick={() => selectClient(null)} data-testid="side-apps-close-btn">
                   Close
                 </Button>
               </Stack>
