@@ -12,6 +12,7 @@ import {
 } from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { isSlackFileUrl } from './slackFileUrl';
+import { getSlackApiErrorCode, isExpectedSlackWorkspaceError } from './slack-export-errors';
 
 const MAX_FILE_DOWNLOAD_REDIRECTS = 5;
 
@@ -390,6 +391,19 @@ export class SlackClient {
   }
 
   /**
+   * Log a caught Slack Web API failure. Workspace-side states the bot cannot fix itself
+   * (see isExpectedSlackWorkspaceError) go to warn; anything else stays at error.
+   */
+  private logApiFailure(method: string, message: string, error: unknown): void {
+    if (isExpectedSlackWorkspaceError(error)) {
+      const slackErrorCode = getSlackApiErrorCode(error);
+      this.logger.warn(`Slack ${method} rejected by workspace state: ${slackErrorCode}`, { method, slackErrorCode });
+      return;
+    }
+    this.logger.error(message, error);
+  }
+
+  /**
    * Send a message to a Slack channel or thread
    * Returns the message timestamp (ts) for future updates
    */
@@ -442,7 +456,7 @@ export class SlackClient {
 
       return null;
     } catch (error) {
-      this.logger.error('Error sending Slack message:', error);
+      this.logApiFailure('sendMessage', 'Error sending Slack message:', error);
       return null;
     }
   }
@@ -835,7 +849,7 @@ export class SlackClient {
       const messages = (result.messages || []) as SlackMessage[];
       return messages.reverse();
     } catch (error) {
-      this.logger.error('Error fetching Slack channel history:', error);
+      this.logApiFailure('fetchChannelHistory', 'Error fetching Slack channel history:', error);
       return [];
     }
   }
