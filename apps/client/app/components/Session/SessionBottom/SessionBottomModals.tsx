@@ -1,25 +1,10 @@
 import { Modal, ModalClose, ModalDialog, Typography } from '@mui/joy';
-import { toast } from 'sonner';
-import { api } from '@client/app/contexts/ApiContext';
-import { AdminModalPreview } from '../../AdminToolModals/AdminModalPreview';
-import { ModalListPopup } from '../../AdminToolModals/ModalListPopup';
 import GenericModal from '../../modals/GenericModal';
 import { FormatSelectionDialog } from '@client/app/components/Session/FormatSelectionDialog';
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
 import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 
 interface SessionBottomModalsProps {
-  // Admin preview
-  adminPreviewData: any;
-  showAdminPreview: boolean;
-  setShowAdminPreview: (open: boolean) => void;
-  setAdminPreviewData: (data: any) => void;
-
-  // Modal list popup
-  modalListPopupOpen: boolean;
-  setModalListPopupOpen: (open: boolean) => void;
-  modalListData: { modals: any[]; message?: string };
-
   // Triggered modal
   triggeredModal: any;
   triggeredModalOpen: boolean;
@@ -43,13 +28,6 @@ interface SessionBottomModalsProps {
 }
 
 export function SessionBottomModals({
-  adminPreviewData,
-  showAdminPreview,
-  setShowAdminPreview,
-  setAdminPreviewData,
-  modalListPopupOpen,
-  setModalListPopupOpen,
-  modalListData,
   triggeredModal,
   triggeredModalOpen,
   setTriggeredModalOpen,
@@ -66,37 +44,6 @@ export function SessionBottomModals({
 }: SessionBottomModalsProps) {
   return (
     <>
-      {/* Admin Tools Preview */}
-      {adminPreviewData && (
-        <AdminModalPreview
-          isOpen={showAdminPreview}
-          modalData={adminPreviewData}
-          onConfirm={async editedData => {
-            try {
-              await api.post('/api/modals', editedData);
-              toast.success('Modal created successfully!');
-              setShowAdminPreview(false);
-              setAdminPreviewData(null);
-            } catch (error) {
-              console.error('Error creating modal:', error);
-              toast.error('Failed to create modal');
-            }
-          }}
-          onClose={() => {
-            setShowAdminPreview(false);
-            setAdminPreviewData(null);
-          }}
-        />
-      )}
-
-      {/* Modal List Popup */}
-      <ModalListPopup
-        open={modalListPopupOpen}
-        onClose={() => setModalListPopupOpen(false)}
-        modals={modalListData.modals}
-        message={modalListData.message}
-      />
-
       {/* Triggered Modal Display */}
       {triggeredModal && (
         <GenericModal

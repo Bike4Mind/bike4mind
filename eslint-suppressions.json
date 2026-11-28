@@ -508,26 +508,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/AdminToolModals/AdminModalPreview.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
-  "apps/client/app/components/AdminToolModals/AdminToolIndicator.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/AdminToolModals/ModalListPopup.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
-  "apps/client/app/components/AdminToolModals/ModalListRenderer.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/Agent/AgentAvatar.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
@@ -780,7 +760,7 @@
   },
   "apps/client/app/components/Session/SessionBottom/SessionBottomModals.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 4
+      "count": 1
     }
   },
   "apps/client/app/components/Session/SessionBottom/SessionFilePond.tsx": {
@@ -795,7 +775,7 @@
   },
   "apps/client/app/components/Session/SessionBottom/useModalState.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 2
     }
   },
   "apps/client/app/components/Session/SessionBottom/useSendMessage.ts": {
@@ -1158,11 +1138,6 @@
       "count": 1
     }
   },
-  "apps/client/app/hooks/useAdminTools.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/app/hooks/useAudioAnalyzer.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -1174,11 +1149,6 @@
     }
   },
   "apps/client/app/hooks/useIsPWA.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/hooks/useModalListRestore.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

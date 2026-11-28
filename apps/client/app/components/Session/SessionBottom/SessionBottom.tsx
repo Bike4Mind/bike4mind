@@ -158,23 +158,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const lowCreditsWarningDismissed =
     !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
 
-  // Modal state: triggered modal, admin preview, format dialog, modal list
+  // Modal state: triggered modal, format dialog
   const {
     triggeredModal,
     triggeredModalOpen,
     setTriggeredModalOpen,
-    showAdminPreview,
-    setShowAdminPreview,
-    adminPreviewData,
-    setAdminPreviewData,
     formatDialogOpen,
     setFormatDialogOpen,
     pasteContentForFormat,
     pasteSmartFileName,
-    modalListPopupOpen,
-    setModalListPopupOpen,
-    modalListData,
-  } = useModalState(currentSessionId);
+  } = useModalState();
 
   // Voice state: spoken words, voice session, debug drawer, credits, voice engine
   const {
@@ -351,10 +344,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
 
       const shouldShowSlashSuggestions =
-        typeof newValue === 'string' &&
-        newValue.startsWith('/') &&
-        !newValue.startsWith('/admin') &&
-        !newValue.includes(' '); // Hide when user has completed the command and added a space
+        typeof newValue === 'string' && newValue.startsWith('/') && !newValue.includes(' '); // Hide when user has completed the command and added a space
 
       setShowSlashSuggestions(shouldShowSlashSuggestions);
     },
@@ -939,13 +929,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       )}
 
       <SessionBottomModals
-        adminPreviewData={adminPreviewData}
-        showAdminPreview={showAdminPreview}
-        setShowAdminPreview={setShowAdminPreview}
-        setAdminPreviewData={setAdminPreviewData}
-        modalListPopupOpen={modalListPopupOpen}
-        setModalListPopupOpen={setModalListPopupOpen}
-        modalListData={modalListData}
         triggeredModal={triggeredModal}
         triggeredModalOpen={triggeredModalOpen}
         setTriggeredModalOpen={setTriggeredModalOpen}
