@@ -4,6 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { seeders } from '../seeders';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
+import { acquireMigrationLease, type LeaseOptions, type MigrationLease } from './migrationLock';
 
 // Shared applied-SET selection (not a high-water-mark) - see up()'s comment for why. Exported so
 // `migrate/index.ts`'s `list --pending` preview uses the exact same semantics as `up()` actually
@@ -23,9 +24,34 @@ export function selectPending(
 
 export class MigrationManager {
   private logger: Logger;
+  private leaseOptions: LeaseOptions;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, leaseOptions: LeaseOptions = {}) {
     this.logger = logger;
+    this.leaseOptions = leaseOptions;
+  }
+
+  /**
+   * Runs `work` only while this process holds the single migration-runner lease. A run that finds
+   * the lease held throws without touching any migration: the holder may be a dead run whose lease
+   * has not expired yet, so reporting success could let a deploy ship before its migrations ran.
+   */
+  private async withLease(work: (lease: MigrationLease) => Promise<void>): Promise<void> {
+    const lease = await acquireMigrationLease(this.logger, this.leaseOptions);
+    if (!lease) {
+      throw new Error('Another migration run holds the migration lease; not running migrations');
+    }
+    try {
+      await work(lease);
+    } finally {
+      await lease.release();
+    }
+  }
+
+  private assertLeaseHeld(lease: MigrationLease): void {
+    if (lease.isLost()) {
+      throw new Error(`Migration lease ${lease.owner} was lost; stopping before the next migration`);
+    }
   }
 
   async seed(): Promise<void> {
@@ -40,6 +66,10 @@ export class MigrationManager {
   }
 
   async up(target: number | null): Promise<void> {
+    await this.withLease(lease => this.runUp(target, lease));
+  }
+
+  private async runUp(target: number | null, lease: MigrationLease): Promise<void> {
     // Applied-SET semantics, not a high-water-mark: core migrations get monotonic ids per
     // commit, but overlay migrations pin-bump on an independent cadence, so an overlay
     // migration id can land below the current max applied id. A `m.id > max(applied)` filter
@@ -66,6 +96,7 @@ export class MigrationManager {
         migrationName: migration.name,
       });
 
+      this.assertLeaseHeld(lease);
       logger.log(`Running migration ${migration.id}: ${migration.name}`);
       try {
         const result = await migration.up({ startedAt });
@@ -102,6 +133,10 @@ export class MigrationManager {
   }
 
   async down(target: number | null): Promise<void> {
+    await this.withLease(lease => this.runDown(target, lease));
+  }
+
+  private async runDown(target: number | null, lease: MigrationLease): Promise<void> {
     // Mirror of up()'s applied-set selection - see comment there.
     const appliedMigrations = await Migration.find();
     const appliedIds = new Set(appliedMigrations.map(m => m.id));
@@ -116,6 +151,7 @@ export class MigrationManager {
         migrationName: migration.name,
       });
 
+      this.assertLeaseHeld(lease);
       logger.log(`Undoing migration ${migration.id}: ${migration.name}`);
       try {
         await migration.down();

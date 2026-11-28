@@ -20,6 +20,10 @@
 // that id is on the base already. Uniqueness across the whole directory is enforced separately by
 // packages/scripts/migrate/migrations/index.test.ts, which runs on every push to main.
 //
+// Each added file must also fill in `rerunSafe` (see findMissingRerunNotes): the runner records a
+// migration only after up() returns, so every migration must be safe to run again after a partial
+// failure. See packages/scripts/migrate/README.md.
+//
 // Usage: node scripts/check-migration-ids.mjs --base <rev> [--head <rev>]
 //   --base  the base branch tip (scripts/resolve-guard-base.sh). Required: with no base there is
 //           no way to tell added ids from grandfathered ones, so a missing base fails.
@@ -41,7 +45,11 @@ export const MAX_AGE_GRACE_MS = 24 * 60 * 60 * 1000;
 
 const HOW_TO_FIX =
   'Create migrations with `pnpm migrate generate "<name>"`, which stamps the current UTC time. ' +
-  'Never hand-pick or reuse an id; to refresh a stale one, regenerate the file and move up()/down() into it.';
+  'Never hand-pick or reuse an id; to refresh a stale one, regenerate the file and move up()/down() into it. ' +
+  'Fill in `rerunSafe` with why up() is safe to run again after it failed partway.';
+
+// A string literal that is neither empty nor the generator's TODO placeholder.
+const RERUN_SAFE_RE = /\brerunSafe:\s*(['"`])\s*(?!TODO\b)[^'"`\s]/;
 
 /** Parses a migration id into its UTC instant, or returns null when it is not a real timestamp. */
 export function parseMigrationId(id) {
@@ -125,6 +133,13 @@ export function formatId(ms) {
     .replace(/\D/g, '');
 }
 
+/** Returns one problem per added file ([{ filename, source }]) whose `rerunSafe` is missing or unfilled. */
+export function findMissingRerunNotes(added) {
+  return added
+    .filter(({ source }) => !RERUN_SAFE_RE.test(source))
+    .map(({ filename }) => `${filename}: rerunSafe is missing or still the generator's TODO placeholder.`);
+}
+
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
@@ -165,7 +180,11 @@ export function checkMigrationIds({ cwd, base, head = 'HEAD', nowMs = Date.now()
     migrationFilesIn(listMigrationFiles(cwd, head))
   );
   const withFloors = added.map(file => ({ ...file, floorMs: floorFor(cwd, forkPoint, head, file.filename) }));
-  return [...problems, ...findProblems(withFloors, nowMs)];
+  const withSources = added.map(file => ({
+    ...file,
+    source: git(cwd, ['show', `${head}:${MIGRATIONS_DIR}/${file.filename}`]),
+  }));
+  return [...problems, ...findProblems(withFloors, nowMs), ...findMissingRerunNotes(withSources)];
 }
 
 function parseArgs(argv) {
@@ -186,10 +205,12 @@ function main() {
   }
   const problems = checkMigrationIds({ cwd: process.cwd(), base, head: head || 'HEAD' });
   if (problems.length === 0) {
-    console.log('check-migration-ids: every added core migration id is a fresh generated timestamp.');
+    console.log(
+      'check-migration-ids: every added core migration has a fresh generated id and a rerunSafe note.'
+    );
     return;
   }
-  console.error('check-migration-ids: hand-picked or stale core migration id(s):');
+  console.error('check-migration-ids: problem(s) with added core migration(s):');
   for (const problem of problems) console.error(`  - ${problem}`);
   console.error(`\n${HOW_TO_FIX}`);
   process.exit(1);

@@ -453,6 +453,11 @@ export const infraHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   Migration: { kind: 'noUserData', note: 'Database migration bookkeeping.' },
+  MigrationLock: {
+    kind: 'noUserData',
+    note: 'Migration runner lease; `owner` is a random id for one runner process, not a person.',
+    unrelatedPaths: ['owner'],
+  },
   OrgGitHubConnection: {
     kind: 'holder',
     references: [

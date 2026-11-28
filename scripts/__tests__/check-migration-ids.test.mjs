@@ -6,6 +6,7 @@ import { join } from 'path';
 import {
   MIGRATIONS_DIR,
   checkMigrationIds,
+  findMissingRerunNotes,
   findProblems,
   formatId,
   migrationFilesIn,
@@ -72,6 +73,26 @@ describe('findProblems', () => {
   });
 });
 
+describe('findMissingRerunNotes', () => {
+  const file = source => [{ filename: 'm.ts', source }];
+
+  it('accepts a filled-in note in any quote style', () => {
+    expect(findMissingRerunNotes(file("rerunSafe: 'upserts by key',"))).toEqual([]);
+    expect(findMissingRerunNotes(file('rerunSafe:\n    "createIndexes is idempotent",'))).toEqual([]);
+    expect(findMissingRerunNotes(file('rerunSafe: `filters on the unset field`,'))).toEqual([]);
+  });
+
+  it.each([
+    ['missing', 'up: async () => {},'],
+    ['empty', "rerunSafe: '',"],
+    ['the placeholder', "rerunSafe: 'TODO: explain why up() is safe to run again after a partial failure',"],
+  ])('rejects a note that is %s', (_label, source) => {
+    expect(findMissingRerunNotes(file(source))).toEqual([
+      "m.ts: rerunSafe is missing or still the generator's TODO placeholder.",
+    ]);
+  });
+});
+
 describe('checkMigrationIds (real git repo)', () => {
   let repo;
   const migrationsPath = () => join(repo, MIGRATIONS_DIR);
@@ -86,8 +107,11 @@ describe('checkMigrationIds (real git repo)', () => {
     });
   }
 
-  function addMigration(id) {
-    writeFileSync(join(migrationsPath(), `${id}_thing.ts`), `export default { id: ${id} };\n`);
+  const migrationSource = (id, rerunSafe = "'only sets a field that is still unset'") =>
+    `export default { id: ${id}, rerunSafe: ${rerunSafe} };\n`;
+
+  function addMigration(id, rerunSafe) {
+    writeFileSync(join(migrationsPath(), `${id}_thing.ts`), migrationSource(id, rerunSafe));
   }
 
   beforeEach(() => {
@@ -127,7 +151,7 @@ describe('checkMigrationIds (real git repo)', () => {
   it('fails when two added files share an id', () => {
     const id = formatId(NOW - 60 * 1000);
     addMigration(id);
-    writeFileSync(join(migrationsPath(), `${id}_twin.ts`), `export default { id: ${id} };\n`);
+    writeFileSync(join(migrationsPath(), `${id}_twin.ts`), migrationSource(id));
     commit('add migrations', '2026-11-12T09:00:00Z');
     expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toHaveLength(2);
   });
@@ -146,6 +170,17 @@ describe('checkMigrationIds (real git repo)', () => {
     expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toEqual([]);
   });
 
+  it('fails on an added migration with no rerunSafe note or the generator placeholder', () => {
+    const id = formatId(NOW - 20 * 60 * 1000);
+    writeFileSync(join(migrationsPath(), `${id}_bare.ts`), `export default { id: ${id} };\n`);
+    addMigration(formatId(NOW - 19 * 60 * 1000), "'TODO: explain why up() is safe to run again'");
+    commit('add migrations', '2026-11-12T09:15:00Z');
+    expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toEqual([
+      expect.stringContaining(`${id}_bare.ts: rerunSafe is missing`),
+      expect.stringContaining('_thing.ts: rerunSafe is missing'),
+    ]);
+  });
+
   it('ignores grandfathered files, including a slug rename that keeps the id', () => {
     renameSync(join(migrationsPath(), '20260921241030_old.ts'), join(migrationsPath(), '20260921241030_renamed.ts'));
     commit('rename slug', '2026-11-12T09:00:00Z');
@@ -155,8 +190,10 @@ describe('checkMigrationIds (real git repo)', () => {
   it('checks the new id when an existing file is renamed to a different id', () => {
     renameSync(join(migrationsPath(), '20260921241030_old.ts'), join(migrationsPath(), '20260921249990_old.ts'));
     commit('re-id', '2026-11-12T09:00:00Z');
+    // A re-id'd file runs again on a database that recorded the old id, so it needs a note too.
     expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toEqual([
-      expect.stringContaining('20260921249990_old.ts'),
+      expect.stringContaining('20260921249990_old.ts: id 20260921249990'),
+      expect.stringContaining('20260921249990_old.ts: rerunSafe is missing'),
     ]);
   });
 

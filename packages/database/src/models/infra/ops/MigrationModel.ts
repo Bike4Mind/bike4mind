@@ -28,6 +28,12 @@ export interface MigrationFile {
    * flag one that a later migration depends on.
    */
   failClosed?: boolean;
+  /**
+   * Why `up()` is safe to run again after it failed partway: the runner records a migration only
+   * after `up()` returns, so a crash mid-run means the next deploy runs it from the start. Every
+   * migration `pnpm migrate generate` creates must fill this in; see packages/scripts/migrate/README.md.
+   */
+  rerunSafe?: string;
 }
 
 export interface IMigration {
@@ -37,10 +43,35 @@ export interface IMigration {
 }
 
 const MigrationSchema = new mongoose.Schema<IMigration>({
-  id: { type: Number, required: true },
+  id: { type: Number, required: true, unique: true },
   name: { type: String, required: true },
   migratedAt: { type: Date, default: Date.now },
 });
 
 export const Migration: mongoose.Model<IMigration> =
   mongoose.models.Migration || mongoose.model<IMigration>('Migration', MigrationSchema, 'migrations');
+
+/**
+ * The single-runner lease for the migration runner (see packages/scripts/migrate/migrationLock.ts):
+ * one document, held by `owner` until `expiresAt`, renewed while the run is alive.
+ */
+export interface IMigrationLock {
+  _id: string;
+  owner: string;
+  acquiredAt: Date;
+  expiresAt: Date;
+}
+
+const MigrationLockSchema = new mongoose.Schema<IMigrationLock>(
+  {
+    _id: { type: String, required: true },
+    owner: { type: String, required: true },
+    acquiredAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { versionKey: false }
+);
+
+export const MigrationLock: mongoose.Model<IMigrationLock> =
+  mongoose.models.MigrationLock ||
+  mongoose.model<IMigrationLock>('MigrationLock', MigrationLockSchema, 'migrationlocks');

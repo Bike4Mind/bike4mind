@@ -54,6 +54,11 @@ vi.mock('../seeders', () => ({ seeders: [] }));
 // process. up()/down() never touch Config - only seed()/cleanup() do - so an empty stub is fine.
 vi.mock('../utils/config', () => ({ Config: {} }));
 
+// The single-runner lease is covered against real Mongo in migrationManager.integration.test.ts.
+vi.mock('./migrationLock', () => ({
+  acquireMigrationLease: vi.fn(async () => ({ owner: 'test', isLost: () => false, release: async () => undefined })),
+}));
+
 // Imported after the mocks above so migrationManager.ts's top-level `import {
 // AvailableMigrations } from './migrations'` resolves to the mock.
 const { MigrationManager, selectPending } = await import('./migrationManager');

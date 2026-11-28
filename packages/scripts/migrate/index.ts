@@ -12,6 +12,9 @@ import { fileURLToPath } from 'url';
 import { Config } from '../utils/config';
 import { Resource } from 'sst';
 
+// scripts/check-migration-ids.mjs rejects an added migration that still carries this placeholder.
+const RERUN_SAFE_PLACEHOLDER = 'TODO: explain why up() is safe to run again after a partial failure';
+
 export class MigrationTool extends MigrationManager {
   private options;
   private command: string;
@@ -75,7 +78,8 @@ export class MigrationTool extends MigrationManager {
     if (options.stage === undefined) {
       console.warn('STAGE env variable is not set.');
     }
-    await connectDB(options.dbUri.replace('%STAGE%', options.stage));
+    // Writing a migration file needs no database.
+    if (this.command !== 'generate') await connectDB(options.dbUri.replace('%STAGE%', options.stage));
 
     switch (this.command) {
       case 'up':
@@ -139,6 +143,8 @@ export class MigrationTool extends MigrationManager {
 const migration: MigrationFile = {
   id: ${id},
   name: '${name}',
+  // Required: why up() is safe to run again after it failed partway. See ../README.md.
+  rerunSafe: '${RERUN_SAFE_PLACEHOLDER}',
 
   up: async () => {
   },
@@ -160,7 +166,7 @@ export default migration;
         stdio: 'inherit',
       }
     );
-    console.log(`\nDone.  Next write the up() and down() implementations.`);
+    console.log(`\nDone.  Next write the up() and down() implementations and fill in rerunSafe.`);
   }
 }
 
