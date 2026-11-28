@@ -55,7 +55,16 @@ export {
   TOTAL_INLINE_MAX_BYTES,
 } from '@bike4mind/server-utils/services/publish/collectInlineAssets';
 export { renderBundleLoaderShell } from './renderBundleLoaderShell';
-export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
+export {
+  defaultShareImage,
+  prepareShareMeta,
+  prepareShareTokenMeta,
+  stripToText,
+  type ShareImage,
+  type ShareMetaInput,
+  type ShareMetaOutput,
+  type ShareTokenMetaInput,
+} from './prepareShareMeta';
 export { generateShareToken } from './shareToken';
 export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
 export { recordGatedView, type RecordGatedViewInput } from './recordGatedView';

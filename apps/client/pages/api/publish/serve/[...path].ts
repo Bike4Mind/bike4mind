@@ -22,8 +22,10 @@ import {
   checkShareGrant,
   checkVisibility,
   collectInlineAssets,
+  defaultShareImage,
   loadLiveOwner,
   prepareShareMeta,
+  prepareShareTokenMeta,
   recordGatedView,
   renderBundleLoaderShell,
   renderNotFoundPage,
@@ -33,6 +35,7 @@ import {
   stripToText,
   type PublishUser,
   type SandboxAsset,
+  type ShareMetaOutput,
 } from '@server/services/publish';
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -255,6 +258,15 @@ const plainTitle = (title: string, artifact: { source: { kind: string }; rendere
   artifact.source.kind === 'reply'
     ? displayReplyTitleFromLine(title, cachedReplyFirstLine(artifact)) || SHARED_FALLBACK_TITLE
     : title;
+/** Link card for an ungated `/a/<token>` link; callers check the gate. */
+function shareTokenMeta(artifact: PublishedArtifactLean): ShareMetaOutput {
+  return prepareShareTokenMeta({
+    title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
+    description: artifact.description,
+    siteName: process.env.APP_NAME || '',
+    image: defaultShareImage(process.env.APP_NAME),
+  });
+}
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
 const ASSET_CSP = [
   "default-src 'none'",
@@ -747,6 +759,25 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
+    // Same open-public / ungated-share split as the bundle wrapper's shareMeta: a token link
+    // to an open-public artifact still gets only the token card. The page is already
+    // server-rendered text, so it needs no noscript excerpt.
+    const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+    const canonicalUrl = `${docOrigin}/p/${sourcePrefix}/${artifact.publicId}`;
+    const shareMeta =
+      !isShare && isOpenPublic
+        ? prepareShareMeta({
+            title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
+            description: artifact.description,
+            bodyForExcerpt: viewerExcerptSource(artifact),
+            canonicalUrl,
+            rawUrl: `${canonicalUrl}?format=raw`,
+            siteName: process.env.APP_NAME || '',
+            image: defaultShareImage(process.env.APP_NAME),
+          })
+        : isShare && !artifact.accessGate
+          ? shareTokenMeta(artifact)
+          : null;
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
       noReferrer: isShare,
@@ -757,6 +788,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       signupGate: showSignupGate,
       starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
       signupReturnTo: selfPath,
+      shareMeta,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -1154,8 +1186,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // out of discovery are opting out of the index, not out of link previews.
   // A sub-page is not the canonical document, so it carries none of this (its canonical
   // link would name the index while describing a different page).
-  const shareMeta =
-    !isShare && isOpenPublic && !isSubPage
+  // An ungated share-token link gets the author-chosen card only (see prepareShareTokenMeta).
+  const shareMeta = isSubPage
+    ? null
+    : !isShare && isOpenPublic
       ? prepareShareMeta({
           title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
           description: artifact.description,
@@ -1163,8 +1197,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           canonicalUrl: `${docOrigin}${canonicalPath}`,
           rawUrl: `${docOrigin}${canonicalPath}?format=raw`,
           siteName: process.env.APP_NAME || '',
+          image: defaultShareImage(process.env.APP_NAME),
         })
-      : null;
+      : isShare && !artifact.accessGate
+        ? shareTokenMeta(artifact)
+        : null;
   // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
   // link comes first: it lands on the same tagged marketing page (signup when none is
   // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
@@ -1257,7 +1294,7 @@ function renderBundleWrapper(
   srcdoc: string,
   requestedVersion: string,
   isolatedSrc: string,
-  shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
+  shareMeta: ShareMetaOutput | null,
   noindex: boolean,
   /** Share links only - suppresses Referer so the capability token can't leak outbound. */
   noReferrer: boolean,
@@ -1789,6 +1826,15 @@ function extractViewerArtifacts(body: string, kind: string): ArtifactParseResult
 }
 
 /**
+ * A reply/fabfile body as share-meta excerpt input: embedded artifacts dropped (their
+ * markup is not prose) and reply markdown rendered, so stripToText yields readable text.
+ */
+function viewerExcerptSource(artifact: PublishedArtifactLean): string {
+  const { cleanedContent } = extractViewerArtifacts(replyBodyForExport(artifact), artifact.source.kind);
+  return artifact.source.kind === 'reply' ? (marked.parse(cleanedContent, { async: false }) as string) : cleanedContent;
+}
+
+/**
  * Clean a snapshot title for display. A reply that LEADS with an `<artifact ...>` tag was
  * snapshotted with the raw wrapper tag as its title (deriveTitle took the first line); recover
  * a sensible title from the first named embedded artifact, else the neutral fallback. New
@@ -1955,6 +2001,8 @@ function renderViewerPage(
     starterCredits?: number;
     /** Path the sign-up gate's /register link returns to. */
     signupReturnTo?: string;
+    /** Unfurl head block; when null, the page carries only a bare og:title card. */
+    shareMeta?: ShareMetaOutput | null;
   }
 ): string {
   const {
@@ -1968,6 +2016,7 @@ function renderViewerPage(
     signupGate = false,
     starterCredits = 0,
     signupReturnTo,
+    shareMeta = null,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -2058,8 +2107,12 @@ function renderViewerPage(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}${cspMeta}
-<meta property="og:title" content="${titleHtml}">
-<meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
+${
+  shareMeta
+    ? `${shareMeta.metaTags}${shareMeta.alternateLink ? `\n${shareMeta.alternateLink}` : ''}`
+    : `<meta property="og:title" content="${titleHtml}">
+<meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">`
+}
 <title>${titleHtml}</title>
 <style>
   :root { color-scheme: light dark; }
