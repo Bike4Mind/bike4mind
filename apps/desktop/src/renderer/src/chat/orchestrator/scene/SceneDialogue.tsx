@@ -12,7 +12,6 @@ import {
   dialogueKeyAction,
   dialogueQueue,
   queueIndex,
-  reachedEnd,
   SCENE_DIALOGUE_ATTR,
   type CommandApproval,
   type DialogueKeyAction,
@@ -265,7 +264,7 @@ export function SceneDialogue({
             />
           )}
         </Box>
-        {/* Keyed on the request so expansion, the read gate and any error never carry to the next one. */}
+        {/* Keyed on the request so expansion and any error never carry to the next one. */}
         <FrontBody
           key={decisionKey(front)}
           decision={front}
@@ -534,19 +533,9 @@ function CommandAsk({
   commandKeys: MutableRefObject<CommandKeys | undefined>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [read, setRead] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const codeRef = useRef<HTMLDivElement>(null);
   const lines = command.text.split('\n');
-  const canAllow = read && !sending;
-
-  const checkRead = () => {
-    const code = codeRef.current;
-    if (code && reachedEnd(code)) setRead(true);
-  };
-  // A command that fits is read as soon as it is on screen; a longer one once scrolled or expanded.
-  useLayoutEffect(checkRead, [expanded]);
 
   const respond = async (answer: ChatApprovalAnswer) => {
     setSending(true);
@@ -563,10 +552,10 @@ function CommandAsk({
   const run = (action: DialogueKeyAction): boolean => {
     switch (action) {
       case 'once':
-        if (canAllow) void respond({ decision: 'once' });
+        if (!sending) void respond({ decision: 'once' });
         return true;
       case 'chat':
-        if (canAllow && command.allowInChat) void respond({ decision: 'always' });
+        if (!sending && command.allowInChat) void respond({ decision: 'always' });
         return true;
       case 'deny':
         if (!sending) void respond({ decision: 'deny' });
@@ -600,12 +589,10 @@ function CommandAsk({
         </Box>
       )}
       <Box
-        ref={codeRef}
         tabIndex={0}
         role="region"
         aria-label="Command"
         data-testid="scene-dialogue-code"
-        onScroll={checkRead}
         sx={{
           mt: '0.4em',
           maxHeight: expanded ? 'none' : `${COLLAPSED_CODE_EM}em`,
@@ -665,7 +652,7 @@ function CommandAsk({
         <Box
           component="button"
           type="button"
-          disabled={!canAllow}
+          disabled={sending}
           onClick={() => run('once')}
           data-testid="scene-dialogue-allow-once"
           sx={choiceSx(colors, 'primary')}
@@ -676,7 +663,7 @@ function CommandAsk({
           <Box
             component="button"
             type="button"
-            disabled={!canAllow}
+            disabled={sending}
             onClick={() => run('chat')}
             data-testid="scene-dialogue-allow-chat"
             sx={choiceSx(colors)}
@@ -697,11 +684,6 @@ function CommandAsk({
         <Box component="button" type="button" onClick={onOpen} data-testid="scene-dialogue-open" sx={choiceSx(colors)}>
           Open session <Key colors={colors}>O</Key>
         </Box>
-        {!read && (
-          <Box component="span" data-testid="scene-dialogue-read-gate" sx={{ fontSize: '0.85em', color: colors.muted }}>
-            Read to the end to allow
-          </Box>
-        )}
       </Box>
       {command.allowInChat && (
         <Box

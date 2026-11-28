@@ -113,21 +113,6 @@ function plainApproval({ call, approvalId, collectsSecrets }: ApprovalPendingDec
   };
 }
 
-/** Where the scroll box sits, as read from the DOM. */
-export interface ScrollMetrics {
-  scrollTop: number;
-  clientHeight: number;
-  scrollHeight: number;
-}
-
-/** Within this many pixels of the end counts as the end, for subpixel layouts. */
-const END_SLACK = 2;
-
-/** Every line of the command has been on screen: it fits, or it was scrolled to the end. */
-export function reachedEnd({ scrollTop, clientHeight, scrollHeight }: ScrollMetrics): boolean {
-  return scrollTop + clientHeight >= scrollHeight - END_SLACK;
-}
-
 export type DialogueKeyAction = 'once' | 'chat' | 'deny' | 'open' | 'expand' | 'next' | 'previous' | 'minimize';
 
 /** What a key does in the box, or undefined. Modified keys are left to the app (Cmd+C must still copy). */

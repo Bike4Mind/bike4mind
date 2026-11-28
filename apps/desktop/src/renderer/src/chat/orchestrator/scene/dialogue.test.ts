@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatDiff, ChatToolCall } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
-import { commandApprovalOf, decisionKey, dialogueKeyAction, dialogueQueue, queueIndex, reachedEnd } from './dialogue';
+import { commandApprovalOf, decisionKey, dialogueKeyAction, dialogueQueue, queueIndex } from './dialogue';
 
 const call = (extra: Partial<ChatToolCall> = {}): ChatToolCall => ({
   id: 'c1',
@@ -104,14 +104,6 @@ describe('commandApprovalOf', () => {
     expect(description?.length).toBeLessThanOrEqual(140);
     expect(description?.endsWith('...')).toBe(true);
     expect(description).not.toContain('\n');
-  });
-});
-
-describe('reachedEnd', () => {
-  it('counts a box that fits or is scrolled to within the slack', () => {
-    expect(reachedEnd({ scrollTop: 0, clientHeight: 100, scrollHeight: 100 })).toBe(true);
-    expect(reachedEnd({ scrollTop: 99, clientHeight: 100, scrollHeight: 200 })).toBe(true);
-    expect(reachedEnd({ scrollTop: 50, clientHeight: 100, scrollHeight: 200 })).toBe(false);
   });
 });
 

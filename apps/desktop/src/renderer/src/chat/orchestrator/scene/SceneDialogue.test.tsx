@@ -106,25 +106,34 @@ describe('SceneDialogue', () => {
     expect(onFrontChange).toHaveBeenLastCalledWith('b:approval:p2');
   });
 
-  it('keeps Allow locked until a long command has been read', async () => {
+  it('lets a long command be allowed at once, without scrolling to the end', async () => {
     vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(100);
     await render();
-    expect(button('scene-dialogue-allow-once').disabled).toBe(true);
-    expect(button('scene-dialogue-allow-chat').disabled).toBe(true);
-    expect(button('scene-dialogue-deny').disabled).toBe(false);
-    expect(query('scene-dialogue-read-gate')).not.toBeNull();
-    await press('a');
-    expect(chat.respondToApproval).not.toHaveBeenCalled();
-
-    const code = el('scene-dialogue-code');
-    await act(async () => {
-      code.scrollTop = 300;
-      code.dispatchEvent(new Event('scroll'));
-    });
     expect(button('scene-dialogue-allow-once').disabled).toBe(false);
+    expect(button('scene-dialogue-allow-chat').disabled).toBe(false);
+    expect(el('scene-dialogue').textContent).not.toContain('Read to the end');
     await press('a');
     expect(chat.respondToApproval).toHaveBeenCalledWith('p1', { decision: 'once' });
+  });
+
+  it('allows in this chat by key on first render', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(100);
+    await render();
+    await press('c');
+    expect(chat.respondToApproval).toHaveBeenCalledWith('p1', { decision: 'always' });
+  });
+
+  it('leaves A and C alone while typing in a field inside the box', async () => {
+    await render();
+    const field = document.createElement('input');
+    el('scene-dialogue').appendChild(field);
+    await act(async () => {
+      for (const key of ['a', 'c']) field.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    });
+    expect(chat.respondToApproval).not.toHaveBeenCalled();
+    field.remove();
   });
 
   it('hides Allow in this chat for a once-only approval', async () => {
