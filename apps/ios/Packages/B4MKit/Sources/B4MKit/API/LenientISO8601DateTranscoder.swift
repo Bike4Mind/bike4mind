@@ -13,6 +13,11 @@ struct LenientISO8601DateTranscoder: DateTranscoder {
     return try Self.plain.parse(dateString)
   }
 
+  /// Parses either shape; `nil` when neither matches (for fields the schema types as plain strings).
+  static func parse(_ string: String) -> Date? {
+    try? LenientISO8601DateTranscoder().decode(string)
+  }
+
   private static let withFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
   private static let plain = Date.ISO8601FormatStyle()
 }

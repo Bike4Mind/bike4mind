@@ -2,6 +2,7 @@ import { ForbiddenError, isFullAdmin } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import { requireAdminPermission } from '@server/middlewares/adminApi';
+import { assertCanChangeLakeGateTags } from '@server/admin/lakeGateTags';
 import {
   ADMIN_USERS_BULK_ACTION_PERMISSIONS,
   type AdminUsersBulkActionType,
@@ -13,14 +14,15 @@ type BulkAuthorizationRequest = Parameters<typeof requireAdminPermission>[0] & {
 
 /**
  * Every permission the action needs, plus the settings permission when it writes blockedEmailDomains.
- * Managed role/product tags it adds or removes stay full-admin only, as in the single-user tag editor.
+ * Managed role/product tags and lake gate tags it adds or removes stay full-admin only, as in the
+ * single-user tag editor.
  * Shared by execute, undo and the approver's run so the three paths cannot drift.
  */
-export function assertCanRunUsersBulkAction(
+export async function assertCanRunUsersBulkAction(
   req: BulkAuthorizationRequest,
   type: AdminUsersBulkActionType,
   effects: { blocks?: boolean; unblocks?: boolean; tags?: readonly string[] } = {}
-): void {
+): Promise<void> {
   for (const permission of ADMIN_USERS_BULK_ACTION_PERMISSIONS[type]) requireAdminPermission(req, permission);
   if ((effects.blocks || effects.unblocks) && !req.ability?.can('update', AdminSettings)) {
     throw new ForbiddenError(
@@ -30,6 +32,7 @@ export function assertCanRunUsersBulkAction(
   if (!isFullAdmin(req.user) && effects.tags?.some(isManagedTag)) {
     throw new ForbiddenError('Only full administrators can assign managed tags');
   }
+  await assertCanChangeLakeGateTags(req.user, effects.tags);
 }
 
 /** The tag an execute request would add, for assertCanRunUsersBulkAction. */

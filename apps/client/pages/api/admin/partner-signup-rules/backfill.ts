@@ -136,7 +136,7 @@ const handler = adminApi({
           }
         } else if (result.reason === 'at-capacity') tally.atCapacity += 1;
         else if (result.reason === 'already-member') tally.alreadyMember += 1;
-        else tally.unverified += 1; // 'unverified' | 'org-missing' | 'user-missing' - candidate was verified, so effectively a skip
+        else tally.unverified += 1; // 'unverified' | 'org-missing' | 'user-missing' | 'removed' - effectively a skip
       } catch (error) {
         tally.failed += 1;
         req.logger.error(

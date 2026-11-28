@@ -39,6 +39,7 @@ import {
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { RowActionsMenu } from './shared/RowActionsMenu';
+import { AdminPermissionAction, useFullAdminOnlyReason } from './shared/MissingPermission';
 
 interface IdentityProvider {
   id: string;
@@ -80,11 +81,13 @@ function ProviderRowMenu({
   onSpMetadata,
   onEdit,
   onDelete,
+  writeBlocked,
 }: {
   idp: IdentityProvider;
   onSpMetadata: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  writeBlocked: string | null;
 }) {
   return (
     <RowActionsMenu testId={`identity-provider-actions-${idp.id}`} ariaLabel={`Actions for ${idp.name}`}>
@@ -93,9 +96,13 @@ function ProviderRowMenu({
           View SP metadata
         </MenuItem>
       )}
-      <MenuItem onClick={onEdit} data-testid={`identity-provider-edit-${idp.id}`}>
-        Edit provider
-      </MenuItem>
+      <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+        {disabled => (
+          <MenuItem disabled={disabled} onClick={onEdit} data-testid={`identity-provider-edit-${idp.id}`}>
+            Edit provider
+          </MenuItem>
+        )}
+      </AdminPermissionAction>
       <ListDivider />
       <MenuItem color="danger" onClick={onDelete} data-testid={`identity-provider-delete-${idp.id}`}>
         Delete provider
@@ -111,6 +118,7 @@ const CellText = ({ text, testId }: { text: string; testId?: string }) => (
 );
 
 const IdentityProvidersTab: React.FC = () => {
+  const writeBlocked = useFullAdminOnlyReason();
   const [idps, setIdps] = useState<IdentityProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -315,9 +323,19 @@ const IdentityProvidersTab: React.FC = () => {
         actions={
           <>
             <ContextHelpButton helpId="admin/identity-providers" tooltipText="Identity providers help" />
-            <Button size="sm" startDecorator={<Add />} onClick={handleCreate} data-testid="identity-provider-add-btn">
-              Add identity provider
-            </Button>
+            <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+              {disabled => (
+                <Button
+                  size="sm"
+                  startDecorator={<Add />}
+                  disabled={disabled}
+                  onClick={handleCreate}
+                  data-testid="identity-provider-add-btn"
+                >
+                  Add identity provider
+                </Button>
+              )}
+            </AdminPermissionAction>
           </>
         }
       />
@@ -337,15 +355,20 @@ const IdentityProvidersTab: React.FC = () => {
             title="No identity providers yet"
             description="Add a SAML or Okta provider to route an email domain to single sign-on."
             action={
-              <Button
-                size="sm"
-                variant="outlined"
-                startDecorator={<Add />}
-                onClick={handleCreate}
-                data-testid="identity-provider-empty-add-btn"
-              >
-                Add identity provider
-              </Button>
+              <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+                {disabled => (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    startDecorator={<Add />}
+                    disabled={disabled}
+                    onClick={handleCreate}
+                    data-testid="identity-provider-empty-add-btn"
+                  >
+                    Add identity provider
+                  </Button>
+                )}
+              </AdminPermissionAction>
             }
           />
         }
@@ -358,6 +381,7 @@ const IdentityProvidersTab: React.FC = () => {
             }}
             onEdit={() => handleEdit(idp)}
             onDelete={() => setDeleteTarget(idp)}
+            writeBlocked={writeBlocked}
           />
         )}
         // Name and domain truncate; below 44rem the table scrolls sideways inside its frame.

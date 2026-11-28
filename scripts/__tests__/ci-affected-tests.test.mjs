@@ -65,14 +65,14 @@ describe('test-shards selection for a PR diff (real turbo graph and ci.yml)', ()
   it('skips every client leg and the client integration lane for a desktop-only diff', () => {
     const legs = legsFor(['apps/desktop/src/main/index.ts']);
     for (const name of clientLegs) expect(legs[name], name).toMatchObject({ unitFilter: '', setup: false });
-    expect(legs['data-client-integration'].integrationFilter).toBe('');
+    expect(legs['client-integration'].integrationFilter).toBe('');
     expect(legs.desktop.unitFilter).toBe('--filter @bike4mind/desktop');
   });
 
   it('runs the client legs and workers (which reads apps/client) for a client server change', () => {
     const legs = legsFor(['apps/client/server/utils/foo.ts']);
     for (const name of clientLegs) expect(legs[name].unitFilter, name).toBe('--filter @bike4mind/client');
-    expect(legs['data-client-integration'].integrationFilter).toBe('--filter @bike4mind/client');
+    expect(legs['client-integration'].integrationFilter).toBe('--filter @bike4mind/client');
     expect(legs['cli-workers'].unitFilter).toContain('--filter @bike4mind/workers');
   });
 

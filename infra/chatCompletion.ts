@@ -35,6 +35,7 @@ import { secretsAtRestDecryptPermission, secretsAtRestKey } from './secretsAtRes
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionRuntimeForCallers } from './callableFunctionRuntime';
 
 /**
  * Quest Processor Service
@@ -433,6 +434,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     },
     ...providerFederation.permissions,
     ...(secretsAtRestKey ? [secretsAtRestDecryptPermission(secretsAtRestKey.arn, $app.stage)] : []),
+    ...callableFunctionRuntimeForCallers.permissions,
   ],
   environment: {
     // First, so a core variable of the same name always wins.
@@ -454,6 +456,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     ...providerFederation.environment,
+    ...callableFunctionRuntimeForCallers.environment,
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

@@ -6,7 +6,7 @@ import { auditMongoTestBudget } from '../../database/src/__test__/auditMongoTest
  * Structural guard for this shard's real-Mongo suites - the same invariant apps/client audits, so
  * the detector itself lives in one place next to MONGO_TEST_TIMEOUT_MS.
  *
- * This package's real-Mongo migration suites are the ones the CI "misc" leg times out on: the
+ * This package's real-Mongo migration suites are the ones the CI "scripts" leg times out on: the
  * shard budget is 30s for tests and 30s for hooks, both sized for unit tests, and a mongod cold
  * start crosses that at random under the leg's file parallelism. Declaring the shared 60s budget
  * per file is the fix; this keeps the next migration suite from landing without it.

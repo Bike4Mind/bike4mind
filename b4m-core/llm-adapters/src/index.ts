@@ -21,7 +21,7 @@ import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
 import { thinkingCannotBeDisabled } from './thinkingParams';
-import { federatedSharedKeyProviders, resolveProviderCredential } from './providerAuth';
+import { providerCredentialSpec, resolveProviderCredential } from './providerAuth';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
@@ -116,10 +116,7 @@ export function getLlmByModel(
       if (apiKeyTable.openai === 'expired') throw new Error('OpenAI API key is expired');
       backend = apiKeyTable.openai
         ? new OpenAIBackend(
-            resolveProviderCredential(
-              federatedSharedKeyProviders(apiKeyTable)?.openai ? OPENAI_FEDERATED_KEY : apiKeyTable.openai,
-              OPENAI_FEDERATED_KEY
-            ),
+            providerCredentialSpec(apiKeyTable, 'openai', apiKeyTable.openai, OPENAI_FEDERATED_KEY),
             logger,
             providerEndUserId
           )
@@ -181,10 +178,7 @@ export function getLlmByModel(
       if (apiKeyTable.anthropic === 'expired') throw new Error('Anthropic API key is expired');
       backend = apiKeyTable.anthropic
         ? new AnthropicBackend(
-            resolveProviderCredential(
-              federatedSharedKeyProviders(apiKeyTable)?.anthropic ? ANTHROPIC_FEDERATED_KEY : apiKeyTable.anthropic,
-              ANTHROPIC_FEDERATED_KEY
-            ),
+            providerCredentialSpec(apiKeyTable, 'anthropic', apiKeyTable.anthropic, ANTHROPIC_FEDERATED_KEY),
             logger,
             providerEndUserId,
             ownerEndUserId

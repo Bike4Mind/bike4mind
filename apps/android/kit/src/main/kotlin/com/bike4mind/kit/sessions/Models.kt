@@ -49,8 +49,8 @@ data class Quest(
 }
 
 /**
- * A tool call the agent is waiting on the user to approve or deny. Wire shape `{tool, params, ts}` (IPendingAction
- * on the server). Twin of apps/ios B4MKit PendingAction.
+ * A tool call the agent is waiting on the user to approve or deny. Wire shape `{tool, params, ts, customConnector?}`
+ * (IPendingAction on the server). Twin of apps/ios B4MKit PendingAction.
  */
 data class PendingAction(
     val tool: String,
@@ -58,6 +58,8 @@ data class PendingAction(
     val params: Map<String, String>,
     /** Epoch milliseconds, as on the wire; it also identifies this action to the approve and deny routes. */
     val requestedAtMs: Long,
+    /** The custom connector the call goes to; null for a built-in tool or when the source does not carry it. */
+    val connector: PendingActionConnector? = null,
 ) {
     fun hasLapsed(nowMs: Long): Boolean = nowMs - requestedAtMs > LIFETIME_MS
 
@@ -75,3 +77,6 @@ data class PendingAction(
         }
     }
 }
+
+/** Where a custom connector call is sent: the connection's name and the host it talks to. */
+data class PendingActionConnector(val displayName: String, val urlHost: String)

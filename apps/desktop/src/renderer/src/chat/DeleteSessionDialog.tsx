@@ -23,6 +23,7 @@ export function DeleteSessionDialog({
   sessionId,
   title,
   nested = [],
+  inspectWorktrees = true,
   onDelete,
   onClose,
 }: {
@@ -30,6 +31,11 @@ export function DeleteSessionDialog({
   title: string;
   /** Live sessions started from this one, at any depth; offered for deletion with it. */
   nested?: readonly { id: string; title: string }[];
+  /**
+   * Whether worktree cleanup is offered. Inspecting a worktree is a call to Desktop's own main
+   * process, so a session on another host is deleted without it (see sessionCapabilities).
+   */
+  inspectWorktrees?: boolean;
   onDelete: (
     sessionId: string,
     removeWorktree: boolean,
@@ -48,6 +54,11 @@ export function DeleteSessionDialog({
   const nestedKey = JSON.stringify(nested.map(session => [session.id, session.title]));
 
   useEffect(() => {
+    if (!inspectWorktrees) {
+      setInspections({ alone: null, withNested: null, nested: [] });
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     async function inspect() {
@@ -84,7 +95,7 @@ export function DeleteSessionDialog({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, nestedKey]);
+  }, [sessionId, nestedKey, inspectWorktrees]);
 
   async function confirm(scope: 'alone' | 'withNested') {
     setDeleting(scope);

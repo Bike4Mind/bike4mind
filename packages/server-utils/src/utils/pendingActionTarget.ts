@@ -1,9 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { IUserDocument, isImageServeable } from '@bike4mind/common';
-import { fabFileRepository } from '@bike4mind/database';
+import { IUserDocument, isImageServeable, McpServerName } from '@bike4mind/common';
+import { fabFileRepository, mcpServerRepository } from '@bike4mind/database';
 import { ConfluenceResource, GitHubResource, JiraResource } from '@bike4mind/slack';
 import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
 import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
+import { NOTION_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/notion/constants';
+import { buildMcpEnvVariables, type EnvVariable } from './mcpEnv';
 import { getFilesStorage } from './storage/index';
 
 /**
@@ -11,9 +13,20 @@ import { getFilesStorage } from './storage/index';
  * the Slack Confirm button (executePendingAction) - so they route and load files identically.
  */
 
+/** The confirming user's Notion server credentials, loaded the way a chat turn's Notion call loads them. */
+export class NotionMcpCredentials {
+  constructor(private readonly userId: string) {}
+
+  async getMcpEnvVariables(): Promise<EnvVariable[]> {
+    const mcpServer = await mcpServerRepository.findOne({ userId: this.userId, name: McpServerName.Notion });
+    if (!mcpServer?.enabled) throw new Error('Notion is not connected');
+    return buildMcpEnvVariables(mcpServer);
+  }
+}
+
 export type PendingActionTarget = {
-  mcpName: 'github' | 'atlassian';
-  resource: GitHubResource | JiraResource | ConfluenceResource;
+  mcpName: 'github' | 'atlassian' | 'notion';
+  resource: GitHubResource | JiraResource | ConfluenceResource | NotionMcpCredentials;
 };
 
 /**
@@ -31,6 +44,9 @@ export function resolvePendingActionTarget(
   if (ATLASSIAN_CONFIRMABLE_TOOLS.has(tool)) {
     const resource = tool.startsWith('jira_') ? new JiraResource(user, logger) : new ConfluenceResource(user, logger);
     return { mcpName: 'atlassian', resource };
+  }
+  if (NOTION_CONFIRMABLE_TOOLS.has(tool)) {
+    return { mcpName: 'notion', resource: new NotionMcpCredentials(user.id) };
   }
   return null;
 }

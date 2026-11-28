@@ -54,7 +54,17 @@ describe('callable function runtime isolation', () => {
   it('links nothing and holds no secrets, permissions, or environment', () => {
     expect(source).not.toMatch(/\blink\b/);
     expect(source).not.toMatch(/\bsecrets\b/);
-    expect(source).not.toMatch(/\bpermissions\s*:/);
+    // Only the callers' handle (and its type) names permissions: the grant to invoke this function.
+    const handleAt = source.indexOf('export const callableFunctionRuntimeForCallers');
+    expect(handleAt, 'callableFunctionRuntimeForCallers not found').toBeGreaterThan(-1);
+    const handle = source.slice(handleAt, source.indexOf(';\n', handleAt) + 1);
+    const grantType = `type RuntimeGrant = ${balanced(source, source.indexOf('type RuntimeGrant'), '{', '}')}`;
+    expect(handle).toMatch(/\bpermissions\s*:/);
+    const stray = source
+      .replace(grantType, '')
+      .replace(handle, '')
+      .match(/^.*\bpermissions\s*:.*$/m)?.[0];
+    expect(stray, 'permissions: outside callableFunctionRuntimeForCallers').toBeUndefined();
     expect(source).not.toMatch(/DEFAULT_LAMBDA_ENVIRONMENT/);
     expect(fn).not.toMatch(/\benvironment\s*:/);
   });
@@ -305,10 +315,62 @@ describe('callable function runtime isolation', () => {
   });
 
   it('creates the alarms with the function, whenever the alarm topic exists', () => {
-    expect(functionBody('createCallableFunctionRuntime')).toMatch(
-      /if \(dlqAlarmTopic\) createAlarms\(fn, dlqAlarmTopic\);/
+    expect(stripComments(read('infra/dlqAlarms.ts'))).toMatch(
+      /if \(dlqAlarmTopic && callableFunctionRuntime\) \{\s*createCallableFunctionRuntimeAlarms\(callableFunctionRuntime, dlqAlarmTopic\);\s*\}/
     );
     expect(source).toMatch(/alarmActions:\s*\[topic\.arn\]/);
+  });
+});
+
+describe('callable function runtime callers', () => {
+  /** The first `<key>: [` or `<key>: {` block in `scope`. */
+  function member(scope: string, key: 'environment' | 'permissions'): string {
+    const [open, close] = key === 'permissions' ? ['[', ']'] : ['{', '}'];
+    const at = scope.indexOf(`${key}: ${open}`);
+    expect(at, `${key} not found`).toBeGreaterThan(-1);
+    return balanced(scope, at, open, close);
+  }
+
+  it('get the runtime name to invoke and an invoke grant on it, and nothing without a runtime', () => {
+    expect(source).toMatch(
+      /export const callableFunctionRuntimeForCallers: RuntimeGrant = callableFunctionRuntime\s*\?\s*\{\s*environment: \{ CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: callableFunctionRuntime\.name \},\s*permissions: \[\{ actions: \['lambda:InvokeFunction'\], resources: \[callableFunctionRuntime\.arn\] \}\],\s*\}\s*:\s*\{ environment: \{\}, permissions: \[\] \};/
+    );
+    expect(read('packages/server-utils/src/callableFunctions/runtimeRunner.ts')).toContain(
+      "export const CALLABLE_FUNCTION_RUNTIME_NAME_ENV = 'CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME';"
+    );
+  });
+
+  it.each([
+    { caller: 'the web API function', file: 'infra/web.ts', anchor: 'export const web = new sst.aws.Nextjs(' },
+    {
+      caller: 'the queued-call consumer',
+      file: 'infra/queues.ts',
+      anchor: 'const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscribe(',
+    },
+    {
+      caller: 'the chat completion service',
+      file: 'infra/chatCompletion.ts',
+      anchor: "export const chatCompletion = new sst.aws.Service('ChatCompletion',",
+    },
+    {
+      caller: 'the agent executor and its continuation consumer',
+      file: 'infra/agentExecutor.ts',
+      anchor: 'const SHARED_AGENT_EXECUTOR_CONFIG = ',
+    },
+  ])('$caller holds the runtime name and the invoke grant', ({ file, anchor }) => {
+    const text = stripComments(read(file));
+    const at = text.indexOf(anchor);
+    expect(at, `${anchor} not found`).toBeGreaterThan(-1);
+    const args = balanced(text, at, '{', '}');
+    expect(member(args, 'environment')).toContain('...callableFunctionRuntimeForCallers.environment');
+    expect(member(args, 'permissions')).toContain('...callableFunctionRuntimeForCallers.permissions');
+    expect(text).toMatch(/import \{ callableFunctionRuntimeForCallers \} from '\.\/callableFunctionRuntime';/);
+  });
+
+  it('reach both agent executor functions through their shared config', () => {
+    const agent = stripComments(read('infra/agentExecutor.ts'));
+    expect(agent).toMatch(/new sst\.aws\.Function\('AgentExecutor', \{\s*\.\.\.SHARED_AGENT_EXECUTOR_CONFIG,/);
+    expect(agent).toMatch(/agentContinuationQueue\.subscribe\(\s*\{\s*\.\.\.SHARED_AGENT_EXECUTOR_CONFIG,/);
   });
 });
 

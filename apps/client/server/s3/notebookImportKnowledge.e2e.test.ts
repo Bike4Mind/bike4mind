@@ -82,6 +82,7 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     createArtifact: async () => null,
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async () => ({ id: USER }) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {

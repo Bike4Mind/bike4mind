@@ -30,6 +30,7 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
+import { assertCanChangeLakeGateTagsBetween } from '@server/admin/lakeGateTags';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -258,6 +259,7 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
       if (key === 'defaultTags') {
         const splitTags = (raw: unknown) => (typeof raw === 'string' ? raw.split(',') : []);
         assertCanChangeManagedTags(req.user, splitTags(existing?.settingValue), splitTags(value));
+        await assertCanChangeLakeGateTagsBetween(req.user, splitTags(existing?.settingValue), splitTags(value));
       }
       const written = await AdminSettings.findOneAndUpdate(
         { settingName: key },

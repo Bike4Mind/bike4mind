@@ -255,6 +255,10 @@ void app.whenReady().then(async () => {
   });
   const sshHosts = registerSshHosts(hostConnections, {
     dataDirectory: app.getPath('userData'),
+    version: currentVersion(),
+    artifactSource: app.isPackaged
+      ? { packaged: true, resourcesPath: process.resourcesPath }
+      : { packaged: false, appPath: app.getAppPath() },
     log: message => host.logger.warn(message),
   });
   const models = registerModels(

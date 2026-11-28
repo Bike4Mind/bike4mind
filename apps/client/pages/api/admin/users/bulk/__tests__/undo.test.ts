@@ -87,36 +87,38 @@ describe('POST /api/admin/users/bulk/undo', () => {
         action: string;
         blockedDomains?: string[];
         users: { tagAdded?: string }[];
-      }) => void;
+      }) => Promise<void>;
     };
 
     it('refuses a delegate who no longer holds the permission the batch needed', async () => {
       const authorize = await authorizeAs(delegate('keys:revoke'));
-      expect(() => authorize({ action: 'suspend', users: [] })).toThrow('Missing permission: users:moderate');
+      await expect(authorize({ action: 'suspend', users: [] })).rejects.toThrow('Missing permission: users:moderate');
     });
 
     it('admits a delegate who still holds it', async () => {
       const authorize = await authorizeAs(delegate('users:moderate'));
-      expect(() => authorize({ action: 'suspend', users: [] })).not.toThrow();
+      await expect(authorize({ action: 'suspend', users: [] })).resolves.toBeUndefined();
     });
 
     it('requires settings ability when undo would unblock a domain', async () => {
       const authorize = await authorizeAs(delegate('users:moderate', 'keys:revoke', 'credits:adjust'));
-      expect(() => authorize({ action: 'contain', blockedDomains: ['abuse.example'], users: [] })).toThrow(
+      await expect(authorize({ action: 'contain', blockedDomains: ['abuse.example'], users: [] })).rejects.toThrow(
         'Unblocking email domains needs permission to edit admin settings.'
       );
     });
 
     it('refuses a delegate undoing a batch that added a managed tag', async () => {
       const authorize = await authorizeAs(delegate('settings:manage'));
-      expect(() => authorize({ action: 'addTag', users: [{ tagAdded: 'Developer' }] })).toThrow(
+      await expect(authorize({ action: 'addTag', users: [{ tagAdded: 'Developer' }] })).rejects.toThrow(
         'Only full administrators can assign managed tags'
       );
     });
 
     it('refuses an unknown recorded action', async () => {
       const authorize = await authorizeAs(ADMIN);
-      expect(() => authorize({ action: 'bogus', users: [] })).toThrow('This bulk action cannot be undone here.');
+      await expect(authorize({ action: 'bogus', users: [] })).rejects.toThrow(
+        'This bulk action cannot be undone here.'
+      );
     });
   });
 });

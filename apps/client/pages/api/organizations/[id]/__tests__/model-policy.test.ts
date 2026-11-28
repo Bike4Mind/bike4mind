@@ -26,6 +26,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({
+  premiumLlmTools: { contributed_tool: {} },
+}));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
@@ -88,13 +91,21 @@ describe('/api/organizations/[id]/model-policy', () => {
 
   it('GET returns an unrestricted policy for an org without one', async () => {
     const res = await call('get');
-    expect(res._getJSONData()).toEqual({ policy: UNRESTRICTED, invalidStored: false });
+    expect(res._getJSONData()).toEqual({
+      policy: UNRESTRICTED,
+      invalidStored: false,
+      contributedTools: ['contributed_tool'],
+    });
   });
 
   it('GET flags a stored row that no longer parses', async () => {
     stored = { allowedProviders: [] };
     const res = await call('get');
-    expect(res._getJSONData()).toEqual({ policy: UNRESTRICTED, invalidStored: true });
+    expect(res._getJSONData()).toEqual({
+      policy: UNRESTRICTED,
+      invalidStored: true,
+      contributedTools: ['contributed_tool'],
+    });
   });
 
   it.each([
@@ -107,6 +118,14 @@ describe('/api/organizations/[id]/model-policy', () => {
     await expect(call('put', body)).rejects.toMatchObject({ statusCode: 400 });
     expect(organizationRepository.update).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('PUT accepts a contributed tool name', async () => {
+    await call('put', { allowedTools: ['contributed_tool'] });
+    expect(organizationRepository.update).toHaveBeenCalledWith({
+      id: 'org1',
+      modelPolicy: { allowedTools: ['contributed_tool'] },
+    });
   });
 
   it('PUT stores only the restricted lists and audits just the changed fields', async () => {
@@ -132,6 +151,7 @@ describe('/api/organizations/[id]/model-policy', () => {
     expect(res._getJSONData()).toEqual({
       policy: { allowedProviders: ['openai'], allowedModels: ['gpt-4o'], allowedTools: [] },
       invalidStored: false,
+      contributedTools: ['contributed_tool'],
     });
     expect(strictAudit).toHaveBeenCalledExactlyOnceWith({
       organizationId: 'org1',
@@ -182,7 +202,11 @@ describe('/api/organizations/[id]/model-policy', () => {
       expect.anything(),
       expect.objectContaining({ changes: [{ field: 'allowedTools', before: ['web_search'], after: null }] })
     );
-    expect(res._getJSONData()).toEqual({ policy: UNRESTRICTED, invalidStored: false });
+    expect(res._getJSONData()).toEqual({
+      policy: UNRESTRICTED,
+      invalidStored: false,
+      contributedTools: ['contributed_tool'],
+    });
 
     vi.clearAllMocks();
     await call('delete');

@@ -6,6 +6,7 @@ import {
   Permission,
 } from '@bike4mind/common';
 import { loadTeamPlanSettings } from '@bike4mind/utils';
+import { wasRemovedFromOrganization } from './orgAuthority';
 
 /**
  * Why the auto-add did or didn't happen - returned (not thrown) so the signup paths can
@@ -23,7 +24,7 @@ import { loadTeamPlanSettings } from '@bike4mind/utils';
  */
 export type ApplyPartnerRuleMembershipResult =
   | { added: true; reason: 'added' | 'added-seat-raised'; previousSeats: number; newSeats: number }
-  | { added: false; reason: 'unverified' | 'user-missing' | 'org-missing' | 'already-member' }
+  | { added: false; reason: 'unverified' | 'user-missing' | 'org-missing' | 'already-member' | 'removed' }
   | { added: false; reason: 'at-capacity'; seats: number };
 
 interface ApplyPartnerRuleMembershipParams {
@@ -88,6 +89,8 @@ export async function applyPartnerRuleMembership(
     await seedUserDetails(user, organizationId, db);
     return { added: false, reason: 'already-member' };
   }
+
+  if (wasRemovedFromOrganization(organization, userId)) return { added: false, reason: 'removed' };
 
   const member = { userId, permissions: [Permission.read] };
   const isStripeBilled = !!organization.stripeCustomerId;

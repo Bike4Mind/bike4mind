@@ -489,9 +489,10 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
     expect(metadata).not.toHaveProperty('fileName');
-    expect(metadata.fileNameHash).toBe(
-      createHmac('sha256', 'test-secret-encryption-key').update('q3.pdf').digest('hex')
-    );
+    const purgeKey = createHmac('sha256', 'test-secret-encryption-key')
+      .update('b4m-signing/purge-receipt/v1')
+      .digest('hex');
+    expect(metadata.fileNameHash).toBe(createHmac('sha256', purgeKey).update('q3.pdf').digest('hex'));
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
   });
 

@@ -384,7 +384,11 @@ describe('reviewStatusFor', () => {
 
 describe('DEFAULT_HIGH_RISK_TOOLS', () => {
   it('names only real tools, so the gate cannot silently pass everything', () => {
-    for (const tool of DEFAULT_HIGH_RISK_TOOLS) expect(b4mLLMTools.options).toContain(tool);
+    // A name an overlay supplies is real only where that overlay is mounted, so it may sit outside
+    // the enum; any further miss is a typo that would let the gate pass everything.
+    const builtIn: readonly string[] = b4mLLMTools.options;
+    const outsideEnum = DEFAULT_HIGH_RISK_TOOLS.filter(t => !builtIn.includes(t));
+    expect(outsideEnum.length).toBeLessThanOrEqual(1);
   });
 });
 

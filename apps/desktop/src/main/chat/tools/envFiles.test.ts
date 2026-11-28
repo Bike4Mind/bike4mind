@@ -31,7 +31,7 @@ describe('isEnvFile', () => {
     path => expect(isEnvFile(path)).toBe(true)
   );
 
-  it.each(['my.env.d', '.env.sample', '.env.example.local'])('%s holds .env. and counts', path =>
+  it.each(['my.env.d', '.env.example.local', '.env.sample.bak'])('%s holds .env. and counts', path =>
     expect(isEnvFile(path)).toBe(true)
   );
 
@@ -50,8 +50,15 @@ describe('isEnvFile', () => {
     path => expect(isEnvFile(path)).toBe(true)
   );
 
-  it.each(['/p/.env.example', '/p/environment.ts', '/p/env', '/p/src/.environment', '/p/notes.txt'])(
-    '%s is not',
-    path => expect(isEnvFile(path)).toBe(false)
-  );
+  it.each([
+    '/p/.env.example',
+    '/p/.env.sample',
+    '/p/.env.template',
+    '/p/.env.local.example',
+    '/p/.ENV.Sample',
+    '/p/environment.ts',
+    '/p/env',
+    '/p/src/.environment',
+    '/p/notes.txt',
+  ])('%s is not', path => expect(isEnvFile(path)).toBe(false));
 });

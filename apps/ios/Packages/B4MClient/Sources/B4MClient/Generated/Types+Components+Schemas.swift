@@ -1656,5 +1656,236 @@ extension Components {
                 case nextCursor = "next_cursor"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200`.
+        public struct ListArtifactsResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload`.
+            public struct DataPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/id`.
+                public var id: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/type`.
+                public var _type: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/title`.
+                public var title: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/description`.
+                public var description: Swift.String?
+                /// The current version. Starts at 1; each content change adds one.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/version`.
+                public var version: Swift.Int
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/version_tag`.
+                public var versionTag: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/status`.
+                public var status: Swift.String
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/tags`.
+                public var tags: [Swift.String]
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/session_id`.
+                public var sessionId: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/project_id`.
+                public var projectId: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/visibility`.
+                public var visibility: Swift.String
+                /// ISO 8601 timestamp.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/created_at`.
+                public var createdAt: Swift.String
+                /// ISO 8601 timestamp.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/updated_at`.
+                public var updatedAt: Swift.String
+                /// The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/DataPayload/content`.
+                public var content: Swift.String?
+                /// Creates a new `DataPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - id:
+                ///   - _type:
+                ///   - title:
+                ///   - description:
+                ///   - version: The current version. Starts at 1; each content change adds one.
+                ///   - versionTag:
+                ///   - status:
+                ///   - tags:
+                ///   - sessionId:
+                ///   - projectId:
+                ///   - visibility:
+                ///   - createdAt: ISO 8601 timestamp.
+                ///   - updatedAt: ISO 8601 timestamp.
+                ///   - content: The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+                public init(
+                    id: Swift.String,
+                    _type: Swift.String,
+                    title: Swift.String,
+                    description: Swift.String? = nil,
+                    version: Swift.Int,
+                    versionTag: Swift.String? = nil,
+                    status: Swift.String,
+                    tags: [Swift.String],
+                    sessionId: Swift.String? = nil,
+                    projectId: Swift.String? = nil,
+                    visibility: Swift.String,
+                    createdAt: Swift.String,
+                    updatedAt: Swift.String,
+                    content: Swift.String? = nil
+                ) {
+                    self.id = id
+                    self._type = _type
+                    self.title = title
+                    self.description = description
+                    self.version = version
+                    self.versionTag = versionTag
+                    self.status = status
+                    self.tags = tags
+                    self.sessionId = sessionId
+                    self.projectId = projectId
+                    self.visibility = visibility
+                    self.createdAt = createdAt
+                    self.updatedAt = updatedAt
+                    self.content = content
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case id
+                    case _type = "type"
+                    case title
+                    case description
+                    case version
+                    case versionTag = "version_tag"
+                    case status
+                    case tags
+                    case sessionId = "session_id"
+                    case projectId = "project_id"
+                    case visibility
+                    case createdAt = "created_at"
+                    case updatedAt = "updated_at"
+                    case content
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/data`.
+            public typealias DataPayload = [Components.Schemas.ListArtifactsResponse200.DataPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/data`.
+            public var data: Components.Schemas.ListArtifactsResponse200.DataPayload
+            /// - Remark: Generated from `#/components/schemas/listArtifactsResponse200/next_cursor`.
+            public var nextCursor: Swift.String?
+            /// Creates a new `ListArtifactsResponse200`.
+            ///
+            /// - Parameters:
+            ///   - data:
+            ///   - nextCursor:
+            public init(
+                data: Components.Schemas.ListArtifactsResponse200.DataPayload,
+                nextCursor: Swift.String? = nil
+            ) {
+                self.data = data
+                self.nextCursor = nextCursor
+            }
+            public enum CodingKeys: String, CodingKey {
+                case data
+                case nextCursor = "next_cursor"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/getArtifactResponse200`.
+        public struct GetArtifactResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/type`.
+            public var _type: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/title`.
+            public var title: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/description`.
+            public var description: Swift.String?
+            /// The current version. Starts at 1; each content change adds one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/version`.
+            public var version: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/version_tag`.
+            public var versionTag: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/status`.
+            public var status: Swift.String
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/tags`.
+            public var tags: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/session_id`.
+            public var sessionId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/project_id`.
+            public var projectId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/visibility`.
+            public var visibility: Swift.String
+            /// ISO 8601 timestamp.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/created_at`.
+            public var createdAt: Swift.String
+            /// ISO 8601 timestamp.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/updated_at`.
+            public var updatedAt: Swift.String
+            /// The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getArtifactResponse200/content`.
+            public var content: Swift.String?
+            /// Creates a new `GetArtifactResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _type:
+            ///   - title:
+            ///   - description:
+            ///   - version: The current version. Starts at 1; each content change adds one.
+            ///   - versionTag:
+            ///   - status:
+            ///   - tags:
+            ///   - sessionId:
+            ///   - projectId:
+            ///   - visibility:
+            ///   - createdAt: ISO 8601 timestamp.
+            ///   - updatedAt: ISO 8601 timestamp.
+            ///   - content: The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content.
+            public init(
+                id: Swift.String,
+                _type: Swift.String,
+                title: Swift.String,
+                description: Swift.String? = nil,
+                version: Swift.Int,
+                versionTag: Swift.String? = nil,
+                status: Swift.String,
+                tags: [Swift.String],
+                sessionId: Swift.String? = nil,
+                projectId: Swift.String? = nil,
+                visibility: Swift.String,
+                createdAt: Swift.String,
+                updatedAt: Swift.String,
+                content: Swift.String? = nil
+            ) {
+                self.id = id
+                self._type = _type
+                self.title = title
+                self.description = description
+                self.version = version
+                self.versionTag = versionTag
+                self.status = status
+                self.tags = tags
+                self.sessionId = sessionId
+                self.projectId = projectId
+                self.visibility = visibility
+                self.createdAt = createdAt
+                self.updatedAt = updatedAt
+                self.content = content
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _type = "type"
+                case title
+                case description
+                case version
+                case versionTag = "version_tag"
+                case status
+                case tags
+                case sessionId = "session_id"
+                case projectId = "project_id"
+                case visibility
+                case createdAt = "created_at"
+                case updatedAt = "updated_at"
+                case content
+            }
+        }
     }
 }

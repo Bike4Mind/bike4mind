@@ -137,7 +137,7 @@ export async function undoAdminUsersBulk(
   adminId: string,
   deps: UndoDeps,
   /** Throws when the caller may no longer make the batch's own action; runs before the record is taken. */
-  authorize: (record: UndoRecord) => void = () => {}
+  authorize: (record: UndoRecord) => void | Promise<void> = () => {}
 ): Promise<AdminUsersBulkUndoResult> {
   const clock = deps.now ?? (() => new Date());
   const now = clock();
@@ -146,7 +146,7 @@ export async function undoAdminUsersBulk(
   if (!found) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
   const record = parseRecord(found.result);
   if (record.adminId !== adminId) throw new ForbiddenError('Only the admin who ran a bulk action can undo it.');
-  authorize(record);
+  await authorize(record);
   if (now.getTime() > new Date(record.undoExpiresAt).getTime()) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
   if (!(await deps.store.deleteByKeyAndReturn(key))) throw new ConflictError('This bulk action was already undone.');
 

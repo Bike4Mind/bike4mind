@@ -323,8 +323,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
-    ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+    '06cbb7b563bc2d64ca374dfa3d53dcc23f96bc95c80084c9f00eca29967a4796',
+    [
+      'bedrock:InvokeModel',
+      'bedrock:InvokeModelWithResponseStream',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
   ),
   hostedOnly(
     'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
@@ -406,7 +412,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '09162fa71a33427d40a39e1bfb0d2ecb586c9f17dcc86b65f9641b90d78e372d',
+    '5bf17f11c35d5235b8f6b504a61b4ad231aeae08614ecd4f0c325be098a1642d',
     'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
@@ -415,7 +421,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    'b88ef16199363841a4936939f80279e1919e225c21485c738f2236b3b0481936',
+    'b2c76c1b7a98c20402863db9c1b25502526341372920d9a07e8b39f6cf9b966a',
     'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
@@ -450,8 +456,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '5ebca7cdcb9170ef166585b6c8a9f78ae695df60a67779d6500b988185737d8f',
-    ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+    '946cf9f4952fb9a59bdec62d3600b7c8a59c04ea951bcc9631a5627e624d277b',
+    [
+      'bedrock:InvokeModel',
+      'bedrock:InvokeModelWithResponseStream',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
   ),
   broker(
     'queue:infra/queues.ts:agentContinuationQueueDLQ',
@@ -745,8 +757,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:callableFunctionCallQueue',
-    '167794254bb0e6d0e3ee82478574e2130cd7a61461d9bcfc0b7e1a97fe59bc95',
-    'Asynchronous function calls are not wired on self-host: the broker declares the queue but nothing consumes it, so an async invoke answers 503 and a synchronous call still runs.'
+    '3a4962ab3bd5c171403f265dd43d7d0e0775752b9ceaa320d6fa0f706189f38c',
+    'Asynchronous function calls are not wired on self-host: the broker declares the queue but nothing consumes it, so an async invoke answers 503 and a synchronous call still runs.',
+    ['lambda:InvokeFunction']
   ),
   gapBecause(
     'queue:infra/queues.ts:callableFunctionCallQueueDLQ',
@@ -1336,8 +1349,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '53b1b91e62b4075dad8f00a47ad94029a6b8e0e0c3a9d5ab18556f3bf714a612',
-    ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
+    '9255c6433e28841ef412bd76bf1fcde5031a63b7c0ab25d89750098c7db41a9c',
+    [
+      'bedrock:*',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'execute-api:ManageConnections',
+      'lambda:InvokeFunction',
+    ]
   ),
   gapBecause(
     'service:infra/renderWorker.ts:RenderWorker',

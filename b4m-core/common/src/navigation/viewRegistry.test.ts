@@ -64,6 +64,12 @@ describe('VIEW_REGISTRY opti family consoles', () => {
   // Derived from the registry so a new family console cannot be added without its sub-tabs.
   const families = optiActions.filter(v => v.id.split('.').length === 2).map(v => v.id.slice('opti.'.length));
 
+  it('names its workspace surface on every action view, and only on views that lead into one', () => {
+    expect(optiActions.filter(v => !v.surface)).toEqual([]);
+    const adminOrGlobal = VIEW_REGISTRY.filter(v => v.section !== 'opti');
+    expect(adminOrGlobal.filter(v => v.surface)).toEqual([]);
+  });
+
   it('has unique view ids', () => {
     const ids = VIEW_REGISTRY.map(v => v.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -37,7 +37,7 @@ import { getOrganizationStorageUsage, ORGANIZATION_STORAGE_UPLOADER_LIMIT } from
 import type { GetOrganizationStorageUsageAdapters } from './getOrganizationStorageUsage';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
-import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
+import { canAdministerOrganization, isCurrentOrgMember, wasRemovedFromOrganization } from './orgAuthority';
 import { setMemberCreditDefault, setMemberCreditOverride } from './memberCreditBudget';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
 import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
@@ -49,6 +49,7 @@ export {
   addMember,
   canAdministerOrganization,
   isCurrentOrgMember,
+  wasRemovedFromOrganization,
   setMemberCreditDefault,
   setMemberCreditOverride,
   applyPartnerRuleMembership,

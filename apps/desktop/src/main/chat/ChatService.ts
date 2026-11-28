@@ -290,6 +290,9 @@ import {
   suggestionRequestMessages,
 } from './nextPrompt';
 import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
+import { isLinkedReplyRunning, isLinkedWebSend } from '@shared/webLinkedChat';
+import { webQuestMessageId } from '@shared/claudeImport';
+import { LinkedReplySlots, sessionTurnsEndpoint, stopSessionTurn, streamSessionTurn } from './webLinkedTurn';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
@@ -879,6 +882,10 @@ function childProject(project: ChatProject, worktree: { branch: string; base: st
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
+
+/** What a linked web turn tells the send waiting on it (ChatService.sendLinkedTurn). */
+type LinkedTurnReport =
+  { kind: 'started'; replyId: string } | { kind: 'refused'; error: string } | { kind: 'text'; text: string };
 
 export class ChatService {
   studioDisposed?: () => void;
@@ -3503,7 +3510,7 @@ export class ChatService {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     const decisionScope = expectedScope;
-    this.deps.approvals?.forgetSession(sessionId);
+    const approvalsForgotten = this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.livePlans.delete(sessionId);
     this.contextNotices.forget(sessionId);
@@ -3524,6 +3531,7 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
     await forgetSessionWrites(sessionId);
+    await approvalsForgotten;
     await removeScratchDirectory(sessionId).catch(error =>
       this.deps.logger.warn(`SCRATCH: could not remove the scratch folder: ${String(error)}`)
     );
@@ -3720,6 +3728,20 @@ export class ChatService {
       if (inline.note) turnOptions = { ...options, notes: [...(options.notes ?? []), inline.note] };
     }
 
+    // A synced web chat's plain message is a turn of the web session itself. Decided after the
+    // skill checks (a skill runs locally) and before queueing, which a linked chat never does.
+    if (
+      isLinkedWebSend(existing, {
+        attachments: attachments.length,
+        replaces: !!options.replaces,
+        skill: !!invocation,
+        notes: turnOptions.notes?.length ?? 0,
+        automated: !!released || !!options.loop || !!options.spawnSeed || options.seedHops !== undefined,
+      })
+    ) {
+      return this.sendLinkedTurn(existing, prompt);
+    }
+
     /**
      * Typing ahead. Decided HERE rather than in the renderer: a reply that finishes between a
      * renderer-side "is it streaming?" check and this call would otherwise queue a message
@@ -3775,6 +3797,198 @@ export class ChatService {
     } finally {
       this.accepting.delete(sessionId);
       if (cutsWorktree) this.deps.activity?.preparingEnded(sessionId);
+    }
+  }
+
+  /**
+   * Send a synced web chat's message as a turn of its web session (POST /api/v1/turns) instead of
+   * running the local agent loop. The server builds the context and bills it as the web composer
+   * does, and the web app sees the turn live.
+   *
+   * Resolves once the server has created the turn's quest, so the prompt and reply are stored
+   * under the ids the importer gives that quest (webQuestMessageId) from the start: the chat stays
+   * synced (nothing here sets `forkedAt`) and the next sync replaces them with the server's copy
+   * rather than adding to them. The renderer already shows the prompt optimistically meanwhile.
+   *
+   * A failure before the quest exists stores nothing, since the web session has no such turn: the
+   * send resolves `ok: false`, so the renderer drops the optimistic prompt and keeps the text.
+   */
+  private async sendLinkedTurn(session: ChatSession, prompt: string): Promise<SendMessageResult> {
+    const sessionId = session.id;
+    if (this.isBusy(sessionId)) return { ok: false, busy: true, error: 'This conversation is still replying.' };
+    if (isLinkedReplyRunning(session.importOrigin)) {
+      return { ok: false, busy: true, error: 'A reply in this chat is still being written on the web.' };
+    }
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to send a message.' };
+
+    const controller = new AbortController();
+    this.active.set(sessionId, controller);
+    this.deps.activity?.replyStarted(sessionId);
+    let answer: (result: SendMessageResult) => void = () => undefined;
+    const answered = new Promise<SendMessageResult>(resolve => (answer = resolve));
+    let replyText = '';
+    let refused = false;
+    void this.runLinkedTurn(session, prompt, api, controller, report => {
+      if (report.kind === 'started') answer({ ok: true, messageId: report.replyId });
+      else if (report.kind === 'text') replyText = report.text;
+      else {
+        refused = true;
+        answer({ ok: false, error: report.error });
+      }
+    })
+      .catch(error => {
+        this.deps.logger.warn(`CHAT: linked turn bookkeeping failed: ${String(error)}`);
+        return 'failed' as const;
+      })
+      .then(outcome => {
+        // Never left pending, whatever happened: the renderer is waiting on this send.
+        answer({ ok: true, messageId: randomUUID() });
+        if (this.active.get(sessionId) !== controller) return;
+        this.active.delete(sessionId);
+        // A refused send has no reply to read: the composer shows its error instead.
+        this.deps.activity?.replyEnded(sessionId, !refused && endsUnread(outcome, replyText));
+        // The same end-of-turn hand-off as a local turn: a relay queued meanwhile is sent now (it
+        // is automated, so it runs locally), and a stopped or failed turn hands it back instead.
+        this.settleQueue(sessionId, outcome);
+        this.loops.idle(sessionId);
+      });
+    return answered;
+  }
+
+  private async runLinkedTurn(
+    session: ChatSession,
+    prompt: string,
+    api: AuthenticatedApiClient,
+    controller: AbortController,
+    report: (report: LinkedTurnReport) => void
+  ): Promise<TurnOutcome> {
+    const sessionId = session.id;
+    const sourceId = session.importOrigin?.sourceId;
+    const promptAt = new Date().toISOString();
+    const slots = new LinkedReplySlots();
+    let replyId: string | null = null;
+    let questId: string | null = null;
+    let failed = false;
+    let settled = false;
+    // Events are applied one after another: the prompt's store write must land before the reply's.
+    let applying = Promise.resolve();
+    const begin = (id: string): string => {
+      replyId = id;
+      this.emit({ type: 'start', sessionId, messageId: id });
+      report({ kind: 'started', replyId: id });
+      return id;
+    };
+    const storeReply = (changes: Partial<ChatMessage>, running = false) => {
+      // Dropped before the write, as settleReply does, so no read folds the stream onto it twice.
+      this.live.delete(sessionId);
+      return this.deps.store.putLinkedMessage(
+        sessionId,
+        {
+          id: replyId ?? randomUUID(),
+          role: 'assistant',
+          content: slots.text,
+          createdAt: new Date().toISOString(),
+          model: session.model,
+          ...changes,
+        },
+        { running }
+      );
+    };
+
+    // Stop never cancels the POST once it is sent: the route creates the quest before it answers,
+    // so a cancelled POST would leave a turn running with no id to stop it by. Until the `turn`
+    // frame names the quest, a Stop only waits for it; then the stream drops and stop-reply ends it.
+    const stream = new AbortController();
+    let posted = false;
+    controller.signal.addEventListener('abort', () => {
+      if (!posted || questId !== null) stream.abort();
+    });
+
+    try {
+      if (!sourceId) throw new Error('This chat is not linked to a web session.');
+      const { endpoint } = await this.resolveServerConfig(api);
+      const { organization_id: organizationId } = await currentBillingPayer();
+      posted = true;
+      await streamSessionTurn(
+        api.getAxiosInstance(),
+        sessionTurnsEndpoint(endpoint),
+        {
+          session_id: sourceId,
+          message: prompt,
+          model: session.model,
+          ...(organizationId ? { organization_id: organizationId } : {}),
+          client_submitted_at: Date.parse(promptAt),
+        },
+        event => {
+          applying = applying.then(async () => {
+            if (event.type === 'turn' && questId === null) {
+              questId = event.quest_id;
+              await this.deps.store.putLinkedMessage(sessionId, {
+                id: webQuestMessageId(questId, 'p'),
+                role: 'user',
+                content: prompt,
+                createdAt: promptAt,
+              });
+              begin(webQuestMessageId(questId, 'r'));
+              if (controller.signal.aborted) stream.abort();
+              return;
+            }
+            if ((event.type === 'delta' || event.type === 'replace') && event.quest_id === questId && replyId) {
+              const added = slots.apply(event);
+              if (added) this.emit({ type: 'delta', sessionId, messageId: replyId, text: added });
+              return;
+            }
+            if (event.type === 'settled' && event.quest_id === questId) {
+              settled = true;
+              failed = event.failed;
+            }
+          });
+        },
+        stream.signal
+      );
+      await applying;
+      if (!replyId) {
+        if (controller.signal.aborted) {
+          // Stopped before the POST went out, or the server ended it without a quest: nothing runs.
+          const messageId = begin(randomUUID());
+          this.emit({ type: 'done', sessionId, messageId, content: '', stopReason: 'aborted' });
+          return 'aborted';
+        }
+        throw new Error('The server ended the turn before starting it.');
+      }
+      const messageId: string = replyId;
+      report({ kind: 'text', text: slots.text });
+      if (failed) {
+        // A refusal that settles as `done` explains itself in the reply slots.
+        const message = slots.text || 'The server could not complete this reply.';
+        await storeReply({ content: '', error: message });
+        this.emit({ type: 'error', sessionId, messageId, message });
+        return 'failed';
+      }
+      const stopReason = controller.signal.aborted ? 'aborted' : undefined;
+      // Walking away from the stream does not end the turn on the server. Until it confirms the
+      // stop, the chat stays busy, so a next message cannot start a turn that misses this reply.
+      const stoppedQuest: string | null = questId;
+      const stillRunning =
+        stopReason !== undefined &&
+        (stoppedQuest === null || !(await stopSessionTurn(api.getAxiosInstance(), sourceId, stoppedQuest)));
+      await storeReply(stopReason ? { stopReason } : {}, stillRunning);
+      this.emit({ type: 'done', sessionId, messageId, content: slots.text, ...(stopReason ? { stopReason } : {}) });
+      return stopReason ? 'aborted' : 'completed';
+    } catch (err) {
+      await applying.catch(() => undefined);
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(`CHAT: linked web turn failed: ${message}`);
+      if (!replyId) {
+        report({ kind: 'refused', error: message });
+        return 'failed';
+      }
+      // A quest that started and never settled keeps running on the server after the stream is
+      // lost, so the chat stays busy until a sync sees it settle.
+      await storeReply({ error: message }, !settled);
+      this.emit({ type: 'error', sessionId, messageId: replyId, message });
+      return 'failed';
     }
   }
 
@@ -4961,6 +5175,8 @@ export class ChatService {
         modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
+      // Before any tool runs: a browser tool checks its standing consent without going through awaitApproval.
+      await this.deps.approvals?.ready(session.id);
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
@@ -8611,13 +8827,15 @@ export class ChatService {
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
     const patterns = prompt.always?.commands.map(command => command.pattern);
-    // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
-    // the model is more likely stuck than making progress, and this is the point to find out.
-    const stuck = looping && mode === 'auto';
+    // The same effectful call a third time in a row is not auto-approved by 'auto': the model is
+    // more likely stuck than making progress, and this is the point to find out. It replaces only
+    // the mode's own approval; an allow rule or "Allow in this chat" the user gave still runs it,
+    // and a call that only observes (prompt.repeatSafe) never counts as a loop.
+    const stuck = looping && mode === 'auto' && !prompt.repeatSafe;
     // A matching allow rule runs the call in every mode: the user wrote it knowing what the
-    // command does. A loop still stops, and the rule set itself keeps
-    // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
-    if (verdict.decision === 'allow' && !stuck) {
+    // command does. The rule set itself keeps the floors (irreversible, opaque commands,
+    // outside folders) - see PermissionRuleSet.
+    if (verdict.decision === 'allow') {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
@@ -8627,12 +8845,14 @@ export class ChatService {
     }
 
     const intrinsicAllowOnce = prompt.allowOnce;
+    // This conversation's "Allow in this chat" answers, kept from an earlier launch.
+    await gate.ready(sessionId);
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
+      if (prompt.irreversible || prompt.allowOnce || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
         allowanceKey,
@@ -8656,6 +8876,14 @@ export class ChatService {
       ) {
         return { decision: 'once' };
       }
+      // A command the scan cannot follow, allowed before with only its run-time words different.
+      if (
+        always?.shape &&
+        gate.coversShape(sessionId, always.namespace, always.shape) &&
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
+      ) {
+        return { decision: 'once' };
+      }
       return null;
     };
     const standing = standingAnswer();
@@ -8670,8 +8898,9 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || askedByRule);
+    // A looping call is decided on rules and allowances alone: the mode's own cover is what the guard withdraws.
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode, stuck) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -8799,7 +9028,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || intrinsicAllowOnce || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || intrinsicAllowOnce || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -8809,7 +9038,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode, stuck) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -10085,8 +10314,8 @@ const SCREEN_GUIDANCE: readonly string[] = [
   'screen_capture looks at other apps on this computer: without a target it lists the open',
   'windows, and with a window title or id it captures that window as an image you and the user',
   'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
-  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
-  'capture asks the user first. For web pages use the browser tools.',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. A',
+  'whole-screen capture asks the user first. For web pages use the browser tools.',
 ];
 
 const SIMULATOR_GUIDANCE: readonly string[] = [
@@ -10094,8 +10323,8 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'wants to see or try their iOS app, call simulator_view to open their live panel first, then',
   'simulator_build (xcodebuild for a scheme) and simulator_launch with the .app it returns. Check',
   'the app with simulator_screenshot rather than predicting it from the code: the image is in',
-  'points, so read tap coordinates straight off it for simulator_input. Each device asks the user',
-  'once. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
+  'points, so read tap coordinates straight off it for simulator_input. Whether it asks the user',
+  'first follows their approval mode. A failure that names a Fix (no Xcode, an unaccepted license, the wrong xcode-select, a',
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
@@ -10773,7 +11002,9 @@ function decideParts(
   rules: PermissionRuleSet | undefined,
   gate: ApprovalGate,
   sessionId: string,
-  mode: ChatApprovalMode
+  mode: ChatApprovalMode,
+  // The repeat-call guard: the mode's own cover is withdrawn, rules and allowances still count.
+  withoutModeCover = false
 ): PartDecision | null {
   const always = prompt.always;
   if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
@@ -10786,7 +11017,7 @@ function decideParts(
     const covering = byRule?.[index] ?? null;
     if (covering) rule ??= covering;
     else if (partAllowed(allowed, part)) allowance = true;
-    else if (!modeCovers(mode, part)) uncovered.push(part);
+    else if (withoutModeCover || !modeCovers(mode, part)) uncovered.push(part);
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);

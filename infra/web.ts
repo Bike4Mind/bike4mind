@@ -201,6 +201,7 @@ import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 import { callableFunctionDataForWeb } from './callableFunctionData';
 import { previewSleepForWeb } from './previewSleep';
 import { callableFunctionSourceFetchForWeb } from './callableFunctionSourceFetch';
+import { callableFunctionRuntimeForCallers } from './callableFunctionRuntime';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -612,12 +613,14 @@ export const web = new sst.aws.Nextjs(
       ...callableFunctionDataForWeb.permissions,
       ...previewSleepForWeb.permissions,
       ...callableFunctionSourceFetchForWeb.permissions,
+      ...callableFunctionRuntimeForCallers.permissions,
     ],
     environment: {
       ...mailBodyEnvironment(appFilesBucket),
       ...callableFunctionDataForWeb.environment,
       ...previewSleepForWeb.environment,
       ...callableFunctionSourceFetchForWeb.environment,
+      ...callableFunctionRuntimeForCallers.environment,
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',

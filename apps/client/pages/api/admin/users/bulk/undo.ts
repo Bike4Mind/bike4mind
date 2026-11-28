@@ -33,11 +33,11 @@ const handler = adminApi({
         batchId,
         req.user.id,
         usersBulkUndoDeps(req, req.logger),
-        record => {
+        async record => {
           if (!Object.hasOwn(ADMIN_USERS_BULK_ACTION_PERMISSIONS, record.action)) {
             throw new ForbiddenError('This bulk action cannot be undone here.');
           }
-          assertCanRunUsersBulkAction(req, record.action as AdminUsersBulkActionType, {
+          await assertCanRunUsersBulkAction(req, record.action as AdminUsersBulkActionType, {
             unblocks: Boolean(record.blockedDomains?.length),
             tags: record.users.flatMap(user => (user.tagAdded ? [user.tagAdded] : [])),
           });

@@ -1,7 +1,6 @@
-import type { ChatMessage } from '@shared/chat';
+import { OPTIMISTIC_ID_PREFIX, type ChatMessage } from '@shared/chat';
 
-/** Marks a prompt drawn before main has stored it; main assigns the real id. */
-export const OPTIMISTIC_ID_PREFIX = 'pending-';
+export { OPTIMISTIC_ID_PREFIX };
 
 /**
  * Add a message main pushed on its own: at the end of the thread, except that a boundary goes

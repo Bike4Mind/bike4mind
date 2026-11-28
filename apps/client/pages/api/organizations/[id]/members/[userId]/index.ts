@@ -17,7 +17,7 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
-import { groupRepository } from '@bike4mind/database/social';
+import { groupRepository, inviteRepository } from '@bike4mind/database/social';
 import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
@@ -79,6 +79,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           userApiKeys: userApiKeyRepository,
+          invites: inviteRepository,
           ...lakeConfigAuditDb,
         },
         // Resolved here rather than in the service: whether this removal came from a browser

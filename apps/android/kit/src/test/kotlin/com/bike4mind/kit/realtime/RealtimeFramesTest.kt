@@ -1,5 +1,6 @@
 package com.bike4mind.kit.realtime
 
+import com.bike4mind.kit.sessions.PendingActionConnector
 import com.bike4mind.kit.sessions.QuestStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -28,6 +29,29 @@ class RealtimeFramesTest {
         assertEquals("web_search", action.tool)
         assertEquals(mapOf("query" to "weather", "limit" to "3", "site" to ""), action.params)
         assertEquals(1_700_000_000_123, action.requestedAtMs)
+    }
+
+    @Test
+    fun parsesACustomConnectorTarget() {
+        val parked = """{"action":"streamed_chat_completion","quest":{"id":"q1","status":"running",""" +
+            """"pendingAction":{"tool":"create","params":{},"ts":1,""" +
+            """"customConnector":{"connectionId":"c1","slug":"acme","displayName":"Acme","urlHost":"mcp.acme.test"}}}}"""
+        val action = RealtimeFrames.parse(parked, ChunkReassembler())!!.quest.pendingAction!!
+        assertEquals(PendingActionConnector("Acme", "mcp.acme.test"), action.connector)
+    }
+
+    @Test
+    fun aBuiltInActionHasNoConnector() {
+        val parked = """{"action":"streamed_chat_completion","quest":{"id":"q1","status":"running",""" +
+            """"pendingAction":{"tool":"create_issue","params":{},"ts":1,"customConnector":null}}}"""
+        assertNull(RealtimeFrames.parse(parked, ChunkReassembler())!!.quest.pendingAction!!.connector)
+    }
+
+    @Test
+    fun dropsACustomConnectorActionThatDoesNotNameItsHost() {
+        val parked = """{"action":"streamed_chat_completion","quest":{"id":"q1","status":"running",""" +
+            """"pendingAction":{"tool":"create","params":{},"ts":1,"customConnector":{"displayName":"Acme"}}}}"""
+        assertNull(RealtimeFrames.parse(parked, ChunkReassembler())!!.quest.pendingAction)
     }
 
     @Test

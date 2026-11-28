@@ -25,11 +25,6 @@ export async function completeCapabilityMutation<Result>(
   return result;
 }
 
-/** Standing approvals live in memory and do not survive an app restart. */
-export async function retireSessionApprovals(ledger: Ledger): Promise<void> {
-  await ledger.revokeMatching(grant => grant.subject.kind === 'session' && grant.scope.kind !== 'path');
-}
-
 export function capabilityHandlers(options: {
   ledger: Ledger;
   ready: Promise<unknown>;

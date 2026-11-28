@@ -8686,9 +8686,6 @@ export interface components {
             | 'create_data_lake'
             | 'save_content_to_data_lake'
             | 'delegate_to_agent'
-            | 'optihashi_schedule'
-            | 'optihashi_formulate'
-            | 'optihashi_edit_problem'
             | 'navigate_view'
             | 'generate_jupyter_notebook'
             | 'excel_generation'
@@ -10746,6 +10743,13 @@ export interface components {
           };
           /** @description When the approval was requested, in Unix milliseconds. It lapses after 15 minutes. */
           ts: number;
+          /** @description Set when the tool belongs to a custom connector. Show it, so the call target is visible before approval. */
+          customConnector?: {
+            /** @description The connection the call goes to, as named in the product. */
+            displayName: string;
+            /** @description The host the connection sends the call to. */
+            urlHost: string;
+          };
         };
       }[];
       next_cursor: string | null;

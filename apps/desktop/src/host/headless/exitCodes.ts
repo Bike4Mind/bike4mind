@@ -11,5 +11,7 @@ export const HOST_EXIT_CODES = {
   daemonAlreadyRunning: 7,
   /** The daemon closed the connection while stdin was still open. */
   daemonConnectionLost: 8,
+  /** The launcher Desktop installs found no Node.js at the path it was written with. */
+  nodeMissing: 9,
 } as const;
 export type HostExitCode = (typeof HOST_EXIT_CODES)[keyof typeof HOST_EXIT_CODES];

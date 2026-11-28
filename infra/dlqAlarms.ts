@@ -102,6 +102,7 @@ import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
+import { callableFunctionRuntime, createCallableFunctionRuntimeAlarms } from './callableFunctionRuntime';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -111,6 +112,11 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
  * Subscribe once to receive the fleet's DLQ alerts.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
+
+// Here, not beside the runtime: the runtime's callers in infra/queues.ts import it, and this module imports queues.
+if (dlqAlarmTopic && callableFunctionRuntime) {
+  createCallableFunctionRuntimeAlarms(callableFunctionRuntime, dlqAlarmTopic);
+}
 
 /** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
 export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;

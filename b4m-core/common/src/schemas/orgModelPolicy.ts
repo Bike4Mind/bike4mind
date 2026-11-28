@@ -12,7 +12,12 @@ export const OrgModelPolicySchema = z
   .object({
     allowedProviders: z.array(z.nativeEnum(ModelBackend)).min(1).max(50).nullable().default(null),
     allowedModels: z.array(z.string().trim().min(1).max(200)).min(1).max(500).nullable().default(null),
-    allowedTools: z.array(b4mLLMTools).max(100).nullable().default(null),
+    // Identifier-shaped, not the built-in enum: contributed tool names are governed too and live outside it.
+    allowedTools: z
+      .array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'Invalid tool name'))
+      .max(100)
+      .nullable()
+      .default(null),
   })
   .strict();
 
@@ -108,12 +113,17 @@ export function expandOrgAllowedTools(allowedTools: readonly string[]): Set<stri
 }
 
 /**
- * Whether the org allows a tool. Only built-in tool names (`b4mLLMTools`) are governed; MCP tools
- * (`server__tool`), coordinator tools and premium-merged tools outside that enum always pass.
+ * Whether the org allows a tool. Built-in tool names (`b4mLLMTools`) and any name in
+ * `contributedToolNames` (the generated premium tool map) are governed; MCP tools
+ * (`server__tool`) and coordinator tools always pass.
  */
-export function isToolAllowedByOrgPolicy(policy: ReadOrgModelPolicy, toolName: string): boolean {
+export function isToolAllowedByOrgPolicy(
+  policy: ReadOrgModelPolicy,
+  toolName: string,
+  contributedToolNames?: ReadonlySet<string>
+): boolean {
   if (policy === null) return true;
-  if (!GOVERNED_TOOL_NAMES.has(toolName)) return true;
+  if (!GOVERNED_TOOL_NAMES.has(toolName) && !contributedToolNames?.has(toolName)) return true;
   if (policy === INVALID_ORG_MODEL_POLICY) return false;
   if (policy.allowedTools === null) return true;
   return expandOrgAllowedTools(policy.allowedTools).has(toolName);
