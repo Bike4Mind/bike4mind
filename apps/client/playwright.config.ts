@@ -177,8 +177,13 @@ const config = defineConfig({
   globalTeardown: './e2e/global-teardown.ts',
   outputDir: 'e2e/test-results',
   reporter: process.env.CI
-    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'pw-results.json' }]]
-    : [['list'], ['html', { open: 'never' }]],
+    ? [
+        ['./e2e/reporters/auth-error-redactor.ts'],
+        ['list'],
+        ['html', { open: 'never' }],
+        ['json', { outputFile: 'pw-results.json' }],
+      ]
+    : [['./e2e/reporters/auth-error-redactor.ts'], ['list'], ['html', { open: 'never' }]],
 
   use: {
     baseURL: process.env.API_URL || 'http://localhost:3000',

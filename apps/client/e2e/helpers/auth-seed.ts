@@ -91,6 +91,12 @@ export function buildAuthSuccessUrl(target: string, auth: SpecAuth): string {
   return `/auth/success${query}#${fragment}`;
 }
 
+/** `text` with the value of every URL `token` parameter replaced. Must match the fragment
+ *  buildAuthSuccessUrl writes. */
+export function omitAuthToken(text: string): string {
+  return text.replace(/([#&?]token=)[\w.%~-]+/g, '$1[omitted]');
+}
+
 /**
  * Seed auth directly onto a page (mid-test user switching), then bootstrap the authenticated
  * app by navigating to `/`.
