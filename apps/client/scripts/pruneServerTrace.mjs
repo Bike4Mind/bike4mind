@@ -3,10 +3,9 @@
 // server function stops shipping them.
 //
 // OpenNext's copyTracedFiles builds the Lambda from the `files` lists of `<.next>/**/*.nft.json`
-// and copies nothing else, so a path removed here never reaches the deployment package. This is
-// the working lever under Turbopack: next.config.mjs's outputFileTracingExcludes is dormant there
-// (see the note on it). The .next/standalone tree is left alone; the container build copies that
-// tree as is.
+// and copies nothing else, so a path removed here never reaches the deployment package. Unlike
+// next.config.mjs's outputFileTracingExcludes, which Turbopack applies to every build's traces,
+// this leaves the .next/standalone tree alone; the container build copies that tree as is.
 //
 // Every entry is a package the server reaches only through a lazy import() of a code path that
 // never runs in this function, or a part of a package its entry point never reads. Removing a

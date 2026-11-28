@@ -132,8 +132,8 @@ const nextConfig = {
   // contract behind it. These entries make that a declaration. Under Turbopack the tracer is
   // Turbopack's own rather than nft, whose collect-build-traces is gated off - and since that
   // module is also the only JS-side reader of this key, the includes here are live only because
-  // Turbopack applies them natively. The excludes below are dormant either way; see the note on
-  // them. help-embeddings.json/.bin exist only when an embedding key was present at build time (see
+  // Turbopack applies them natively, as it does the excludes below; see the note on them.
+  // help-embeddings.json/.bin exist only when an embedding key was present at build time (see
   // .gitignore), and an include matching no file is a silent no-op, so declaring it costs a
   // keyless build nothing.
   outputFileTracingIncludes: {
@@ -145,13 +145,17 @@ const nextConfig = {
     '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, ...HELP_EMBEDDINGS],
   },
 
-  // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in
-  // collect-build-traces, and build/index.js gates that on `bundler !== Turbopack`. Measured -
-  // a swept build with this set still copied 545 *.test.ts into the standalone output. Kept as
-  // the floor for a webpack fallback; the working guards are the postbuild prune and
-  // apps/client/scripts/check-standalone-tree.mjs. Globs resolve against this package.
+  // Turbopack applies these while it traces each route: the key is matched against the route and
+  // the globs resolve against this package. The '**/*' entry is not what keeps test sources out of
+  // the output (a swept build with it set still copied 545 *.test.ts into the standalone tree);
+  // the working guards for that are the postbuild prune and
+  // apps/client/scripts/check-standalone-tree.mjs.
   // Deliberately NOT public/**: server/help/retrieval.ts reads public/help-content per request.
   outputFileTracingExcludes: {
+    // Compiled test routes are deleted after the build by scripts/pruneTestRoutes.mjs, so their
+    // traces only feed the standalone copy, and they are about half of all traced entries. Every
+    // route this key matches is one that prune removes.
+    '**/__tests__/**': ['../../**'],
     // The ffmpeg binary belongs to the generation-job worker only; never ship it in the Next server.
     '**/*': ['e2e/**', '**/*.test.ts?(x)', '**/ffmpeg-static/**', '**/node_modules/.pnpm/ffmpeg-static*/**'],
   },
