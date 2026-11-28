@@ -33,6 +33,7 @@ import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } 
 import { searxngUrl } from './searxng';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 import { callableFunctionDataForEraser } from './callableFunctionData';
+import { callableFunctionRuntimeForCallers } from './callableFunctionRuntime';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -807,7 +808,9 @@ const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscrib
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...callableFunctionRuntimeForCallers.environment,
     },
+    permissions: [...callableFunctionRuntimeForCallers.permissions],
   },
   {
     ...SINGLE_RECORD_BATCH,
