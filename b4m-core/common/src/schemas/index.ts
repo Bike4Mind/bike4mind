@@ -66,6 +66,7 @@ export * from './creditBalance';
 export * from './creditTransaction';
 export * from './publicFile';
 export * from './artifactPublic';
+export * from './publishedPagePublic';
 export * from './transcriptionPublic';
 export * from './embeddingsApi';
 export * from './slackMessagesApi';

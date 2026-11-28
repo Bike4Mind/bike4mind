@@ -106,7 +106,7 @@ vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     findOne: () => ({
       select: () => ({
-        lean: async () => ({ publicId: 'pub1', visibility: 'public', commentPolicy: 'anyone', sha256Index: 'sha' }),
+        lean: async () => ({ publicId: 'pub1', visibility: 'public', commentPolicy: 'open', sha256Index: 'sha' }),
       }),
     }),
   },
@@ -188,6 +188,11 @@ const run = async (
 const answered404 = (thrown: unknown, status: ReturnType<typeof vi.fn>) =>
   (thrown !== null && (thrown as { statusCode?: number }).statusCode === 404) ||
   status.mock.calls.some(call => call[0] === 404);
+
+/** The annotation service throws a 400 HTTPError (the route formerly answered res.status(400)). */
+const answered400 = (thrown: unknown, status: ReturnType<typeof vi.fn>) =>
+  (thrown !== null && (thrown as { statusCode?: number }).statusCode === 400) ||
+  status.mock.calls.some(call => call[0] === 400);
 
 describe('resource-id cast guards - a junk caller id is answered by the route, not the middleware', () => {
   beforeEach(() => {
@@ -378,18 +383,17 @@ describe('resource-id cast guards - a junk caller id is answered by the route, n
     it('publish/annotations/[publicId] answers 400 for a junk threadRootId and never calls findOne', async () => {
       const { thrown, status } = await postAnnotation(JUNK_ID);
 
-      expect(thrown).toBeNull();
-      expect(status).toHaveBeenCalledWith(400);
+      expect(answered400(thrown, status)).toBe(true);
       expect(spies.annotationFindOne).not.toHaveBeenCalled();
       expect(spies.annotationCreate).not.toHaveBeenCalled();
     });
 
     it('publish/annotations/[publicId] still looks up a well-formed threadRootId', async () => {
       spies.annotationFindOne.mockReturnValue({ select: () => ({ lean: async () => null }) });
-      const { status } = await postAnnotation(VALID_ID);
+      const { thrown, status } = await postAnnotation(VALID_ID);
 
       expect(spies.annotationFindOne).toHaveBeenCalledWith({ _id: VALID_ID, publicId: 'pub1', deletedAt: null });
-      expect(status).toHaveBeenCalledWith(400);
+      expect(answered400(thrown, status)).toBe(true);
     });
   });
 });

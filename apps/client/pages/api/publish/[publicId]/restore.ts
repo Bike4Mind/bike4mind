@@ -1,260 +1,31 @@
-import {
-  downloadPublishedIndex,
-  deleteRetiredPublishedIndex,
-  publishedContentSnapshotFilter,
-} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
-import { createHash } from 'node:crypto';
-import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { PublishedArtifact } from '@bike4mind/database';
-import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
-import {
-  validateBundle,
-  buildPublishUrlPath,
-  invalidatePublishCdn,
-  toCacheTarget,
-  checkInPlaceRewriteQuota,
-  consumePublishAction,
-  type PublishActionReceipt,
-} from '@server/services/publish';
-// From the module, not the barrel: tests that hand-build a partial barrel mock (limits.test.ts) do not export these.
-import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
+import { PublishServiceError } from '@server/services/publish/publishServiceError';
+import { restorePublishedVersion } from '@server/services/publish/restorePublishedVersion';
 
 /**
  * POST /api/publish/[publicId]/restore[?sha={version}] - roll a published bundle
  * back to a prior version (the given known version, or the immediately-previous
- * by default).
- *
- * Owner/admin only. Reads the archived `versions/{sha}.html` blob (the
- * revise/restore paths archive the prior index.html before overwriting), and
- * writes it back as a NEW current version - archiving the version it replaces
- * first, so a restore is itself reversible. Re-validates through validateBundle.
- * Only restores `index.html` (assets are unchanged by revise/restore).
- *
- * 400 if there is no previous version; 409 if the previous content was never
- * archived (it predates the version-history feature). Shares the `revisingAt`
- * lock with revise so the two can't race.
+ * by default). Owner/admin only; see `restorePublishedVersion` for the contract.
  */
-
-const RESTORE_LOCK_TTL_MS = 180_000;
-
-interface RestoreArtifactLean {
-  publicId: string;
-  tier: PublishScopeTier;
-  scopeId: string;
-  slug: string;
-  visibility: PublishVisibility;
-  ownerId: string;
-  lastPublishedBy?: string;
-  storageKeyPrefix: string;
-  indexObjectPath?: string | null;
-  sha256Index?: string;
-  size: { totalBytes: number; fileCount: number };
-  manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
-  publishedAt: Date;
-  source: { kind: 'bundle' | 'reply' | 'fabfile' };
-  previousVersionMeta?: { sha256Index: string };
-  versions?: Array<{ sha256Index: string; indexBytes?: number }>;
-}
-
 const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
 
-  const publicId = String((req.query as { publicId?: string }).publicId ?? '');
-  if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
-
-  const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null }).lean<RestoreArtifactLean>();
-  if (!artifact) return res.status(404).json({ error: 'Not found' });
-
-  if (artifact.ownerId !== String(req.user.id) && !req.user.isAdmin) {
-    return res.status(403).json({ error: 'Only the owner may restore this artifact' });
-  }
-  if (artifact.source.kind !== 'bundle') {
-    return res.status(400).json({ error: 'Only bundle artifacts can be restored' });
-  }
-  const currentSha = artifact.sha256Index;
-  if (!currentSha) return res.status(409).json({ error: 'Artifact has no version anchor yet' });
-  // `?sha={version}` restores a SPECIFIC archived version (must be a known prior
-  // version, not the current one); without it, default to the immediately-previous.
-  const requested = typeof (req.query as { sha?: string }).sha === 'string' ? (req.query as { sha: string }).sha : '';
-  if (requested && (requested === currentSha || !(artifact.versions ?? []).some(v => v.sha256Index === requested))) {
-    return res.status(400).json({ error: 'Requested version is not a known prior version of this artifact' });
-  }
-  const targetSha = requested || artifact.previousVersionMeta?.sha256Index;
-  if (!targetSha) return res.status(400).json({ error: 'No previous version to restore' });
-
-  // Acquire the shared revise/restore lock (steal if stale).
-  const lockNow = new Date();
-  const lockAcquired = await PublishedArtifact.findOneAndUpdate(
-    {
-      publicId,
-      deletedAt: null,
-      ...publishedContentSnapshotFilter(artifact),
-      $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - RESTORE_LOCK_TTL_MS) } }],
-    },
-    { $set: { revisingAt: lockNow } }
-  );
-  if (!lockAcquired) {
-    return res.status(409).json({ error: 'A revision or restore is already in progress for this artifact' });
-  }
-
-  // The counted publish action, handed back in `finally` unless the restored page was written.
-  let action: PublishActionReceipt | undefined;
-  let written = false;
+  const query = req.query as { publicId?: string; sha?: string };
   try {
-    const storage = getPublishedArtifactsStorage();
-
-    // Read the archived previous version.
-    let restoredHtml: string;
-    try {
-      restoredHtml = (await storage.download(`${artifact.storageKeyPrefix}versions/${targetSha}.html`)).toString(
-        'utf-8'
-      );
-    } catch {
-      // The version is known (validated above) but its archived blob is missing -
-      // either it predates version history, or the archive write failed.
-      return res.status(409).json({ error: "The requested version's content is unavailable in storage" });
-    }
-
-    // Re-validate (it was valid when current, but never trust storage blindly).
-    const validation = validateBundle({
-      indexHtml: restoredHtml,
-      manifest: artifact.manifest.map(f => ({ path: f.path, mimeType: f.mimeType })),
+    const restored = await restorePublishedVersion({
+      user: req.user,
+      logger: req.logger,
+      publicId: String(query.publicId ?? ''),
+      sha: typeof query.sha === 'string' ? query.sha : undefined,
     });
-    if (!validation.valid) {
-      return res.status(422).json({ error: 'Archived version failed validation', violations: validation.violations });
-    }
-
-    const restoredBuf = Buffer.from(restoredHtml, 'utf-8');
-    const newSha = createHash('sha256').update(restoredBuf).digest('hex');
-    const newManifest = artifact.manifest.map(f =>
-      f.path === 'index.html' ? { ...f, size: restoredBuf.length, sha256: newSha } : f
-    );
-    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
-
-    // The CURRENT index.html, archived below before overwriting so restore is reversible. Read
-    // before the quota check, which counts what it archives. Null if it cannot be read.
-    const currentBuf = await downloadPublishedIndex(artifact, storage).catch(() => null);
-    const now = new Date();
-
-    // versions[] is keyed by content sha (distinct snapshots). Restoring old bytes
-    // reproduces an existing sha, so we must NOT push a duplicate (it would corrupt
-    // the switcher's ordinal math + the ?v/restore "not current" guards). Also
-    // backfill the version being replaced if history doesn't yet record it
-    // (pre-version-history artifacts, or the first revise/restore).
-    // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-    const { versionsToPush } = planPublishVersions({
-      previous: artifact,
-      priorIndex: currentBuf,
-      incoming: {
-        sha256: newSha,
-        publishedBy: String(req.user.id),
-        publishedAt: now,
-        size: { totalBytes, fileCount: newManifest.length },
-        indexBytes: restoredBuf.length,
-      },
-    });
-
-    // Storage quota on the net change (see checkInPlaceRewriteQuota). The current index.html is
-    // archived and the restored version becomes current, so its archived copy leaves the count.
-    const quota = await checkInPlaceRewriteQuota({
-      isAdmin: req.user.isAdmin,
-      artifact,
-      next: {
-        bytes: totalBytes,
-        fileCount: newManifest.length,
-        sha256Index: newSha,
-        versions: [...(artifact.versions ?? []), ...versionsToPush],
-      },
-    });
-    if (!quota.ok) {
-      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-    }
-
-    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
-    action = await consumePublishAction(req.user);
-
-    const warnNotArchived = () =>
-      req.logger.warn(`[RESTORE] ${publicId} could not archive current version ${currentSha.slice(0, 12)}`);
-    let archivedPrevious = false;
-    if (!currentBuf) {
-      warnNotArchived();
-    } else {
-      try {
-        await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
-          ContentType: 'text/html',
-        });
-        archivedPrevious = true;
-      } catch {
-        warnNotArchived();
-      }
-    }
-
-    // Write the restored version as the new current.
-    await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
-    written = true;
-
-    const updated = await PublishedArtifact.updateOne(
-      { publicId, deletedAt: null, revisingAt: lockNow, ...publishedContentSnapshotFilter(artifact) },
-      {
-        $set: {
-          manifest: newManifest,
-          sha256Index: newSha,
-          size: { totalBytes, fileCount: newManifest.length },
-          lastPublishedBy: String(req.user.id),
-          publishedAt: now,
-          // The version we just replaced becomes the new "previous".
-          previousVersionMeta: {
-            publishedAt: artifact.publishedAt,
-            publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-            size: artifact.size,
-            sha256Index: currentSha,
-          },
-        },
-        // $each:[] is a harmless no-op when nothing new to record.
-        $unset: { indexObjectPath: 1 },
-        ...versionsPushUpdate(versionsToPush),
-      }
-    );
-
-    if (updated.matchedCount === 0) {
-      return res.status(409).json({ error: 'The page changed while this operation was running' });
-    }
-
-    if (archivedPrevious) {
-      await deleteRetiredPublishedIndex(artifact, storage, error =>
-        req.logger.warn('[RESTORE] Could not remove a retired page payload', { error })
-      );
-    }
-
-    // Restore overwrote index.html in place - bust the CDN so the rolled-back
-    // version is visible immediately, not after the TTL. Only public pages are
-    // CDN-cached (gated are no-store). Best-effort, never throws.
-    if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
-
-    // Best-effort, never throws: the restored version gets its own owner-only thumbnail.
-    await enqueuePublishThumbnail({ publicId, versionId: newSha }, req.logger);
-
-    const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
-    req.logger.info(`[RESTORE] ${publicId} → restored ${targetSha.slice(0, 12)} as new version ${newSha.slice(0, 12)}`);
-
-    return res.status(200).json({
-      publicId,
-      url,
-      sha256Index: newSha,
-      restoredFrom: targetSha,
-      previousSha256Index: currentSha,
-      publishedAt: now.toISOString(),
-    });
-  } finally {
-    if (action && !written) await action.refund();
-    // Compare-and-set release: only clear the lock if we still hold it (a lock
-    // stolen after the TTL belongs to a newer request).
-    await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(
-      () => undefined
-    );
+    return res.status(200).json({ ...restored, publishedAt: restored.publishedAt.toISOString() });
+  } catch (error) {
+    if (!(error instanceof PublishServiceError)) throw error;
+    const { errorCode, details, violations } = error.additionalInfo ?? {};
+    return res
+      .status(error.statusCode)
+      .json({ error: error.message, ...(errorCode ? { code: errorCode } : {}), details, violations });
   }
 });
 

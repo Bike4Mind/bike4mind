@@ -50,7 +50,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/optionalAuth', () => ({
   optionalAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@bike4mind/common', () => ({ CreateAnnotationRequestSchema: { safeParse: vi.fn() } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  CreateAnnotationRequestSchema: { safeParse: vi.fn() },
+}));
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: () => ({ select: () => ({ lean: dbMocks.artifactLean }) }) },
   Annotation: { find: () => ({ sort: () => ({ lean: dbMocks.annotationLean }) }) },

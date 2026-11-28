@@ -98,6 +98,23 @@ export {
   republishArtifactContract,
   unpublishArtifactContract,
 } from './contracts/artifacts.contract';
+export {
+  createPublishedPageUploadContract,
+  finalizePublishedPageContract,
+  listPublishedPagesContract,
+  getPublishedPageContract,
+  updatePublishedPageContract,
+  deletePublishedPageContract,
+  listPublishedPageShareLinksContract,
+  createPublishedPageShareLinkContract,
+  revokePublishedPageShareLinkContract,
+  restorePublishedPageVersionContract,
+  listPublishedPageCommentsContract,
+  createPublishedPageCommentContract,
+  updatePublishedPageCommentContract,
+  deletePublishedPageCommentContract,
+  downloadPublishedPageFileContract,
+} from './contracts/publishedPages.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';

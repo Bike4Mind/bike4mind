@@ -58,7 +58,8 @@ vi.mock('@bike4mind/database', () => ({
   Annotation: { create: mockCreate, find: vi.fn(), countDocuments: vi.fn(), findOne: vi.fn() },
   PublishedArtifact: { findOne: mockLoadFindOne },
 }));
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   CreateAnnotationRequestSchema: { safeParse: (b: unknown) => ({ success: true, data: b }) },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({

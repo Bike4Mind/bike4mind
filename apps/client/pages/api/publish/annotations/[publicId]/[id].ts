@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
-import { Annotation, PublishedArtifact } from '@bike4mind/database';
 import { UpdateAnnotationRequestSchema } from '@bike4mind/common';
-import { toAnnotationDto, type AnnotationLean } from '@server/services/publish';
-import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { HTTPError } from '@bike4mind/server-utils/utils/errors';
+import type { Response } from 'express';
+import { deleteAnnotation, updateAnnotation } from '@server/services/publish/annotations';
 
 /**
  * /api/publish/annotations/[publicId]/[id] - mutate a single annotation.
@@ -17,11 +17,10 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
  * approval/signature surfaces.
  */
 
-async function isArtifactOwner(publicId: string, userId: string): Promise<boolean> {
-  const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-    .select('ownerId')
-    .lean<{ ownerId: string } | null>();
-  return Boolean(artifact && artifact.ownerId === userId);
+/** Maps a service's typed HTTP error to the legacy `{ error }` body; anything else is a real failure. */
+function sendServiceError(res: Response, error: unknown) {
+  if (error instanceof HTTPError) return res.status(error.statusCode).json({ error: error.message });
+  throw error;
 }
 
 const handler = baseApi({ auth: false })
@@ -36,51 +35,23 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     }
 
-    const ann = isValidObjectId(id) ? await Annotation.findOne({ _id: id, publicId, deletedAt: null }) : null;
-    if (!ann) return res.status(404).json({ error: 'Not found' });
-
-    const userId = String(req.user.id);
-    const isAdmin = Boolean(req.user.isAdmin);
-    const isAuthor = ann.authorId === userId;
-
-    if (parsed.data.body !== undefined) {
-      // Editing the text is author-only - it's their words. Admins may resolve or
-      // delete (below), but not reword someone else's comment.
-      if (!isAuthor) return res.status(403).json({ error: 'Only the author may edit this annotation' });
-      ann.body = parsed.data.body;
+    try {
+      return res.status(200).json(await updateAnnotation({ user: req.user, publicId, id, input: parsed.data }));
+    } catch (error) {
+      return sendServiceError(res, error);
     }
-    if (parsed.data.resolved !== undefined) {
-      // Resolving is author, artifact owner, or admin.
-      const isOwner = isAuthor || isAdmin || (await isArtifactOwner(publicId, userId));
-      if (!isOwner) return res.status(403).json({ error: 'Not authorized to resolve this annotation' });
-      if (parsed.data.resolved) {
-        ann.resolvedAt = new Date();
-        ann.resolvedBy = userId;
-      } else {
-        ann.resolvedAt = null;
-        ann.resolvedBy = null;
-      }
-    }
-
-    await ann.save();
-    return res.status(200).json(toAnnotationDto(ann.toObject() as unknown as AnnotationLean));
   })
   .delete(async (req, res) => {
     if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
     const { publicId, id } = req.query as { publicId?: string; id?: string };
     if (!publicId || !id) return res.status(400).json({ error: 'Missing publicId or id' });
 
-    const ann = isValidObjectId(id) ? await Annotation.findOne({ _id: id, publicId, deletedAt: null }) : null;
-    if (!ann) return res.status(404).json({ error: 'Not found' });
-
-    const userId = String(req.user.id);
-    const isAdmin = Boolean(req.user.isAdmin);
-    const allowed = ann.authorId === userId || isAdmin || (await isArtifactOwner(publicId, userId));
-    if (!allowed) return res.status(403).json({ error: 'Not authorized to delete this annotation' });
-
-    await ann.softDelete(userId);
-    req.logger.info(`[ANNOTATE] delete publicId=${publicId} id=${id} by=${userId}`);
-    return res.status(204).end();
+    try {
+      await deleteAnnotation({ user: req.user, publicId, id, logger: req.logger });
+      return res.status(204).end();
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
   });
 
 export const config = {
