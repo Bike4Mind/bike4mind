@@ -146,6 +146,14 @@ export const authHolders = {
     kind: 'noUserData',
     note: 'Registered OAuth client applications; no person is recorded on them.',
   },
+  // A role an admin gave the person on one OAuth client. `assignedBy` is the admin who gave it.
+  OAuthClientRoleAssignment: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'assignedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   OAuthClientSignIn: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

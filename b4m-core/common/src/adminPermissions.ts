@@ -133,7 +133,7 @@ export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   'statusPageSyntheticLlmEnabled',
 ]);
 
-type AdminIdentity = {
+export type AdminIdentity = {
   isAdmin?: boolean | null;
   /** Direct grants, stored on the user. */
   adminPermissions?: readonly string[] | null;

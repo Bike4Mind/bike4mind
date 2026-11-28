@@ -9,6 +9,7 @@ import {
   shadowDetectionRepository,
   campaignWatchRepository,
   oauthClientSignInRepository,
+  oauthClientRoleAssignmentRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
@@ -129,6 +130,14 @@ export async function purgeDeletedUserData(
     logger.info(`Deleted ${deleted} app sign-in record(s) of deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to delete app sign-in records for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Roles on OAuth clients: nothing a client reads may outlive the account.
+  try {
+    const deleted = await oauthClientRoleAssignmentRepository.deleteAllForUser(userId);
+    logger.info(`Deleted ${deleted} OAuth client role assignment(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to delete OAuth client role assignments for deleted user ${userId}: ${String(err)}`);
   }
 
   // Limit hits feed only the admin timeline of this account.

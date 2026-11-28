@@ -10,7 +10,8 @@ import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { useAdminModal } from './useAdminModal';
 import { useUser } from '@client/app/contexts/UserContext';
 
-const { api, copy, adminSettings, navigate } = vi.hoisted(() => ({
+const { api, copy, copyState, adminSettings, navigate } = vi.hoisted(() => ({
+  copyState: { copied: false },
   navigate: vi.fn(),
   adminSettings: {
     loaded: true,
@@ -30,6 +31,9 @@ const { api, copy, adminSettings, navigate } = vi.hoisted(() => ({
     createOAuthClient: vi.fn(),
     updateOAuthClient: vi.fn(),
     rotateOAuthClientSecret: vi.fn(),
+    fetchOAuthClientRoles: vi.fn(),
+    addOAuthClientRole: vi.fn(),
+    removeOAuthClientRole: vi.fn(),
   },
   copy: vi.fn(),
 }));
@@ -37,7 +41,7 @@ const { api, copy, adminSettings, navigate } = vi.hoisted(() => ({
 vi.mock('@client/app/utils/oauthClientAPICalls', () => api);
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
-  useCopyToClipboard: () => ({ copied: false, handleCopyToClipboard: copy }),
+  useCopyToClipboard: () => ({ copied: copyState.copied, handleCopyToClipboard: copy }),
 }));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({
@@ -86,7 +90,7 @@ const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
   useUser.setState({ currentUser: user as CurrentUser });
 
 // Edit and rotate live in each row's "..." menu, which renders its items only while open.
-const openRowAction = async (action: 'edit' | 'rotate' | 'usage', clientId = client.clientId) => {
+const openRowAction = async (action: 'edit' | 'rotate' | 'usage' | 'roles', clientId = client.clientId) => {
   fireEvent.click(await screen.findByTestId(`oauth-client-actions-${clientId}`));
   fireEvent.click(await screen.findByTestId(`oauth-client-${action}-${clientId}`));
 };
@@ -111,10 +115,25 @@ beforeEach(() => {
   });
   adminSettings.loaded = true;
   adminSettings.trustGate = true;
+  copyState.copied = false;
   signInAs({ isAdmin: true });
 });
 
 describe('OAuthClientsTab', () => {
+  it('opens the roles of a client from its row menu and closes them', async () => {
+    api.fetchOAuthClientRoles.mockResolvedValue({
+      roles: [{ key: 'admin', label: 'Admin' }],
+      holders: [],
+      holderCounts: {},
+    });
+    renderTab();
+    await openRowAction('roles');
+    expect(await screen.findByTestId('oauth-client-roles-section')).toHaveTextContent('Roles: My App');
+    expect(api.fetchOAuthClientRoles).toHaveBeenCalledWith('c1');
+    fireEvent.click(screen.getByTestId('oauth-client-roles-close-btn'));
+    expect(screen.queryByTestId('oauth-client-roles-section')).not.toBeInTheDocument();
+  });
+
   it('lists clients with their id, type, redirect URIs and scopes', async () => {
     renderTab();
     const row = await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
@@ -1179,6 +1198,165 @@ describe('unpaid limits payload', () => {
         unpaidLimits: { ...fresh.unpaidLimits, enabled: true },
       })
     ).toEqual({ federatedIdp: null });
+  });
+});
+
+describe('OAuthClientsTab remaining interactions', () => {
+  const federatedClient = {
+    ...client,
+    allowedScopes: [...client.allowedScopes, 'ai:generate', 'me:read'],
+    federatedIdp: {
+      subjectSource: 'sub' as const,
+      issuer: 'https://b4m.example.test',
+      audience: client.clientId,
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+    },
+  };
+  const limitsClient = {
+    ...federatedClient,
+    unpaidAccountLimits: { requestsPerMinute: 30, requestsPerDay: 600, tokensPerMinute: 400000, maxConcurrent: 4 },
+  };
+  const limitInput = (name: string) =>
+    screen.getByTestId(`oauth-client-edit-unpaid-limits-${name}-input`) as HTMLInputElement;
+
+  it('shows a check mark on the client ID copy button once copied', async () => {
+    copyState.copied = true;
+    renderTab();
+    const button = await screen.findByTestId('oauth-client-copy-id-b4m_my_app_0011aabb');
+    expect(within(button).getByTestId('CheckIcon')).toBeInTheDocument();
+    expect(within(button).queryByTestId('ContentCopyIcon')).toBeNull();
+  });
+
+  it('shows a check mark on the secret copy buttons once copied', async () => {
+    copyState.copied = true;
+    api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await screen.findByTestId('oauth-client-secret-modal');
+    const button = screen.getByTestId('oauth-client-secret-modal-secret-copy-btn');
+    expect(within(button).getByTestId('CheckIcon')).toBeInTheDocument();
+  });
+
+  it('registers a first-party client that opts out of unpaid accounts', async () => {
+    api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.change(screen.getByTestId('oauth-client-name-input'), { target: { value: 'My App' } });
+    fireEvent.change(screen.getByTestId('oauth-client-redirect-uris-input'), {
+      target: { value: 'https://app.example.test/cb' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-first-party-checkbox'));
+    fireEvent.click(screen.getByTestId('oauth-client-federated-switch'));
+    fireEvent.click(screen.getByTestId('oauth-client-unpaid-accounts-switch'));
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await waitFor(() => expect(api.createOAuthClient).toHaveBeenCalled());
+    expect(api.createOAuthClient.mock.calls[0][0]).toMatchObject({
+      clientType: 'first-party',
+      unpaidAccountsAllowed: false,
+    });
+  });
+
+  it('closes the register dialog from Cancel without a request', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.click(within(screen.getByTestId('oauth-client-create-modal')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-create-modal')).not.toBeInTheDocument());
+    expect(api.createOAuthClient).not.toHaveBeenCalled();
+  });
+
+  it('closes the edit dialog from Cancel and from Escape when idle', async () => {
+    renderTab();
+    await openRowAction('edit');
+    fireEvent.click(within(screen.getByTestId('oauth-client-edit-modal')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-edit-modal')).not.toBeInTheDocument());
+
+    await openRowAction('edit');
+    fireEvent.keyDown(screen.getByTestId('oauth-client-edit-modal'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-edit-modal')).not.toBeInTheDocument());
+    expect(api.updateOAuthClient).not.toHaveBeenCalled();
+  });
+
+  it('sends an edited federated trust field and the changed config', async () => {
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    api.updateOAuthClient.mockResolvedValue(federatedClient);
+    renderTab();
+    await openRowAction('edit');
+    fireEvent.change(screen.getByTestId('oauth-client-edit-federated-jwks-input'), {
+      target: { value: 'https://b4m.example.test/other-jwks' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        federatedIdp: expect.objectContaining({ jwksUri: 'https://b4m.example.test/other-jwks' }),
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
+  it('closes the narrowing confirm on Escape when idle, but not while the save is in flight', async () => {
+    let resolveUpdate: (v: typeof client) => void = () => {};
+    api.updateOAuthClient.mockReturnValue(new Promise(r => (resolveUpdate = r)));
+    renderTab();
+    await openRowAction('edit');
+    fireEvent.click(screen.getByTestId('oauth-client-edit-scope-email'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    fireEvent.keyDown(await screen.findByTestId('oauth-client-edit-narrow-modal'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-edit-narrow-modal')).not.toBeInTheDocument());
+    expect(api.updateOAuthClient).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-narrow-confirm-btn'));
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalled());
+    fireEvent.keyDown(screen.getByTestId('oauth-client-edit-narrow-modal'), { key: 'Escape' });
+    expect(screen.getByTestId('oauth-client-edit-narrow-modal')).toBeInTheDocument();
+    resolveUpdate(client);
+  });
+
+  it('disables the active switch of the row being re-activated while the request is in flight', async () => {
+    let resolveUpdate: (v: typeof client) => void = () => {};
+    api.fetchOAuthClients.mockResolvedValue([{ ...client, isActive: false }]);
+    api.updateOAuthClient.mockReturnValue(new Promise(r => (resolveUpdate = r)));
+    renderTab();
+    const toggle = await screen.findByTestId('oauth-client-toggle-b4m_my_app_0011aabb');
+    const input = toggle.querySelector('input') ?? (toggle as HTMLInputElement);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(input).toBeDisabled());
+    resolveUpdate(client);
+  });
+
+  it('keeps a typed limit that is not a number on blur, and flags it', async () => {
+    api.fetchOAuthClients.mockResolvedValue([limitsClient]);
+    renderTab();
+    await openRowAction('edit');
+    fireEvent.change(limitInput('rpd'), { target: { value: '12a' } });
+    fireEvent.blur(limitInput('rpd'));
+    expect(limitInput('rpd')).toHaveValue('12a');
+    expect(screen.getByTestId('oauth-client-edit-save-btn')).toBeDisabled();
+  });
+
+  it('words the global line when the global per-minute limit is off', async () => {
+    adminSettings.values.apiKeyUntrustedRateLimitPerMin = 0;
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    renderTab();
+    await openRowAction('edit');
+    expect(screen.getByTestId('oauth-client-edit-unpaid-limits-global-text')).toHaveTextContent('no per-minute limit');
+    adminSettings.values.apiKeyUntrustedRateLimitPerMin = 20;
+  });
+
+  it('says a limit has no global cap when the global value is 0', async () => {
+    api.fetchOAuthClients.mockResolvedValue([limitsClient]);
+    renderTab();
+    await openRowAction('edit');
+    const field = limitInput('rpd').closest('.MuiFormControl-root');
+    expect(field).toHaveTextContent('Global: no limit');
+  });
+
+  it('omits the unpaid limits from the edit payload when a field is invalid', () => {
+    const form = editFormFromClient(limitsClient as never);
+    expect(
+      buildEditPayload(limitsClient as never, { ...form, unpaidLimits: { ...form.unpaidLimits, rpm: '0' } })
+    ).toEqual({});
   });
 });
 

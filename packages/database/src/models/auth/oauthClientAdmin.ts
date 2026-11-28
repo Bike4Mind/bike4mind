@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
+import { withTransaction } from '@bike4mind/db-core';
 import {
   BadRequestError,
   ConflictError,
@@ -18,8 +19,18 @@ import {
   type OAuthClientView,
   type OAuthClientWithSecret,
   type UpdateOAuthClientInput,
+  OAUTH_CLIENT_MAX_ROLES,
+  OAUTH_CLIENT_ROLE_HOLDERS_SHOWN,
+  oauthClientRoleSchema,
+  type OAuthClientRole,
+  type OAuthClientRolesView,
+  type UserOAuthClientRolesView,
+  type AdminIdentity,
+  assertCanActOnAdminTarget,
 } from '@bike4mind/common';
 import { OAuthClientModel, type IOAuthClientDocument } from './OAuthClientModel';
+import { oauthClientRoleAssignmentRepository } from './OAuthClientRoleAssignmentModel';
+import { User } from './UserModel';
 
 /**
  * Registration and lifecycle of OAuth clients, shared by the admin API
@@ -94,6 +105,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
         }
       : {}),
     ...(doc.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: doc.unpaidAccountsAllowed } : {}),
+    roles: (doc.roles ?? []).map(role => ({ key: role.key, label: role.label })),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -317,4 +329,218 @@ export async function addOAuthClientOptInScopes(clientId: string, scopes: readon
     throw new NotFoundError('OAuth client not found');
   }
   return toOAuthClientView(doc);
+}
+
+type RoleUser = { id: string; email: string | null; name: string | null };
+
+async function findUserOrThrow(userId: string): Promise<RoleUser> {
+  const user = mongoose.isValidObjectId(userId)
+    ? await User.findOne({ _id: userId, deletedAt: { $exists: false } })
+        .select('email name')
+        .lean<{ _id: unknown; email?: string; name?: string }>()
+        .exec()
+    : null;
+  if (!user) throw new NotFoundError('User not found');
+  return { id: String(user._id), email: user.email || null, name: user.name || null };
+}
+
+// Every role writer locks the client before validating roles or changing assignments.
+const withLockedRoleClient = <T>(
+  filter: { _id: string } | { clientId: string },
+  change: (client: IOAuthClientDocument, session: mongoose.mongo.ClientSession) => Promise<T>
+): Promise<T> =>
+  withTransaction(async session => {
+    const client = await OAuthClientModel.findOneAndUpdate(
+      filter,
+      { $inc: { roleMutationVersion: 1 } },
+      { new: true, session, timestamps: false, runValidators: true }
+    ).exec();
+    if (!client) throw new NotFoundError('OAuth client not found');
+    return change(client, session);
+  });
+
+/** Throws ZodError on an invalid role, ConflictError on a duplicate key, BadRequestError past the role limit. */
+export async function addOAuthClientRole(
+  id: string,
+  input: OAuthClientRole
+): Promise<{ client: OAuthClientView; role: OAuthClientRole }> {
+  const role = oauthClientRoleSchema.parse(input);
+  assertValidId(id);
+  return withLockedRoleClient({ _id: id }, async (current, session) => {
+    if (current.roles.length >= OAUTH_CLIENT_MAX_ROLES) {
+      throw new BadRequestError(`A client can offer at most ${OAUTH_CLIENT_MAX_ROLES} roles`);
+    }
+    if (current.roles.some(existing => existing.key === role.key)) {
+      throw new ConflictError(`This client already has a role "${role.key}"`);
+    }
+    const doc = await OAuthClientModel.findOneAndUpdate(
+      { _id: id },
+      { $push: { roles: role } },
+      { new: true, runValidators: true, session }
+    ).exec();
+    if (!doc) throw new NotFoundError('OAuth client not found');
+    await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, role.key, session);
+    return { client: toOAuthClientView(doc), role };
+  });
+}
+
+/**
+ * Removes the role from the client and deletes every assignment of it. With `actor`, a delegated admin is
+ * refused (ForbiddenError) when any current holder has admin access; the holders are read under the client lock.
+ */
+export async function removeOAuthClientRole(
+  id: string,
+  key: string,
+  options: { actor?: AdminIdentity } = {}
+): Promise<{
+  client: OAuthClientView;
+  role: OAuthClientRole;
+  removedAssignments: number;
+  removedUserIds: string[];
+}> {
+  assertValidId(id);
+  return withLockedRoleClient({ _id: id }, async (current, session) => {
+    const role = current.roles.find(existing => existing.key === key);
+    if (!role) throw new NotFoundError('Role not found on this client');
+    const removedUserIds = await oauthClientRoleAssignmentRepository.listUserIdsForRole(current.clientId, key, session);
+    if (options.actor) {
+      const holders = await User.find({ _id: { $in: removedUserIds.filter(uid => mongoose.isValidObjectId(uid)) } })
+        .select('isAdmin adminPermissions adminRoleIds')
+        .session(session)
+        .lean<AdminIdentity[]>()
+        .exec();
+      for (const holder of holders) assertCanActOnAdminTarget(options.actor, holder, 'remove an app role from');
+    }
+    const doc = await OAuthClientModel.findOneAndUpdate(
+      { _id: id },
+      { $pull: { roles: { key } } },
+      { new: true, runValidators: true, session }
+    ).exec();
+    if (!doc) throw new NotFoundError('OAuth client not found');
+    const removedAssignments = await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, key, session);
+    return {
+      client: toOAuthClientView(doc),
+      role: { key: role.key, label: role.label },
+      removedAssignments,
+      removedUserIds,
+    };
+  });
+}
+
+/** The client's roles, how many hold each and the earliest holders; assignments of an undefined role are left out. */
+export async function listOAuthClientRoles(id: string): Promise<OAuthClientRolesView> {
+  const client = await findClientOrThrow(id);
+  const byRole = await oauthClientRoleAssignmentRepository.listHoldersByClient(
+    client.clientId,
+    client.roles.map(r => r.key),
+    OAUTH_CLIENT_ROLE_HOLDERS_SHOWN
+  );
+  const rows = byRole.flatMap(r => r.rows);
+  const users = await User.find({ _id: { $in: [...new Set(rows.map(r => r.userId))] } })
+    .select('email name')
+    .lean<Array<{ _id: { toString(): string }; email?: string; name?: string }>>()
+    .exec();
+  const byId = new Map(users.map(u => [u._id.toString(), u]));
+  return {
+    roles: toOAuthClientView(client).roles,
+    holders: rows.map(row => {
+      const user = byId.get(row.userId.toLowerCase());
+      return {
+        userId: user?._id.toString() ?? row.userId,
+        role: row.role,
+        email: user?.email || null,
+        name: user?.name || null,
+        assignedBy: row.assignedBy,
+        assignedAt: new Date(row.assignedAt).toISOString(),
+      };
+    }),
+    holderCounts: Object.fromEntries(byRole.map(r => [r.role, r.count])),
+  };
+}
+
+/**
+ * Every client that offers roles or on which the user holds one, with the user's assignments. Lists
+ * assignments for a suspended user too: this is the admin view, not what a client can read
+ * (listRolesForUserAndClient in OAuthClientRoleAssignmentModel.ts).
+ */
+export async function listUserOAuthClientRoles(userId: string): Promise<UserOAuthClientRolesView[]> {
+  const user = await findUserOrThrow(userId);
+  const rows = await oauthClientRoleAssignmentRepository.listByUser(user.id);
+  const clients = await OAuthClientModel.find({
+    $or: [{ 'roles.0': { $exists: true } }, { clientId: { $in: rows.map(r => r.clientId) } }],
+  })
+    .sort({ name: 1 })
+    .exec();
+  return clients.map(client => {
+    const { roles } = toOAuthClientView(client);
+    const labels = new Map(roles.map(r => [r.key, r.label]));
+    return {
+      clientId: client.clientId,
+      clientName: client.name,
+      isActive: client.isActive,
+      roles,
+      assigned: rows
+        .filter(r => r.clientId === client.clientId && labels.has(r.role))
+        .map(r => ({
+          role: r.role,
+          label: labels.get(r.role) as string,
+          assignedBy: r.assignedBy,
+          assignedAt: new Date(r.assignedAt).toISOString(),
+        })),
+    };
+  });
+}
+
+type RoleAssignmentResult = { client: OAuthClientView; user: RoleUser; role: OAuthClientRole };
+
+/** Idempotent; `created` is false when the user already held the role. Throws BadRequestError for a role the client does not define. */
+export async function assignOAuthClientRole(params: {
+  userId: string;
+  clientId: string;
+  role: string;
+  assignedBy: string;
+}): Promise<RoleAssignmentResult & { created: boolean }> {
+  const user = await findUserOrThrow(params.userId);
+  return withLockedRoleClient({ clientId: params.clientId }, async (doc, session) => {
+    const client = toOAuthClientView(doc);
+    const role = client.roles.find(existing => existing.key === params.role);
+    if (!role) throw new BadRequestError(`This client does not offer a role "${params.role}"`);
+    // A real User write orders this grant with account deletion and its post-commit role purge.
+    const admission = await User.updateOne(
+      { _id: user.id, deletedAt: { $exists: false } },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false, runValidators: true }
+    ).exec();
+    if (!admission.matchedCount) throw new NotFoundError('User not found');
+    const { created } = await oauthClientRoleAssignmentRepository.assign(
+      {
+        userId: user.id,
+        clientId: client.clientId,
+        role: role.key,
+        assignedBy: params.assignedBy,
+      },
+      session
+    );
+    return { client, user, role, created };
+  });
+}
+
+/** Deletes the assignment; NotFoundError when the user does not hold the role. */
+export async function unassignOAuthClientRole(params: {
+  userId: string;
+  clientId: string;
+  role: string;
+}): Promise<RoleAssignmentResult> {
+  const user = await findUserOrThrow(params.userId);
+  return withLockedRoleClient({ clientId: params.clientId }, async (doc, session) => {
+    const client = toOAuthClientView(doc);
+    const removed = await oauthClientRoleAssignmentRepository.unassign(user.id, client.clientId, params.role, session);
+    if (!removed) throw new NotFoundError('This user does not hold that role');
+    // A removed role keeps its key as the audit label.
+    const role = client.roles.find(existing => existing.key === params.role) ?? {
+      key: params.role,
+      label: params.role,
+    };
+    return { client, user, role };
+  });
 }

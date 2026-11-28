@@ -13,7 +13,7 @@ vi.mock('@client/app/hooks/data/adminUserOAuthApps', () => ({ useAdminUserOAuthA
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
-  useGetUserProductAccess: () => ({ data: undefined, isLoading: false }),
+  useGetUserProductAccess: () => mocks.access,
 }));
 vi.mock('../../../Subscriptions/SubscriptionSummaryList', () => ({ SubscriptionSummaryList: () => null }));
 vi.mock('../RiskEvidenceCard', () => ({
@@ -65,14 +65,29 @@ const renderTab = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = { id: 'admin1' };
+  mocks.access = { data: undefined, isLoading: false };
   mocks.oauthApps.mockReturnValue({ data: undefined, isPending: true });
 });
+
+// Covered by OAuthClientRolesCard.test.tsx, for the same reason as InterventionHolds below.
+vi.mock('./OAuthClientRolesCard', () => ({
+  OAuthClientRolesCard: ({ user }: { user: { id: string } }) => <div data-testid={`oauth-roles-card-${user.id}`} />,
+}));
 
 // Covered by InterventionHolds.test.tsx; its own queries would shift this file's api mocks.
 vi.mock('../../../InterventionHolds', () => ({
   InterventionDecisionsPanel: () => null,
   InterventionHoldsCard: () => null,
 }));
+
+describe('OverviewTab app roles', () => {
+  it('shows the app roles card for the user', () => {
+    render(<OverviewTab user={buildProfile()} onAction={vi.fn()} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />, {
+      wrapper: ProfileTestWrapper,
+    });
+    expect(screen.getByTestId('oauth-roles-card-test-user-1')).toBeInTheDocument();
+  });
+});
 
 describe('OverviewTab internal account row', () => {
   it.each([
@@ -370,5 +385,178 @@ describe('OverviewTab Access card admin access', () => {
     renderCard({ id: 'admin1', adminPermissions: ['support:read'] });
 
     expect(screen.queryByTestId('user-profile-admin-permissions-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('OverviewTab account and access rows', () => {
+  const empty = { data: { entries: [], nextCursor: null, notes: [], items: [] } };
+  const SUPPORT_ROLE = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+
+  const renderWith = (user: Parameters<typeof buildProfile>[0] = {}) => {
+    const onAction = vi.fn();
+    render(
+      <OverviewTab user={buildProfile(user)} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />,
+      {
+        wrapper: ProfileTestWrapper,
+      }
+    );
+    return onAction;
+  };
+
+  beforeEach(() => {
+    mocks.get.mockResolvedValue(empty);
+  });
+
+  it.each([
+    [true, 'Verified', 'Mark unverified'],
+    [false, 'Unverified', 'Mark verified'],
+  ])('with emailVerified %s shows %s and offers %s', (emailVerified, chip, button) => {
+    const onAction = renderWith({ emailVerified });
+    expect(screen.getByTestId('user-profile-fact-email')).toHaveTextContent(chip);
+    expect(screen.getByTestId('user-profile-email-verification-btn')).toHaveTextContent(button);
+    fireEvent.click(screen.getByTestId('user-profile-email-verification-btn'));
+    expect(onAction).toHaveBeenCalledWith('emailVerification');
+  });
+
+  it('joins the signup method, date and country', () => {
+    renderWith({
+      acquisition: { signupMethod: 'google' },
+      signupMeta: { country: 'Norway' },
+    } as Parameters<typeof buildProfile>[0]);
+    expect(screen.getByText(/google \u00b7 .* \u00b7 Norway/)).toBeInTheDocument();
+  });
+
+  it('leaves the signup row empty when nothing is known about it', () => {
+    renderWith({ createdAt: undefined } as unknown as Parameters<typeof buildProfile>[0]);
+    expect(screen.queryByText(/\u00b7/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [{ totpEnabled: true, passkeyEnabled: false }, 'Authenticator app'],
+    [{ totpEnabled: false, passkeyEnabled: true }, 'Passkey'],
+    [{ totpEnabled: true, passkeyEnabled: true }, 'Authenticator app + Passkey'],
+  ])('shows %o as %s and opens the MFA reset', (mfa, text) => {
+    const onAction = renderWith({ mfa } as Parameters<typeof buildProfile>[0]);
+    expect(screen.getByTestId('user-profile-fact-mfa')).toHaveTextContent(text);
+    fireEvent.click(screen.getByTestId('user-profile-mfa-reset-btn'));
+    expect(onAction).toHaveBeenCalledWith('mfaReset');
+  });
+
+  it('shows Not set up without MFA', () => {
+    renderWith();
+    expect(screen.getByTestId('user-profile-fact-mfa')).toHaveTextContent('Not set up');
+    expect(screen.queryByTestId('user-profile-mfa-reset-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows a trusted key state and opens the trust action', () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    const onAction = renderWith({ apiKeyTrustApproved: true });
+    expect(screen.getByTestId('user-profile-fact-key-trust')).toHaveTextContent('Trusted');
+    fireEvent.click(screen.getByTestId('user-profile-key-trust-btn'));
+    expect(onAction).toHaveBeenCalledWith('apiKeyTrust');
+  });
+
+  it('shows a lifted spend cap and opens the spend cap action', () => {
+    const onAction = renderWith({ newAccountSpendCapLifted: true });
+    expect(screen.getByTestId('user-profile-fact-spend-cap')).toHaveTextContent('Lifted');
+    fireEvent.click(screen.getByTestId('user-profile-spend-cap-btn'));
+    expect(onAction).toHaveBeenCalledWith('newAccountSpendCap');
+  });
+
+  it('shows the default spend cap text', () => {
+    renderWith();
+    expect(screen.getByTestId('user-profile-fact-spend-cap')).toHaveTextContent('Applies while the account is new');
+  });
+
+  it.each([
+    [2.5e9, '2.5 GB'],
+    [5e6, '5.0 MB'],
+    [3e3, '3 KB'],
+  ])('formats %d bytes of storage as %s', (currentStorageSize, text) => {
+    renderWith({ currentStorageSize });
+    expect(screen.getByText(new RegExp(`^${text.replace('.', '\\.')} of `))).toBeInTheDocument();
+  });
+
+  it('opens the role, tags and grant subscription actions', () => {
+    const onAction = renderWith();
+    fireEvent.click(screen.getByTestId('user-profile-change-role-btn'));
+    fireEvent.click(screen.getByTestId('user-profile-tags-btn'));
+    fireEvent.click(screen.getByTestId('user-profile-grant-subscription-btn'));
+    expect(onAction.mock.calls.map(call => call[0])).toEqual(['role', 'tags', 'subscription']);
+  });
+
+  it('lists custom tags and treats a missing tag list as none', () => {
+    renderWith({ tags: ['vip'] });
+    expect(screen.getByTestId('user-profile-fact-tags')).toHaveTextContent('vip');
+  });
+
+  it('shows None for tags when the profile has no tag list', () => {
+    renderWith({ tags: undefined });
+    expect(screen.getByTestId('user-profile-fact-tags')).toHaveTextContent('None');
+  });
+
+  it('shows the product access states and opens the manage action', () => {
+    mocks.access = { data: undefined, isLoading: true };
+    const onAction = renderWith();
+    expect(screen.getByTestId('user-profile-fact-products')).toHaveTextContent('...');
+    fireEvent.click(screen.getByTestId('user-profile-product-access-btn'));
+    expect(onAction).toHaveBeenCalledWith('productAccess');
+  });
+
+  it('names only the held product entitlements', () => {
+    mocks.access = {
+      data: {
+        entitlements: [
+          { key: 'studio', held: true },
+          { key: 'labs', held: false },
+        ],
+      },
+      isLoading: false,
+    };
+    renderWith();
+    const row = screen.getByTestId('user-profile-fact-products');
+    expect(row).toHaveTextContent('studio');
+    expect(row).not.toHaveTextContent('labs');
+  });
+
+  it('shows None when no entitlement is held', () => {
+    mocks.access = { data: { entitlements: [{ key: 'labs', held: false }] }, isLoading: false };
+    renderWith();
+    expect(screen.getByTestId('user-profile-fact-products')).toHaveTextContent('None');
+  });
+
+  it('says None when the held role ids match no known role', async () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    mocks.get.mockImplementation(async (url: string) =>
+      url.includes('admin-roles') ? { data: { roles: [] } } : empty
+    );
+    renderWith({ adminRoleIds: [SUPPORT_ROLE] });
+    await waitFor(() => expect(screen.getByTestId('user-profile-fact-admin-roles')).toHaveTextContent('None'));
+  });
+
+  it('shows a singular role count when the list is unavailable', async () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.includes('admin-roles')) throw new Error('boom');
+      return empty;
+    });
+    renderWith({ adminRoleIds: [SUPPORT_ROLE] });
+    await waitFor(() => expect(screen.getByTestId('user-profile-fact-admin-roles')).toHaveTextContent('1 role'));
+  });
+
+  it('opens the permissions editor for a full admin viewing another account', () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    const onAction = renderWith();
+    fireEvent.click(screen.getByTestId('user-profile-admin-permissions-btn'));
+    expect(onAction).toHaveBeenCalledWith('permissions');
+  });
+
+  it('closes the audit drawer from its close button', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [adminRow], nextCursor: null } });
+    renderWith();
+    fireEvent.click(await screen.findByTestId('user-profile-recent-activity-row-open-btn'));
+    expect(await screen.findByTestId('audit-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('audit-drawer-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('audit-drawer')).not.toBeInTheDocument());
   });
 });

@@ -15,6 +15,7 @@ const {
   removeFromWatchesMock,
   removeFromEvalSetsMock,
   deleteLimitEventsMock,
+  deleteRoleAssignmentsMock,
   deleteSignInsMock,
   findUserMock,
 } = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ const {
   removeFromWatchesMock: vi.fn(),
   removeFromEvalSetsMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
+  deleteRoleAssignmentsMock: vi.fn(),
   deleteSignInsMock: vi.fn(),
   findUserMock: vi.fn(),
 }));
@@ -47,6 +49,7 @@ vi.mock('@bike4mind/database', () => ({
   abuseEvalSetRepository: { removeUser: removeFromEvalSetsMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
   oauthClientSignInRepository: { deleteAllForUser: deleteSignInsMock },
+  oauthClientRoleAssignmentRepository: { deleteAllForUser: deleteRoleAssignmentsMock },
 }));
 vi.mock('../auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('./publish/purgeUserPublishedArtifacts', () => ({
@@ -76,6 +79,7 @@ beforeEach(() => {
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
   deleteSignInsMock.mockReset().mockResolvedValue(0);
+  deleteRoleAssignmentsMock.mockReset().mockResolvedValue(0);
   removeFromDetectionsMock.mockReset().mockResolvedValue(0);
   removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
   removeFromEvalSetsMock.mockReset().mockResolvedValue(0);
@@ -101,6 +105,7 @@ describe('purgeDeletedUserData', () => {
     expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
     expect(deleteSignInsMock).toHaveBeenCalledWith('u1');
+    expect(deleteRoleAssignmentsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
   });
 
@@ -135,6 +140,17 @@ describe('purgeDeletedUserData', () => {
 
     await expect(readUserIntegrationGrants('u1')).resolves.toBe(grants);
     expect(findUserMock).toHaveBeenCalledWith('u1', 'googleDrive atlassianConnect');
+  });
+
+  it('logs instead of throwing when deleting OAuth client role assignments fails', async () => {
+    deleteRoleAssignmentsMock.mockRejectedValue(new Error('roles down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('OAuth client role assignments'));
+    expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
   });
 
   it('logs instead of throwing when removing the user from shadow detections fails', async () => {

@@ -24,6 +24,7 @@ export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './OAuthClientSignInModel';
 export * from './oauthClientAdmin';
+export * from './OAuthClientRoleAssignmentModel';
 export { getOAuthClientUsageStats } from './oauthClientUsageStats';
 export * from './OAuthGrantModel';
 export * from './OAuthRefreshTokenModel';

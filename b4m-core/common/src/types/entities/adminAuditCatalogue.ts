@@ -187,6 +187,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'oauth_client.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'oauth_client.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'oauth_client.deactivated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.role_added': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.role_removed': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.role_assigned': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.role_unassigned': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'system_health.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },

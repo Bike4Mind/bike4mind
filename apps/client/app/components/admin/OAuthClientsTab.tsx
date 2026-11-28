@@ -68,6 +68,7 @@ import {
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { RowActionsMenu } from './shared/RowActionsMenu';
+import { OAuthClientRolesSection } from './OAuthClientRolesSection';
 import { AdminPermissionAction, useFullAdminOnlyReason } from './shared/MissingPermission';
 import { usersTabLinkSearch } from './Users/usersTabSearch';
 
@@ -223,8 +224,9 @@ export const validateUnpaidLimit = (field: UnpaidLimitField, text: string): stri
 const unpaidLimitsFromForm = (form: UnpaidLimitsForm): OAuthClientUnpaidAccountLimits | null => {
   const limits: Partial<OAuthClientUnpaidAccountLimits> = {};
   for (const field of UNPAID_LIMIT_FIELDS) {
-    if (validateUnpaidLimit(field, form[field.formKey])) return null;
-    limits[field.key] = parseLimitText(form[field.formKey]) ?? 0;
+    const value = parseLimitText(form[field.formKey]);
+    if (value === null || validateUnpaidLimit(field, form[field.formKey])) return null;
+    limits[field.key] = value;
   }
   return limits as OAuthClientUnpaidAccountLimits;
 };
@@ -524,10 +526,14 @@ function UnpaidAccountLimitsFields({
                       </Typography>
                     }
                   />
-                  {(error || globalValue !== undefined) && (
-                    <FormHelperText>
-                      {error ?? (globalValue === 0 ? 'Global: no limit' : `Global: ${formatCount(globalValue ?? 0)}`)}
-                    </FormHelperText>
+                  {error ? (
+                    <FormHelperText>{error}</FormHelperText>
+                  ) : (
+                    globalValue !== undefined && (
+                      <FormHelperText>
+                        {globalValue === 0 ? 'Global: no limit' : `Global: ${formatCount(globalValue)}`}
+                      </FormHelperText>
+                    )
                   )}
                   {field.formKey === 'tpm' && (
                     <FormHelperText>
@@ -658,12 +664,14 @@ function ClientRowMenu({
   onEdit,
   onRotate,
   onViewUsage,
+  onManageRoles,
   writeBlocked,
 }: {
   client: OAuthClientView;
   onEdit: () => void;
   onRotate: () => void;
   onViewUsage: () => void;
+  onManageRoles: () => void;
   writeBlocked: string | null;
 }) {
   return (
@@ -675,6 +683,9 @@ function ClientRowMenu({
           </MenuItem>
         )}
       </AdminPermissionAction>
+      <MenuItem onClick={onManageRoles} data-testid={`oauth-client-roles-${client.clientId}`}>
+        Manage roles
+      </MenuItem>
       <MenuItem onClick={onViewUsage} data-testid={`oauth-client-usage-${client.clientId}`}>
         View usage
       </MenuItem>
@@ -707,6 +718,7 @@ export default function OAuthClientsTab() {
   } | null>(null);
   const [rotateTarget, setRotateTarget] = useState<OAuthClientView | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OAuthClientView | null>(null);
+  const [rolesTarget, setRolesTarget] = useState<OAuthClientView | null>(null);
   // The secret is held in state and in the create/rotate mutation result; both are cleared when the modal closes (gcTime 0).
   const [secretResult, setSecretResult] = useState<{ result: OAuthClientWithSecret; rotated: boolean } | null>(null);
 
@@ -817,8 +829,7 @@ export default function OAuthClientsTab() {
     editForm.unpaidLimits.enabled &&
     UNPAID_LIMIT_FIELDS.some(f => validateUnpaidLimit(f, editForm.unpaidLimits[f.formKey]));
 
-  const saveEdit = () => {
-    if (!editTarget || !editForm) return;
+  const saveEdit = (editTarget: OAuthClientView, editForm: EditForm) => {
     setFormError(null);
     const payload = buildEditPayload(editTarget, editForm);
     if (Object.keys(payload).length === 0) return setEditTarget(null);
@@ -1058,6 +1069,7 @@ export default function OAuthClientsTab() {
             client={client}
             onEdit={() => openEdit(client)}
             onRotate={() => setRotateTarget(client)}
+            onManageRoles={() => setRolesTarget(client)}
             writeBlocked={writeBlocked}
             onViewUsage={() => {
               useCreditAnalysisStore.getState().openSideApps(client.clientId);
@@ -1071,6 +1083,10 @@ export default function OAuthClientsTab() {
         maxHeight="none"
         pagination={false}
       />
+
+      {rolesTarget && (
+        <OAuthClientRolesSection key={rolesTarget.id} client={rolesTarget} onClose={() => setRolesTarget(null)} />
+      )}
 
       <AdminDialog
         open={createOpen}
@@ -1325,14 +1341,16 @@ export default function OAuthClientsTab() {
             >
               Cancel
             </Button>
-            <Button
-              loading={editMutation.isPending}
-              disabled={unpaidLimitsInvalid}
-              onClick={saveEdit}
-              data-testid="oauth-client-edit-save-btn"
-            >
-              Save changes
-            </Button>
+            {editTarget && editForm && (
+              <Button
+                loading={editMutation.isPending}
+                disabled={unpaidLimitsInvalid}
+                onClick={() => saveEdit(editTarget, editForm)}
+                data-testid="oauth-client-edit-save-btn"
+              >
+                Save changes
+              </Button>
+            )}
           </Stack>
         </DialogContent>
       </AdminDialog>
@@ -1388,53 +1406,53 @@ export default function OAuthClientsTab() {
       </AdminDialog>
 
       {/* Both endpoints are audited but take no reason, so the dialogs collect one without sending it. */}
-      <ActionDialog
-        open={!!rotateTarget}
-        onClose={() => setRotateTarget(null)}
-        title="Rotate client secret"
-        description={
-          <>
-            Generate a new secret for <b>{rotateTarget?.name}</b>? The current secret stops working immediately, so the
-            app cannot sign users in until it is updated with the new one.
-          </>
-        }
-        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRotate}
-        reasonAudited={false}
-        tone="danger"
-        confirmLabel="Rotate secret"
-        pending={rotateMutation.isPending}
-        onConfirm={() => {
-          if (rotateTarget) rotateMutation.mutate(rotateTarget);
-        }}
-        data-testid="oauth-client-rotate-modal"
-        testIds={{ confirm: 'oauth-client-rotate-confirm-btn' }}
-      />
+      {rotateTarget && (
+        <ActionDialog
+          open
+          onClose={() => setRotateTarget(null)}
+          title="Rotate client secret"
+          description={
+            <>
+              Generate a new secret for <b>{rotateTarget.name}</b>? The current secret stops working immediately, so the
+              app cannot sign users in until it is updated with the new one.
+            </>
+          }
+          reasonPresets={ADMIN_REASON_PRESETS.oauthClientRotate}
+          reasonAudited={false}
+          tone="danger"
+          confirmLabel="Rotate secret"
+          pending={rotateMutation.isPending}
+          onConfirm={() => rotateMutation.mutate(rotateTarget)}
+          data-testid="oauth-client-rotate-modal"
+          testIds={{ confirm: 'oauth-client-rotate-confirm-btn' }}
+        />
+      )}
 
-      <ActionDialog
-        open={!!deactivateTarget}
-        onClose={() => setDeactivateTarget(null)}
-        title="Deactivate client"
-        description={
-          <>
-            Deactivate <b>{deactivateTarget?.name}</b>? It can no longer start sign-ins or exchange codes for tokens
-            until it is reactivated.{' '}
-            {deactivateTarget?.clientType === 'first-party'
-              ? 'Sessions it already created are not ended.'
-              : 'Access tokens it already issued stay valid until they expire.'}{' '}
-            Nothing is deleted.
-          </>
-        }
-        reasonPresets={ADMIN_REASON_PRESETS.oauthClientDeactivate}
-        reasonAudited={false}
-        tone="danger"
-        confirmLabel="Deactivate client"
-        pending={activeMutation.isPending}
-        onConfirm={() => {
-          if (deactivateTarget) activeMutation.mutate({ client: deactivateTarget, isActive: false });
-        }}
-        data-testid="oauth-client-deactivate-modal"
-        testIds={{ confirm: 'oauth-client-deactivate-confirm-btn' }}
-      />
+      {deactivateTarget && (
+        <ActionDialog
+          open
+          onClose={() => setDeactivateTarget(null)}
+          title="Deactivate client"
+          description={
+            <>
+              Deactivate <b>{deactivateTarget.name}</b>? It can no longer start sign-ins or exchange codes for tokens
+              until it is reactivated.{' '}
+              {deactivateTarget.clientType === 'first-party'
+                ? 'Sessions it already created are not ended.'
+                : 'Access tokens it already issued stay valid until they expire.'}{' '}
+              Nothing is deleted.
+            </>
+          }
+          reasonPresets={ADMIN_REASON_PRESETS.oauthClientDeactivate}
+          reasonAudited={false}
+          tone="danger"
+          confirmLabel="Deactivate client"
+          pending={activeMutation.isPending}
+          onConfirm={() => activeMutation.mutate({ client: deactivateTarget, isActive: false })}
+          data-testid="oauth-client-deactivate-modal"
+          testIds={{ confirm: 'oauth-client-deactivate-confirm-btn' }}
+        />
+      )}
 
       {secretResult && (
         <SecretModal

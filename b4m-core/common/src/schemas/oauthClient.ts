@@ -229,6 +229,7 @@ export interface OAuthClientView {
   /** Unset means allowed. False keeps the app's exchange keys paid-only under the paid API key switch. */
   unpaidAccountsAllowed?: boolean;
   overwatchProductId?: string;
+  roles: OAuthClientRole[];
   // Null for legacy documents written before timestamps were enabled.
   createdAt: string | null;
   updatedAt: string | null;
@@ -254,4 +255,62 @@ export interface AdminUserOAuthApps {
 export interface OAuthClientWithSecret {
   client: OAuthClientView;
   clientSecret: string;
+}
+
+export const OAUTH_CLIENT_MAX_ROLES = 20;
+
+/** A role key as the app will read it from its claims: short, lower-case and stable. */
+export const oauthClientRoleKeySchema = z
+  .string()
+  .trim()
+  .min(1, 'Role key is required')
+  .max(32, 'Role key is too long')
+  .regex(/^[a-z][a-z0-9_-]*$/, 'Use lower-case letters, digits, - and _, starting with a letter');
+
+export const oauthClientRoleSchema = z
+  .object({
+    key: oauthClientRoleKeySchema,
+    label: z.string().trim().min(1, 'Label is required').max(64, 'Label is too long'),
+  })
+  .strict();
+
+export type OAuthClientRole = z.infer<typeof oauthClientRoleSchema>;
+
+/** Assign or remove one role for one user; `clientId` is the OAuth client_id, not the record id. */
+export const oauthClientRoleAssignmentInputSchema = z
+  .object({
+    clientId: z.string().trim().min(1, 'Client is required').max(200),
+    role: oauthClientRoleKeySchema,
+  })
+  .strict();
+
+export type OAuthClientRoleAssignmentInput = z.infer<typeof oauthClientRoleAssignmentInputSchema>;
+
+/** A user holding a role on a client, as the OAuth clients admin page lists it. */
+export interface OAuthClientRoleHolderView {
+  userId: string;
+  role: string;
+  email: string | null;
+  name: string | null;
+  assignedBy: string;
+  assignedAt: string;
+}
+
+/** How many holders of each role the admin page lists; `holderCounts` has the full number. */
+export const OAUTH_CLIENT_ROLE_HOLDERS_SHOWN = 50;
+
+/** A client's roles plus who holds each: the earliest OAUTH_CLIENT_ROLE_HOLDERS_SHOWN per role. */
+export interface OAuthClientRolesView {
+  roles: OAuthClientRole[];
+  holders: OAuthClientRoleHolderView[];
+  holderCounts: Record<string, number>;
+}
+
+/** One client's roles held by a user, as admin user detail lists them. */
+export interface UserOAuthClientRolesView {
+  clientId: string;
+  clientName: string;
+  isActive: boolean;
+  roles: OAuthClientRole[];
+  assigned: Array<{ role: string; label: string; assignedBy: string; assignedAt: string }>;
 }

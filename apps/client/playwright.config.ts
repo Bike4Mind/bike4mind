@@ -283,6 +283,7 @@ const config = defineConfig({
         /(?:^|\/)admin-approvals\.spec\.ts$/,
         /(?:^|\/)admin-tutorials\.spec\.ts$/,
         /(?:^|\/)oauth-logout\.spec\.ts$/,
+        /(?:^|\/)admin-oauth-client-roles\.spec\.ts$/,
       ],
     },
     // Per-spec test projects (each depends only on its own setup)
