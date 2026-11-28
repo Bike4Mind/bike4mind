@@ -151,13 +151,10 @@ export interface PrefixArmChanges {
   leaves: PrefixArmChange[];
   /**
    * The mirror case: every lake a file is about to JOIN by newly satisfying a prefix arm it did
-   * not satisfy before. The MEMBERSHIP itself needs no gate - tagging your own file with your own
-   * lake's folder tag is today's already-accepted "automatic membership" model (the fallback
-   * tagger stamps the same content tags with no permission check) - but callers gate the
-   * `recomputeLakeStats` call this feeds with `canManageLake` anyway: that recompute also flips a
-   * draft lake to active (a one-way, publication-visibility change), and `fileOwnerUserId` above
-   * is the FILE's owner, not necessarily the acting user - an unrelated file-share recipient must
-   * not be able to force-publish a lake they do not manage.
+   * not satisfy before. Callers gate each one with `canManageLake`, like a leave: the arm is
+   * anchored to the immutable `createdByUserId`, and `fileOwnerUserId` above is the FILE's owner,
+   * not necessarily the acting user, so neither a creator who no longer manages the lake nor a
+   * file-share recipient can add members through it.
    */
   joins: PrefixArmChange[];
 }

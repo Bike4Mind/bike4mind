@@ -543,30 +543,49 @@ describe('reconcileLakeTags', () => {
       });
     });
 
-    // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
-    // stats recompute's activation side effect also flips a draft lake to active - a one-way
-    // publication change a mere file-share recipient must not be able to force onto a lake they
-    // do not manage. Stats still get corrected (so they don't drift forever), just never the
-    // activation.
-    it('corrects stats but never activates on a prefix-arm join by an actor who cannot manage the lake', async () => {
-      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner', status: 'draft' })]);
+    // A prefix-arm join is membership, so an actor who cannot manage the lake is refused before any write.
+    it('refuses a prefix-arm join by an actor who cannot manage the lake', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
       adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
 
-      const result = await reconcileLakeTags(
-        { userId: 'not-the-owner', isAdmin: false },
-        'f1',
-        [],
-        [tag('lk:invoices', 1)],
-        adapters as any
-      );
-      await result.commit();
+      await expect(
+        reconcileLakeTags(
+          { userId: 'not-the-owner', isAdmin: false },
+          'f1',
+          [],
+          [tag('lk:invoices', 1)],
+          adapters as never
+        )
+      ).rejects.toThrow('You do not have permission to add files to this data lake');
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
-        fileCount: 4,
-        totalSizeBytes: 40,
-        totalChunkedChars: 0,
-      });
-      expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+    it("refuses a curator's prefix-arm join of the lake owner's file", async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+      adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
+      (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'lake1', principalType: 'user', principalId: 'curator', role: 'curator' }]),
+      };
+
+      await expect(
+        reconcileLakeTags({ userId: 'curator', isAdmin: false }, 'f1', [], [tag('lk:invoices', 1)], adapters as never)
+      ).rejects.toThrow('You do not have permission to add files to this data lake');
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
+
+    it('refuses a prefix-arm join by the creator once ownership has moved to someone else', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+      (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'lake1', principalType: 'user', principalId: 'new-owner', role: 'owner' }]),
+      };
+
+      await expect(reconcileLakeTags(owner, 'f1', [], [tag('lk:invoices', 1)], adapters as never)).rejects.toThrow(
+        'You do not have permission to add files to this data lake'
+      );
     });
 
     // Pins the API-key scope gate itself: the route's own scope check never sees this tag (it

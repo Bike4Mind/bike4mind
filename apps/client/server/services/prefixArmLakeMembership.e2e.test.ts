@@ -135,26 +135,25 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   });
 
-  // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
-  // predicate grants it purely on the tag). recomputeLakeStats never flips a draft lake to
-  // active on its own now - publishing is an explicit, separate action (promoteDataLake) - so a
-  // shared editor tagging the OWNER's file with the OWNER's own lake prefix cannot affect the
-  // lake's publication state either way. Stats still get corrected (real aggregate, not a mock)
-  // so they don't drift until some other door happens to touch this lake again.
-  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
+  // A prefix-arm join is membership, so a shared editor who cannot manage the lake is refused.
+  it('refuses a prefix-arm join by a shared editor and leaves the lake untouched', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
     const editor = { id: editorId, isAdmin: false } as any;
 
-    await fabFilesService.updateFabFile(
-      editor,
-      { id: file.id as string, tags: [{ name: 'lk:invoices', strength: 1 }] },
-      { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
-    );
+    await expect(
+      fabFilesService.updateFabFile(
+        editor,
+        { id: file.id as string, tags: [{ name: 'lk:invoices', strength: 1 }] },
+        { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
 
+    const persistedFile = await FabFile.findById(file.id);
+    expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual([]);
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(1);
+    expect(persistedLake?.fileCount).toBe(0);
   });
 
   // The lake OWNER gets no special treatment either: joining a file is not how a lake gets
@@ -225,27 +224,31 @@ describe('toggleTags against real Mongo', () => {
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   });
 
-  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
+  it('refuses a prefix-arm join by a shared editor and leaves the lake untouched', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
 
-    await fabFilesService.toggleTags(
-      editorId,
-      { ids: [file.id], tags: ['lk:invoices'] },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          memoryLedger: memoryLedgerRepository,
-          fileTags: fileTagRepository,
-          dataLakes: dataLakeRepository,
-          users: userRepository,
-        },
-      }
-    );
+    await expect(
+      fabFilesService.toggleTags(
+        editorId,
+        { ids: [file.id], tags: ['lk:invoices'] },
+        {
+          db: {
+            fabFiles: fabFileRepository,
+            memoryLedger: memoryLedgerRepository,
+            fileTags: fileTagRepository,
+            dataLakes: dataLakeRepository,
+            users: userRepository,
+          },
+        }
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
 
+    const persistedFile = await FabFile.findById(file.id);
+    expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual([]);
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(1);
+    expect(persistedLake?.fileCount).toBe(0);
   });
 });
 

@@ -251,6 +251,16 @@ export const toggleTags = async (
         assertLakeWritable(lake);
       }
     }
+    // A prefix-arm join is membership, so it needs the same current manage rights as a leave, plus
+    // the cold-add ownership rule the meta-tag join below applies.
+    for (const file of fabFiles) {
+      for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
+        const grants = grantResolver.get(lake.id);
+        if (!canManageLake(lake, actor, grants) || !canColdAddFileToLake(lake, actor, grants, file.userId)) {
+          throw new BadRequestError('You do not have permission to add files to this data lake');
+        }
+      }
+    }
 
     // The admission contract (#1680) for the OTHER membership signal. A prefix-arm join makes a
     // file a member with no `datalake:*` meta-tag involved, so gating only the meta-tag path would
@@ -466,9 +476,7 @@ export const toggleTags = async (
         await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
       }
     }
-    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag) - and,
-    // now that a stats recompute can no longer publish a lake as a side effect, no
-    // manage-rights split is needed either. Every prefix-arm join just needs its stats corrected.
+    // Every prefix-arm join already passed its gate in the pre-write pass; it just needs its stats corrected.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
       touchedLakes.set(lake.id, lake);
     }

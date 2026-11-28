@@ -49,6 +49,7 @@ import { checkApiKeyRateLimitOrThrow, checkRateLimit, type ApiKeyInfo } from '@b
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';

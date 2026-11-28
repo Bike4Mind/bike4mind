@@ -294,19 +294,15 @@ export const reconcileLakeTags = async (
   // Only the prefix arm reaches here with no route-level scope check yet - see
   // assertWriteScope's own doc comment.
   if (prefixArmJoins.length > 0) assertWriteScope?.();
-  // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
-  // (today's accepted model for content tags - the read-side predicate grants it purely on the
-  // tag, with no permission check either). `joins`/`statsOnlyJoins` used to also decide whether a
-  // recompute could publish a draft lake (activateIfDraft) - that side effect is gone, so
-  // the split below is now only a bookkeeping convenience (managed vs predicate-only membership),
-  // not a gate: both arrays get the same stats recompute in commit() below.
+  // The mirror case: a write that newly satisfies a lake's prefix arm is membership, gated on
+  // current manage rights and the cold-add ownership rule, as in toggleTags.
   // Prime grants for the prefix-arm lakes (the unmanaged-dropped-prefix check further down
   // consults them), reusing the cached meta-tag lakes.
   await grantResolver.prime([...prefixArmJoins.map(j => j.lake), ...prefixArmCandidateLakes]);
-  const statsOnlyJoins: MembershipLake[] = [];
   for (const j of prefixArmJoins) {
-    if (canManage(j.lake)) joins.push(j.lake);
-    else statsOnlyJoins.push(j.lake);
+    const mayJoin = canManage(j.lake) && canColdAddFileToLake(j.lake, actor, grantResolver.get(j.lake.id), owner);
+    if (!mayJoin) throw new BadRequestError('You do not have permission to add files to this data lake');
+    joins.push(j.lake);
   }
 
   // The admission contract (#1680) over EVERY lake this write joins - meta-tag and prefix-arm,
@@ -318,7 +314,7 @@ export const reconcileLakeTags = async (
   // An unresolvable owner joins nothing (see the owner warning above), so there is nothing to grade.
   if (owner !== undefined) {
     await assertLakeAdmission(
-      [...joins, ...statsOnlyJoins],
+      joins,
       [
         {
           id: fabFileId,
@@ -354,9 +350,8 @@ export const reconcileLakeTags = async (
   // above. (b)/(c) matter because the meta-tag preserve only protects membership, not the lake's
   // curated content-tag taxonomy - a mere file-share recipient (findAccessibleById admits a read/
   // write share) could otherwise use this whole-array door to silently strip or rewrite another
-  // user's lake's content tags despite having no rights over that lake at all. (This does not
-  // extend to a NEW content tag under a lake's prefix - adding one is today's accepted "automatic
-  // membership" model for content tags, unchanged by this fix.) Restores each tag's ORIGINAL
+  // user's lake's content tags despite having no rights over that lake at all. (A NEW content tag
+  // under a lake's prefix is a join, refused above for an actor who cannot manage it.) Restores each tag's ORIGINAL
   // strength (a content tag's strength is user-meaningful, unlike a meta-tag's fixed
   // DATALAKE_TAG_STRENGTH; a stored tag with none defaults to 0, matching every other content-tag
   // write in this codebase - never the meta-tag constant), so re-fetch the stored doc only on this
@@ -407,7 +402,7 @@ export const reconcileLakeTags = async (
       // Recorded BEFORE the stats recompute, not after: the join is already persisted by the time
       // `commit()` runs, and recording is best-effort while `recomputeLakeStats` can throw - a
       // throw there would otherwise lose this lake's event AND every later join's in one go.
-      for (const lake of [...joins, ...statsOnlyJoins]) {
+      for (const lake of joins) {
         if (recomputed.has(lake.id)) continue;
         await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin: 'person' }, { db, logger });
         await recomputeLakeStats(lake, { db, logger });
