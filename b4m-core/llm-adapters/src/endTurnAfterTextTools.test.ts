@@ -204,8 +204,8 @@ const anthropicSpec: BackendSpec = {
 const openaiSpec: BackendSpec = {
   name: 'OpenAIBackend',
   model: 'gpt-4o',
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- constructor takes a key bag
-  build: openAICompatibleBuild(() => new OpenAIBackend({ openai: 'test-key' } as any)),
+
+  build: openAICompatibleBuild(() => new OpenAIBackend('test-key')),
   round: openAICompatibleRound,
 };
 

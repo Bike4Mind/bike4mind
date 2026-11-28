@@ -295,6 +295,18 @@ describe('ConnectionManager: connection states', () => {
     expect(state()).toMatchObject({ status: 'connected' });
   });
 
+  it("does not charge the connector's prepare step to the connect timeout", async () => {
+    const { state, host, manager } = setUp({ connect: false, tuning: { connectTimeoutMs: 10_000 } });
+    host.prepareDelayMs = 25_000;
+    host.connectDelayMs = 5_000;
+    manager.connect('devbox');
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(state()).toEqual({ status: 'connecting' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+    expect(host.connections).toHaveLength(1);
+  });
+
   it('retries at once on wake instead of waiting out the backoff', async () => {
     const { state, wake } = setUp({
       tuning: { backoff: { baseMs: 60_000, capMs: 60_000 } },
@@ -807,5 +819,49 @@ describe('ConnectionManager: resuming across a cut', () => {
     host.emit('s1');
     expect(window.seqs('s1')).toEqual([1, 2, 3]);
     expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
+  });
+});
+
+describe('user actions and saved state', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('tells a registrant about connect, disconnect and remove, and never about register or unregister', async () => {
+    const manager = new ConnectionManager({
+      client: CLIENT,
+      account: { current: () => ACCOUNT, onChanged: () => () => undefined },
+      tuning: TUNING,
+    });
+    const actions: string[] = [];
+    const register = (hostId: string) =>
+      manager.register(hostId, new FakeHost().connector, {
+        label: hostId,
+        kind: 'remote',
+        onUserAction: action => actions.push(`${hostId}:${action}`),
+      });
+    register('a');
+    register('b');
+    await settle();
+
+    manager.disconnect('a');
+    manager.connect('a');
+    manager.remove('a');
+    manager.unregister('b');
+
+    expect(actions).toEqual(['a:disconnect', 'a:connect', 'a:remove']);
+  });
+
+  it('reports a saved last-seen time while a host has not been reached in this run', () => {
+    const manager = new ConnectionManager({
+      client: CLIENT,
+      account: { current: () => ACCOUNT, onChanged: () => () => undefined },
+      tuning: TUNING,
+    });
+    manager.register('a', new FakeHost().connector, { label: 'a', kind: 'remote', connect: false, lastSeenAt: 42 });
+    expect(manager.list()[0].state).toEqual({ status: 'offline', reason: 'disconnected', lastSeenAt: 42 });
   });
 });

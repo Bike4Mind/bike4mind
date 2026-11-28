@@ -52,7 +52,8 @@ import {
   getLatestToolCallIdCanonical,
 } from './backend';
 import { Logger } from '@bike4mind/observability';
-import { recordProviderCredentialUse } from './providerCredentialMetrics';
+import { normalizeProviderCredential, type ProviderCredentialSpec } from './providerAuth';
+import { resolveCredentialBeforeSend } from './providerCredentialResolution';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
@@ -271,7 +272,11 @@ export class AnthropicBackend implements ICompletionBackend {
   // Anthropic can attribute abuse to an individual user and scope enforcement
   // to them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
-  private readonly usesFederatedCredentials: boolean;
+  private readonly credential: ProviderCredentialSpec;
+  // The federated client, or why it could not be built (then each request falls back).
+  private federatedApi?: Anthropic;
+  private federationSetupError: unknown;
+  private staticApi?: Anthropic;
   // Fairness bucket for the shared Anthropic semaphore: the account behind the request. Differs from
   // _endUserId only for a platform key's end user, whose requests still queue as the key owner's.
   private readonly _tenantKey?: string;
@@ -289,11 +294,76 @@ export class AnthropicBackend implements ICompletionBackend {
   };
 
   constructor(
-    apiKey: string | typeof ANTHROPIC_FEDERATED_KEY,
+    apiKey: string | typeof ANTHROPIC_FEDERATED_KEY | ProviderCredentialSpec,
     logger?: Logger,
     endUserId?: string,
     tenantKey?: string
   ) {
+    this.credential = normalizeProviderCredential(apiKey, ANTHROPIC_FEDERATED_KEY);
+    this._api = this.initialClient(this.credential);
+    this.logger = logger ?? new Logger();
+    this._endUserId = endUserId;
+    this._tenantKey = tenantKey ?? endUserId;
+  }
+
+  private initialClient(credential: ProviderCredentialSpec): Anthropic {
+    if (credential.kind !== 'federated') return this.staticClient(credential.key);
+    try {
+      this.federatedApi = this.buildClient(null);
+      return this.federatedApi;
+    } catch (err) {
+      // Without a fallback key a misconfigured federation is a hard error, as before.
+      if (credential.fallbackKey === null) throw err;
+      this.federationSetupError = err;
+      return this.staticClient(credential.fallbackKey);
+    }
+  }
+
+  /** True when this backend was told to authenticate through workload identity federation. */
+  private get usesFederatedCredentials(): boolean {
+    return this.credential.kind === 'federated';
+  }
+
+  /**
+   * Fix the credential for the next request and return the client that matches it. Runs
+   * before anything is sent; see ResolvedProviderCredential for why a later failure never
+   * falls back.
+   */
+  private async clientForNextRequest(signal: AbortSignal | undefined): Promise<Anthropic> {
+    const resolved = await resolveCredentialBeforeSend({
+      provider: 'anthropic',
+      spec: this.credential,
+      setupError: this.federationSetupError,
+      exchange: () => this.exchangeFederatedToken(),
+      logger: this.logger,
+      signal,
+    });
+    // A static or user key keeps the constructor's client; `_api` itself is never reassigned, so
+    // concurrent calls on this instance each send on the client their own credential resolved.
+    if (resolved.kind === 'static_fallback') return this.staticClient(resolved.key);
+    if (resolved.kind !== 'federated') return this._api;
+    if (!this.federatedApi) throw new Error('Federated Anthropic credential resolved without a federated client');
+    return this.federatedApi;
+  }
+
+  /**
+   * Run the token exchange up front. The SDK exchanges lazily inside the request, but the
+   * provider from federatedAnthropicCredentials caches the token process-wide, so the request
+   * then reuses it. The github-actions source (CI only) resolves inside the SDK from env files
+   * and has no up-front hook; its exchange failures surface from the request instead.
+   */
+  private async exchangeFederatedToken(): Promise<void> {
+    if (selectedWifTokenSource() !== 'aws-sts') return;
+    await federatedAnthropicCredentials()();
+  }
+
+  private staticClient(apiKey: string): Anthropic {
+    this.staticApi ??= this.buildClient(apiKey);
+    return this.staticApi;
+  }
+
+  /** A client for `apiKey`, or the federated client for null. */
+  private buildClient(apiKey: string | null): Anthropic {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
     // The SDK has built-in exponential backoff (500ms initial, 8s max, 25% jitter)
     // and respects Retry-After headers from 429 responses.
@@ -315,9 +385,8 @@ export class AnthropicBackend implements ICompletionBackend {
       }
       throw new TypeError('terminated');
     };
-    const federated = apiKey === ANTHROPIC_FEDERATED_KEY;
-    this.usesFederatedCredentials = federated;
-    this._api = new Anthropic({
+    const federated = apiKey === null;
+    return new Anthropic({
       // null, not undefined, so an ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the env cannot win.
       ...(federated && selectedWifTokenSource() === 'aws-sts'
         ? { apiKey: null, authToken: null, credentials: federatedAnthropicCredentials() }
@@ -326,9 +395,6 @@ export class AnthropicBackend implements ICompletionBackend {
       fetch: retryFetch,
       fetchOptions: providerFetchOptions(),
     });
-    this.logger = logger ?? new Logger();
-    this._endUserId = endUserId;
-    this._tenantKey = tenantKey ?? endUserId;
   }
 
   /**
@@ -1004,7 +1070,6 @@ export class AnthropicBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    recordProviderCredentialUse('anthropic', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     if (options._internal?.evaluation) {
       if (options.executeTools !== false)
@@ -1764,6 +1829,8 @@ export class AnthropicBackend implements ICompletionBackend {
               const slotRequestedAt = Date.now();
               release = await acquireSlot({ tenantKey: this._tenantKey, signal: combinedSignal });
               options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
+              // After the slot, so a long queue wait cannot age the token past the SDK's refresh.
+              const client = await this.clientForNextRequest(combinedSignal);
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1793,7 +1860,7 @@ export class AnthropicBackend implements ICompletionBackend {
               const stream = await withRetry(
                 () =>
                   openObservedMessageStream(
-                    this._api,
+                    client,
                     { ...apiParams, stream: true },
                     {
                       signal: combinedSignal,
@@ -2871,8 +2938,10 @@ export class AnthropicBackend implements ICompletionBackend {
         try {
           const slotRequestedAt = Date.now();
           release = await acquireSlot({ tenantKey: this._tenantKey, signal: options.abortSignal });
+          options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
+          // After the slot, so a long queue wait cannot age the token past the SDK's refresh.
+          const client = await this.clientForNextRequest(options.abortSignal);
           roundStart = Date.now();
-          options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           const evaluation = options._internal?.evaluation;
           if (evaluation) {
@@ -2881,7 +2950,7 @@ export class AnthropicBackend implements ICompletionBackend {
             assertAnthropicEvaluationWire(apiParams, info.contextWindow);
             await evaluation.admit(info, apiParams.model, apiParams.max_tokens);
           }
-          const singleAttempt = retrySignal ? this._api.withOptions({ fetch: this.fetchOnce }) : undefined;
+          const singleAttempt = retrySignal ? client.withOptions({ fetch: this.fetchOnce }) : undefined;
           response =
             retrySignal && singleAttempt
               ? await retryAbortAware(
@@ -2902,7 +2971,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 )
               : await withRetry(
                   () =>
-                    this._api.messages.create(apiParams, {
+                    client.messages.create(apiParams, {
                       signal: options.abortSignal,
                       ...(evaluation ? { maxRetries: 0 } : {}),
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),

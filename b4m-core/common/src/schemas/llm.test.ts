@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { pairDataLakeTools } from './llm';
+import { z } from 'zod';
+import { B4MLLMToolsList, b4mLLMTools, pairDataLakeTools } from './llm';
+import { isToolAllowedByOrgPolicy, readOrgModelPolicy } from './orgModelPolicy';
 
 const SAVE = 'save_content_to_data_lake';
 
@@ -45,5 +47,21 @@ describe('pairDataLakeTools', () => {
 
     expect(out).toContain('create_data_lake');
     expect(out).not.toContain('list_my_data_lakes');
+  });
+});
+
+describe('persisted tool names outside the enum', () => {
+  const OVERLAY = ['overlay_tool_a', 'overlay_tool_b'];
+
+  it('parse where a tool list is read as open strings', () => {
+    const parsed = z.array(z.union([b4mLLMTools, z.string()])).parse(['web_search', ...OVERLAY]);
+    expect(parsed).toEqual(['web_search', ...OVERLAY]);
+  });
+
+  it('are kept by a stored org policy and not governed by it', () => {
+    const policy = readOrgModelPolicy({ allowedTools: ['web_search', ...OVERLAY] });
+    expect(policy).toMatchObject({ allowedTools: ['web_search', ...OVERLAY] });
+    expect(B4MLLMToolsList as string[]).not.toContain(OVERLAY[0]);
+    expect(isToolAllowedByOrgPolicy(readOrgModelPolicy({ allowedTools: ['web_search'] }), OVERLAY[0])).toBe(true);
   });
 });

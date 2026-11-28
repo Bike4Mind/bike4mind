@@ -1,4 +1,5 @@
 import type { AudioToolJobs } from './tools/implementation/audioGeneration';
+import type { ClientFrameSender } from './StatusManager';
 import {
   type EmbeddingRuntime,
   bindEmbeddingModel,
@@ -490,6 +491,11 @@ export interface IChatCompletionServiceOptions {
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
     /**
+     * Admit only lakes the user created or that belong to one of their orgs. Set when the session
+     * named no lake, so a lake reached only by public or entitlement read access never feeds the card.
+     */
+    trustedLakesOnly: boolean;
+    /**
      * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
      * resolved per turn by the caller with a coded fallback.
      *
@@ -572,6 +578,13 @@ export interface IChatCompletionServiceOptions {
    * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
    */
   onStatusUpdate?: (questId: string, status: string) => void;
+  /**
+   * Sink for the turn's websocket frames (streamed reply, research mode). Absent, the service
+   * builds its own ClientMessageSender. A host that also streams the turn elsewhere (the session
+   * turns SSE route) passes a sender that tees into the real one, so websocket clients still get
+   * every frame.
+   */
+  clientMessageSender?: ClientFrameSender;
   /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.
@@ -991,6 +1004,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        trustedLakesOnly: this.retrievalTags.length === 0,
         k: beliefBudget,
       });
       if (beliefs.length === 0) {

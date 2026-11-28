@@ -132,6 +132,8 @@ export class FakeHost {
   readonly connectFailures: HostConnectFailure[] = [];
   protocol: HostProtocolVersion = HOST_PROTOCOL_VERSION;
   account: HostAccount = ACCOUNT;
+  /** The id this host reports in host/initialize and host/info. */
+  hostId = 'devbox-id';
   epoch = 'epoch-1';
   /** When set, host/info never answers. */
   silent = false;
@@ -147,7 +149,13 @@ export class FakeHost {
   handle: (method: string, params: unknown) => unknown = () => ({});
   private readonly logs = new Map<string, number>();
 
+  /** How long the connector's prepare step takes, in ms. */
+  prepareDelayMs = 0;
+
   readonly connector: HostConnector = {
+    prepare: async () => {
+      if (this.prepareDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.prepareDelayMs));
+    },
     connect: async () => {
       const failure = this.connectFailures.shift();
       if (failure) throw new HostConnectError(failure);
@@ -202,11 +210,15 @@ export class FakeHost {
             data: { reason: negotiated.reason, host: this.protocol },
           });
         }
-        return hostInfo({ protocol: { major: this.protocol.major, minor: negotiated.minor }, account: this.account });
+        return hostInfo({
+          hostId: this.hostId,
+          protocol: { major: this.protocol.major, minor: negotiated.minor },
+          account: this.account,
+        });
       }
       case 'host/info':
         if (this.silent) return new Promise(() => undefined);
-        return hostInfo({ protocol: this.protocol, account: this.account });
+        return hostInfo({ hostId: this.hostId, protocol: this.protocol, account: this.account });
       case 'session/subscribe':
         return this.subscribe(connection, hostMethods['session/subscribe'].params.parse(params));
       case 'session/unsubscribe':

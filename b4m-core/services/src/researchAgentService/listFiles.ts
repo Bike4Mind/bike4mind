@@ -34,5 +34,5 @@ export const listFiles = async (
 
   const files = await db.fabFiles.findAllByIds(researchData.map(d => d.fabFileId));
 
-  return files;
+  return files.filter(file => String(file.userId) === researchAgent.userId);
 };

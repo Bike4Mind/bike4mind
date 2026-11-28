@@ -25,6 +25,20 @@ describe('resolveAdminAssistantTools', () => {
     expect(plan.disableUserIntegrations).toBe(true);
   });
 
+  it('denies contributed tool names the host supplies alongside the admin tools', () => {
+    const plan = resolveAdminAssistantTools({
+      surface: 'admin-assistant',
+      sessionOwnerId: 'admin1',
+      userId: 'admin1',
+      isAdmin: true,
+      availableToolNames: new Set([...ADMIN_ASSISTANT_TOOL_NAMES, 'contributed_alpha']),
+    });
+
+    expect(plan.deny).toContain('contributed_alpha');
+    expect(plan.enable).not.toContain('contributed_alpha');
+    for (const name of ADMIN_ASSISTANT_TOOL_NAMES) expect(plan.deny).not.toContain(name);
+  });
+
   it('enables only admin tools whose definitions are available', () => {
     const plan = resolveAdminAssistantTools({
       surface: 'admin-assistant',

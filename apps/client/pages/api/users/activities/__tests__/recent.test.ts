@@ -39,4 +39,16 @@ describe('GET /api/users/activities/recent - response boundary', () => {
     expect(body[0]).not.toHaveProperty('__v');
     expect(body[0]).not.toHaveProperty('secretNotInSchema');
   });
+
+  it('serves log metadata without the audit-only file name hash', async () => {
+    h.listRecentActivities.mockResolvedValue([
+      { id: 'l1', userId: 'u1', metadata: { fabFileId: 'f1', fileNameHash: 'abc', verified: true } },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { coverage: 'all' } });
+    (req as unknown as { user: unknown }).user = { id: 'u1', isAdmin: false };
+
+    await h.getHandler!(req, res);
+
+    expect(res._getJSONData()).toEqual([{ id: 'l1', userId: 'u1', metadata: { fabFileId: 'f1', verified: true } }]);
+  });
 });

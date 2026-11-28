@@ -27,7 +27,12 @@ describe('sharingService - acceptInvite (Organization)', () => {
       projects: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock };
       fabFiles: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
       groups: { findById: Mock };
-      organization: { findById: Mock; addMemberIfUnderCeiling: Mock; ensureUserDetails: Mock };
+      organization: {
+        findById: Mock;
+        addMemberIfUnderCeiling: Mock;
+        clearRemovedMember: Mock;
+        ensureUserDetails: Mock;
+      };
       users: { findById: Mock; update: Mock };
     };
   };
@@ -83,11 +88,25 @@ describe('sharingService - acceptInvite (Organization)', () => {
         organization: {
           findById: vi.fn(),
           addMemberIfUnderCeiling: vi.fn(async () => ({})),
+          clearRemovedMember: vi.fn(),
           ensureUserDetails: vi.fn(),
         },
         users: { findById: vi.fn(), update: vi.fn() },
       },
     };
+  });
+
+  it('admits a removed user through a named invite and lifts the removal', async () => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ removedUserIds: [userId] }));
+
+    await acceptInvite(userId, { id: inviteId }, asAdapters());
+
+    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalled();
+    expect(mockAdapters.db.organization.clearRemovedMember).toHaveBeenCalledWith(organizationId, userId);
   });
 
   it("sets the accepting user's organizationId and persists the user", async () => {
@@ -415,6 +434,20 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
       await expect(accept(linkInvite())).rejects.toThrow('Organization is full');
       expect(mockAdapters.db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
+    });
+
+    it('refuses a user an administrator removed from the organization', async () => {
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+        id === 'minter' ? makeUser({ id: 'minter' }) : makeUser()
+      );
+      mockAdapters.db.invites.findById.mockResolvedValue(linkInvite());
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ removedUserIds: [userId] }));
+
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(
+        'You cannot join this organization'
+      );
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organization.clearRemovedMember).not.toHaveBeenCalled();
     });
 
     it('refuses a revoked link before touching the organization', async () => {
@@ -1348,10 +1381,15 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     const acceptProjectInvite = async (
       sharerOnProject: Permission[],
       items: { file: unknown; prompt: unknown; session: unknown },
-      minter: { inviterId: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId }
+      minter: { inviterId: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId },
+      options: { itemOwnerIsMember?: boolean } = {}
     ) => {
+      const base = makeDoc(sharerOnProject);
       const project = {
-        ...makeDoc(sharerOnProject),
+        ...base,
+        users: options.itemOwnerIsMember
+          ? [...base.users, { userId: itemOwnerId, permissions: [Permission.read] }]
+          : base.users,
         fileIds: ['file-1'],
         systemPrompts: [{ fileId: 'prompt-1' }],
         sessionIds: ['session-1'],
@@ -1392,7 +1430,7 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       expect(calls.sessions).toStrictEqual([['session-1', propagated(fullLink)]]);
     });
 
-    it('caps each item grant to what the minter holds on that item', async () => {
+    it('passes an item on only when the minter holds share on it, capped to what they hold', async () => {
       const calls = await acceptProjectInvite(fullLink, {
         file: item('file-1', shareLink),
         prompt: item('prompt-1', [Permission.read, Permission.update]),
@@ -1400,6 +1438,22 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       });
 
       expect(calls.project).toStrictEqual([granted(fullLink)]);
+      expect(calls.files).toStrictEqual([['file-1', propagated(shareLink)]]);
+      expect(calls.sessions).toStrictEqual([]);
+    });
+
+    it('caps each item grant to what the minter holds when the item owner is a project member', async () => {
+      const calls = await acceptProjectInvite(
+        fullLink,
+        {
+          file: item('file-1', shareLink),
+          prompt: item('prompt-1', [Permission.read, Permission.update]),
+          session: item('session-1', [Permission.read]),
+        },
+        { inviterId: sharerId },
+        { itemOwnerIsMember: true }
+      );
+
       expect(calls.files).toStrictEqual([
         ['file-1', propagated(shareLink)],
         ['prompt-1', propagated([Permission.read, Permission.update])],
@@ -1492,7 +1546,8 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
             prompt: ownerHolds('prompt-1', [Permission.read]),
             session: ownerHolds('session-1', memberAttached),
           },
-          { inviterId: ownerId }
+          { inviterId: ownerId },
+          { itemOwnerIsMember: true }
         );
 
         expect(calls.project).toStrictEqual([granted(fullLink)]);
@@ -1515,6 +1570,51 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
         );
 
         expect(calls.project).toStrictEqual([granted(fullLink)]);
+        expect(calls.files).toStrictEqual([['prompt-1', propagated(fullLink)]]);
+        expect(calls.sessions).toStrictEqual([]);
+      });
+
+      // A member (sharerId) attached an outsider's item; the owner holds only the project-minted
+      // read+update on it, and the member keeps share outside the project.
+      const memberAttachedItem = (id: string, memberHolds: Permission[]) => ({
+        id,
+        userId: itemOwnerId,
+        users: [
+          { userId: sharerId, permissions: memberHolds },
+          { userId: ownerId, permissions: memberAttached, projectId: docId },
+        ],
+        groups: [],
+      });
+
+      it('passes on an item a member attached while that member still holds share on it', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: memberAttachedItem('file-1', fullLink),
+            prompt: memberAttachedItem('prompt-1', fullLink),
+            session: memberAttachedItem('session-1', fullLink),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.files).toStrictEqual([
+          ['file-1', propagated(memberAttached)],
+          ['prompt-1', propagated(memberAttached)],
+        ]);
+        expect(calls.sessions).toStrictEqual([['session-1', propagated(memberAttached)]]);
+      });
+
+      it('skips an item a member attached once no participant holds share on it', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: memberAttachedItem('file-1', [Permission.read]),
+            prompt: ownerHolds('prompt-1', 'owner'),
+            session: memberAttachedItem('session-1', [Permission.read]),
+          },
+          { inviterId: ownerId }
+        );
+
         expect(calls.files).toStrictEqual([['prompt-1', propagated(fullLink)]]);
         expect(calls.sessions).toStrictEqual([]);
       });

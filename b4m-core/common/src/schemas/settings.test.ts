@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   settingsMap,
+  SettingKeySchema,
   stageHiddenSettingKeys,
   publicSafeSettingKeys,
   userReadableSettingKeys,
@@ -1573,6 +1574,19 @@ describe('spend monitor settings', () => {
     expect(settingsMap.spendMonitorMarginMinRatio.schema.safeParse(0).success).toBe(false);
     expect(settingsMap.spendMonitorMarginWindowHours.schema.safeParse(169).success).toBe(false);
     expect(settingsMap.spendMonitorMarginWindowHours.schema.safeParse(1.5).success).toBe(false);
+  });
+
+  it.each([
+    ['openaiCredentialMode', API_SERVICE_GROUPS.OPENAI],
+    ['anthropicCredentialMode', API_SERVICE_GROUPS.ANTHROPIC],
+  ] as const)('%s defaults to static, accepts only static or federated, and stays admin-only', (key, group) => {
+    expect(settingsMap[key].defaultValue).toBe('static');
+    expect(group.settings.some(entry => entry.key === key)).toBe(true);
+    expect(SettingKeySchema.safeParse(key).success).toBe(true);
+    const schema = settingsMap[key].schema;
+    for (const mode of ['static', 'federated']) expect(schema.parse(mode)).toBe(mode);
+    expect(schema.safeParse('oidc').success).toBe(false);
+    expect(new Set(userReadableSettingKeys()).has(key as never)).toBe(false);
   });
 
   it('defaults the automatic pause to shadow mode and accepts only the known modes', () => {

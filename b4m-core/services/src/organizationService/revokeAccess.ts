@@ -1,6 +1,8 @@
 import {
   canRevokeOrgMember,
   IGroupRepository,
+  IInviteRepository,
+  InviteType,
   IOrganizationRepository,
   IUserDocument,
   IUserRepository,
@@ -22,6 +24,7 @@ interface RevokeAccessAdapters extends PurgeOrgMembershipAdapters {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     users: Pick<IUserRepository, 'removeGroupsFromUser' | 'findById' | 'update'>;
+    invites: Pick<IInviteRepository, 'findAllByDocumentId' | 'cancelPendingRecipient'>;
   };
 }
 
@@ -98,7 +101,7 @@ export const revokeAccess = async (
   organization.adminUserIds = purged.adminUserIds;
   organization.billingManagerUserIds = purged.billingManagerUserIds;
 
-  await adapters.db.organizations.removeMember(organization.id, userId);
+  await adapters.db.organizations.removeMember(organization.id, userId, { block: true });
 
   // Mirror leave.ts: if the org we just removed them from was the user's currently-selected org,
   // clear it - otherwise org-scoped access (data-lake AccessContext, team-wide prompts) and billing
@@ -106,8 +109,20 @@ export const revokeAccess = async (
   // acceptOrganization/addMember. We hold only the removed user's id here, so fetch them to compare.
   // Idempotent under a withTransaction retry (a re-run recomputes the same set-to-null).
   const removed = await adapters.db.users.findById(userId);
-  if (removed?.organizationId?.toString() === id) {
+  if (removed?.organizationId?.toString() === organization.id) {
     await adapters.db.users.update({ id: userId, organizationId: null });
+  }
+
+  // Accepting a named invite lifts the removal, so one sent before it must not stay redeemable.
+  const removedEmail = removed?.email?.trim().toLowerCase();
+  if (removedEmail) {
+    const invites = await adapters.db.invites.findAllByDocumentId(organization.id);
+    for (const invite of invites) {
+      if (invite.type !== InviteType.Organization) continue;
+      if ((invite.recipients?.pending ?? []).some(address => address.trim().toLowerCase() === removedEmail)) {
+        await adapters.db.invites.cancelPendingRecipient(invite.id, removedEmail);
+      }
+    }
   }
 
   return { organization, revokedOrgBilledApiKeyIds: purged.revokedOrgBilledApiKeyIds };

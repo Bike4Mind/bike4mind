@@ -149,7 +149,7 @@ describe('resolveSimulatorDevice', () => {
 });
 
 describe('device approval', () => {
-  it('keys every device action on the same per-device key, asking in auto mode too', async () => {
+  it('keys every device action on the same per-device key, leaving auto mode to run it', async () => {
     const { context } = setup();
     const prompts = await Promise.all([
       simulatorScreenshot.approval?.({}, context),
@@ -157,14 +157,33 @@ describe('device approval', () => {
       simulatorLaunch.approval?.({ bundle_id: 'com.example.foo' }, context),
     ]);
     for (const prompt of prompts) {
-      expect(prompt).toMatchObject({ key: 'simulator\x00AAAA-1111', askInAuto: true });
+      expect(prompt).toMatchObject({ key: 'simulator\x00AAAA-1111' });
+      expect(prompt?.askInAuto).toBeUndefined();
     }
+  });
+
+  it('still asks in auto mode for an app outside the shared folders or a file: URL', async () => {
+    const { context } = setup({ roots: ['/work/proj'] });
+    const outside = await simulatorLaunch.approval?.({ app_path: '/Users/someone/Downloads/Other.app' }, context);
+    expect(outside?.askInAuto).toBe(true);
+    const bundle = await simulatorLaunch.approval?.({ bundle_id: 'com.example.foo' }, context);
+    expect(bundle?.askInAuto).toBeUndefined();
+    const file = await simulatorOpenUrl.approval?.({ url: 'file:///etc/hosts' }, context);
+    expect(file?.askInAuto).toBe(true);
+    const web = await simulatorOpenUrl.approval?.({ url: 'https://example.com' }, context);
+    expect(web?.askInAuto).toBeUndefined();
+  });
+
+  it('marks a screenshot as safe to repeat, and an input as not', async () => {
+    const { context } = setup();
+    expect((await simulatorScreenshot.approval?.({}, context))?.repeatSafe).toBe(true);
+    expect((await simulatorInput.approval?.({ action: 'tap', x: 1, y: 2 }, context))?.repeatSafe).toBeUndefined();
   });
 
   it('uses a different key for another device', async () => {
     const { context } = setup();
     const prompt = await simulatorScreenshot.approval?.({ device: 'iPad Pro' }, context);
-    expect(prompt).toMatchObject({ key: 'simulator\x00CCCC-3333', askInAuto: true });
+    expect(prompt).toMatchObject({ key: 'simulator\x00CCCC-3333' });
     expect(prompt?.detail).toContain('iPad Pro');
   });
 

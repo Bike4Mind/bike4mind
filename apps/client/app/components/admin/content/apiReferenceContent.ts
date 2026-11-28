@@ -129,7 +129,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/obligations\` (hand off, list), \`/api/v1/obligations/{id}\` (get, correct + confirm)
 - Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
-  \`/api/v1/sessions/{id}/messages/{messageId}\`
+  \`/api/v1/sessions/{id}/messages/{messageId}\`, \`/api/v1/turns\` (add a turn to a session, streamed)
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
   \`/api/v1/artifacts/types\`, \`/api/v1/artifacts/{id}/publish\` (publish, unpublish),

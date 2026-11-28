@@ -20,7 +20,7 @@ const handler = baseApi({ auth: true }).get(
           researchAgents: researchAgentRepository,
           fabFiles: {
             findAllByIds: async (ids: string[]) => {
-              const result = await FabFile.find({ _id: { $in: ids } });
+              const result = await FabFile.find({ _id: { $in: ids }, userId: req.user.id });
               return result.map(d => d.toJSON());
             },
           },

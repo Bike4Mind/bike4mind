@@ -128,6 +128,7 @@ Some actions have no delegated permission yet and require full admin access:
 - Giving a skill global read or write access, and reviewing legacy global skills.
 - Reviewing new signups and exporting the full user list from the user list API.
 - Reading admin-only help articles, in the help center and in help chat.
+- Adding or removing an account tag, grant package tag or default tag that a data lake uses as its access gate.
 
 ## Admin roles
 

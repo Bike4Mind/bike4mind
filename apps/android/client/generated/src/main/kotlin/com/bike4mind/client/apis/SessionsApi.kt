@@ -121,16 +121,17 @@ import io.ktor.http.ParametersBuilder
         /**
         * GET /api/v1/sessions
         * List sessions
-        * Lists the sessions you own (called \&quot;notebooks\&quot; in the product UI), newest first. Sessions shared with you are not included; read one of those by id with &#x60;GET /api/sessions/{id}&#x60;. Each item has the same shape &#x60;GET /api/sessions/{id}&#x60; returns. Cursor-paginated (see the pagination convention): pass &#x60;next_cursor&#x60; back as &#x60;cursor&#x60; until it is &#x60;null&#x60;. Changing &#x60;search&#x60;, &#x60;surface&#x60; or &#x60;origin&#x60; starts a new listing, so drop the cursor when you do. An API key needs &#x60;notebooks:read&#x60; or &#x60;notebooks:write&#x60;.
+        * Lists the sessions you own (called \&quot;notebooks\&quot; in the product UI), newest first. Sessions shared with you are not included; read one of those by id with &#x60;GET /api/sessions/{id}&#x60;. Each item has the same shape &#x60;GET /api/sessions/{id}&#x60; returns. Cursor-paginated (see the pagination convention): pass &#x60;next_cursor&#x60; back as &#x60;cursor&#x60; until it is &#x60;null&#x60;. Changing &#x60;search&#x60;, &#x60;surface&#x60; or &#x60;origin&#x60; starts a new listing, so drop the cursor when you do. With &#x60;updated_since&#x60; it becomes a change feed for keeping a copy in sync: only sessions changed since then, oldest change first, deleted ones included with &#x60;deletedAt&#x60; set. An API key needs &#x60;notebooks:read&#x60; or &#x60;notebooks:write&#x60;.
          * @param limit  (optional, default to 25)
          * @param cursor  (optional)
          * @param search Case-insensitive substring match on the session name, its summary, or a tag name. (optional)
          * @param surface Lists only sessions of this product surface. When omitted, only sessions with no surface are listed. (optional)
          * @param origin Lists only sessions created through this channel. &#x60;web&#x60; also matches sessions with no recorded origin. (optional)
+         * @param updatedSince Lists only sessions changed at or after this time, oldest change first, including deleted sessions (with &#x60;deletedAt&#x60; set) so a sync can drop its copy. Pass the latest &#x60;updatedAt&#x60; you have read, ideally minus a few minutes to absorb clock skew between servers; rows you already have come back and can be skipped. (optional)
          * @return ListSessionsResponse200
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun listSessions(limit: kotlin.Int? = 25, cursor: kotlin.String? = null, search: kotlin.String? = null, surface: kotlin.String? = null, origin: kotlin.String? = null): HttpResponse<ListSessionsResponse200> {
+        open suspend fun listSessions(limit: kotlin.Int? = 25, cursor: kotlin.String? = null, search: kotlin.String? = null, surface: kotlin.String? = null, origin: kotlin.String? = null, updatedSince: kotlin.String? = null): HttpResponse<ListSessionsResponse200> {
 
             val localVariableAuthNames = listOf<String>("apiKeyAuth", "bearerAuth")
 
@@ -143,6 +144,7 @@ import io.ktor.http.ParametersBuilder
             search?.apply { localVariableQuery["search"] = listOf("$search") }
             surface?.apply { localVariableQuery["surface"] = listOf("$surface") }
             origin?.apply { localVariableQuery["origin"] = listOf("$origin") }
+            updatedSince?.apply { localVariableQuery["updated_since"] = listOf("$updatedSince") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 

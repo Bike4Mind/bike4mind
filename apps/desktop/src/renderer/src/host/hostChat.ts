@@ -14,6 +14,7 @@ import type { PlacedCodeSessionRequest, PlacedCodeSessionResult } from '@shared/
 import type { TaskDecisionAnswer } from '@shared/orchestration';
 import type { NewSessionDefaults } from '@shared/sessionDefaults';
 import type { SessionTreeDeletion } from '@shared/worktreeRemoval';
+import type { HostResult } from '@shared/hostProtocol';
 import { hostClient, type HostClient } from './HostClient';
 import { hostForSession } from './sessionHost';
 
@@ -29,10 +30,14 @@ export type DeleteOptions = {
   allowDiscard: boolean;
 };
 
+export type FolderListing = HostResult<'fs/browse'>;
+
 /**
- * The renderer's chat calls over the host protocol, each sent to the host its session lives on
- * (see hostForSession). Failures reject with HostRequestError, whose message is the host's.
- * pickProjectDirectory is not here: it is a native picker, valid only for the local host.
+ * The renderer's chat calls over the host protocol. A call about a session goes to the host that
+ * session lives on (see hostForSession); a call with no session yet (a new session, a project
+ * lookup, recent folders) names its host, since the caller knows which host it is working on.
+ * Failures reject with HostRequestError, whose message is the host's. pickProjectDirectory is not
+ * here: it is a native picker, valid only for the local host (see HostFolderPicker for the rest).
  */
 export function createHostChat(client: HostClient, local: () => LocalDesktop) {
   return {
@@ -58,8 +63,11 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
     },
 
     /** Sidebar placement is Desktop's own, so a requested section is applied here after the host creates the session. */
-    async createCodeSession({ sectionId, ...request }: PlacedCodeSessionRequest): Promise<PlacedCodeSessionResult> {
-      const result = await client.request(hostForSession(), 'session/create', request);
+    async createCodeSession(
+      hostId: string,
+      { sectionId, ...request }: PlacedCodeSessionRequest
+    ): Promise<PlacedCodeSessionResult> {
+      const result = await client.request(hostId, 'session/create', request);
       if (!result.ok || !sectionId) return result;
       try {
         return { ...result, sidebarSections: await local().moveToSection(result.session.id, sectionId) };
@@ -155,25 +163,30 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
       return models;
     },
 
-    async defaultsForNewSession(): Promise<NewSessionDefaults> {
-      const { defaults } = await client.request(hostForSession(), 'draft/defaults');
+    async defaultsForNewSession(hostId: string): Promise<NewSessionDefaults> {
+      const { defaults } = await client.request(hostId, 'draft/defaults');
       return defaults;
     },
 
-    async listRecentFolders(): Promise<RecentFolder[]> {
-      const { folders } = await client.request(hostForSession(), 'project/recent');
+    async listRecentFolders(hostId: string): Promise<RecentFolder[]> {
+      const { folders } = await client.request(hostId, 'project/recent');
       return folders;
     },
 
     /** Forgets one folder (the folder itself is untouched) and resolves to the list that is left. */
-    async removeRecentFolder(directory: string): Promise<RecentFolder[]> {
-      const { folders } = await client.request(hostForSession(), 'project/forgetRecent', { path: directory });
+    async removeRecentFolder(hostId: string, directory: string): Promise<RecentFolder[]> {
+      const { folders } = await client.request(hostId, 'project/forgetRecent', { path: directory });
       return folders;
     },
 
-    async inspectProject(directory: string): Promise<ProjectInspection> {
-      const { inspection } = await client.request(hostForSession(), 'project/inspect', { directory });
+    async inspectProject(hostId: string, directory: string): Promise<ProjectInspection> {
+      const { inspection } = await client.request(hostId, 'project/inspect', { directory });
       return inspection;
+    },
+
+    /** The folders inside `path` on the host (its home directory when absent); see fs/browse. */
+    browseFolder(hostId: string, path?: string): Promise<FolderListing> {
+      return client.request(hostId, 'fs/browse', path === undefined ? {} : { path });
     },
   };
 }

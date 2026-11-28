@@ -2,6 +2,10 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@client/lib/entitlements/managedUserTags', () => ({ isManagedTag: (tag: string) => tag === 'managed' }));
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
+  dataLakeRepository: { findGateValues: async () => ({ userTags: ['lake-gate'], entitlements: [] }) },
+}));
 
 import { assertCanSeedAccount } from './assertCanSeedAccount';
 
@@ -9,21 +13,28 @@ const delegate = (...adminPermissions: string[]) => ({ user: { isAdmin: false, a
 const fullAdmin = { user: { isAdmin: true } };
 
 describe('assertCanSeedAccount', () => {
-  it('lets a delegate create a plain account with no credits and unmanaged tags', () => {
-    expect(() => assertCanSeedAccount(delegate('settings:manage'), { credits: 0, tags: ['beta'] })).not.toThrow();
+  it('lets a delegate create a plain account with no credits and unmanaged tags', async () => {
+    await expect(assertCanSeedAccount(delegate('settings:manage'), { credits: 0, tags: ['beta'] })).resolves.toBe(
+      undefined
+    );
   });
 
-  it('requires credits:adjust to seed credits', () => {
-    expect(() => assertCanSeedAccount(delegate('settings:manage'), { credits: 5 })).toThrow(
+  it('requires credits:adjust to seed credits', async () => {
+    await expect(assertCanSeedAccount(delegate('settings:manage'), { credits: 5 })).rejects.toThrow(
       'Missing permission: credits:adjust'
     );
-    expect(() => assertCanSeedAccount(delegate('settings:manage', 'credits:adjust'), { credits: 5 })).not.toThrow();
+    await expect(
+      assertCanSeedAccount(delegate('settings:manage', 'credits:adjust'), { credits: 5 })
+    ).resolves.toBeUndefined();
   });
 
-  it('keeps managed tags and the admin role to full admins', () => {
+  it('keeps managed tags, lake gate tags and the admin role to full admins', async () => {
     const all = delegate('settings:manage', 'credits:adjust', 'support:read');
-    expect(() => assertCanSeedAccount(all, { tags: ['beta', 'managed'] })).toThrow('managed tags');
-    expect(() => assertCanSeedAccount(all, { isAdmin: true })).toThrow('full admin access');
-    expect(() => assertCanSeedAccount(fullAdmin, { isAdmin: true, credits: 5, tags: ['managed'] })).not.toThrow();
+    await expect(assertCanSeedAccount(all, { tags: ['beta', 'managed'] })).rejects.toThrow('managed tags');
+    await expect(assertCanSeedAccount(all, { tags: ['beta', 'Lake-Gate'] })).rejects.toThrow('data lake access');
+    await expect(assertCanSeedAccount(all, { isAdmin: true })).rejects.toThrow('full admin access');
+    await expect(
+      assertCanSeedAccount(fullAdmin, { isAdmin: true, credits: 5, tags: ['managed', 'lake-gate'] })
+    ).resolves.toBeUndefined();
   });
 });

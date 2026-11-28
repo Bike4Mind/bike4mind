@@ -186,7 +186,9 @@ describe('createDeepAgentToolMaterializer', () => {
     const opts = buildSharedToolsSpy.mock.calls[0]?.[2] as {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
-    expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+    expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe(
+      createHmac('sha256', 'test-secret').update('b4m-signing/search-image-url/v1').digest('hex')
+    );
   });
 
   it('signs web_search image URLs with the derived key when a dedicated signing secret is set', async () => {

@@ -75,7 +75,7 @@ public enum PendingActionFailure: Error, Equatable, Sendable {
       switch error {
       case .offline: "You appear to be offline. Check your connection and try again."
       case .rateLimited: "Too many requests. Wait a moment and try again."
-      case .server: "Bike4Mind had a problem. Try again in a moment."
+      case .server, .conflict: "Bike4Mind had a problem. Try again in a moment."
       case .signedOut: "Your session ended. Sign in to Bike4Mind and try again."
       case .forbidden, .notFound: "This request is no longer available."
       case .malformedResponse, .upgradeRequired: "Update Bike4Mind to answer approvals."

@@ -81,6 +81,7 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   // userDetails array from this stale snapshot and could revert a concurrent credit increment
   // (updateUserDetails' atomic positional $inc), defeating the very cap this seeding enables.
   await db.organizations.update({ id: organization.id, users: organization.users });
+  await db.organizations.clearRemovedMember(organization.id, userToAdd.id);
 
   // Seed the per-member credit side-table so `users[]` and `userDetails[]` stay in sync at the grant
   // point. Without a row, `updateUserDetails`'s positional $inc no-ops and the member escapes

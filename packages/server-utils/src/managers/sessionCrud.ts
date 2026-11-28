@@ -381,7 +381,7 @@ export const getVisibleSessions = async (
   const result = await Session.find(q)
     .skip(pagination.limit * (pagination.page - 1))
     .limit(pagination.limit + 1)
-    .sort({ [orderBy.name]: orderBy.direction });
+    .sort({ [orderBy.name]: orderBy.direction, _id: orderBy.direction });
 
   const hasMore = result.length === pagination.limit + 1;
   if (hasMore) result.pop();
@@ -492,7 +492,7 @@ const paginatedSessions = async (
   const result = await Session.find(query)
     .skip(pagination.limit * (pagination.page - 1))
     .limit(pagination.limit + 1)
-    .sort({ [orderBy.name]: orderBy.direction });
+    .sort({ [orderBy.name]: orderBy.direction, _id: orderBy.direction });
 
   const hasMore = result.length === pagination.limit + 1;
   if (hasMore) result.pop();

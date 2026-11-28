@@ -450,7 +450,7 @@ export class CreditTransactionRepository
     // transaction: a concurrent write between the two can make total differ from
     // the page by one - acceptable for a read-only admin view.
     const [data, total] = await Promise.all([
-      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
+      this.model.find(query).sort({ createdAt: -1, _id: -1 }).skip(options.skip).limit(options.limit).exec(),
       this.model.countDocuments(query),
     ]);
 

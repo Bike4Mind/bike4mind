@@ -12,6 +12,7 @@ import {
   IShareableDocument,
   ISpaceRepository,
   IUserDocument,
+  IUserRepository,
   Permission,
   ShareableAccessShape,
   isLinkOnlyInvite,
@@ -34,8 +35,10 @@ import { z } from 'zod';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
+import { wasRemovedFromOrganization } from '../organizationService/orgAuthority';
 import { assertContentInvitePolicy } from './organizationPolicy';
 import { grantCap } from '../projectService/addFiles';
+import { projectGrantorCheck, SharedItem } from './projectGrantor';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -56,10 +59,12 @@ interface AcceptInviteAdapters {
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
       addMemberIfUnderCeiling: IOrganizationRepository['addMemberIfUnderCeiling'];
+      clearRemovedMember: IOrganizationRepository['clearRemovedMember'];
       ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
+      findUserIdsByGroupIds: IUserRepository['findUserIdsByGroupIds'];
       update: (data: Partial<IUserDocument>) => Promise<unknown>;
     };
     spaces: Pick<ISpaceRepository, 'findLiveById' | 'addMember'>;
@@ -355,6 +360,9 @@ const acceptOrganization = async (
   }
 
   if (isLink) {
+    if (wasRemovedFromOrganization(organization, user.id)) {
+      throw new ForbiddenError('You cannot join this organization');
+    }
     const minter = params.inviterId ? await db.users.findById(params.inviterId) : null;
     if (
       !minter ||
@@ -406,6 +414,9 @@ const acceptOrganization = async (
     );
     for (const invite of ownNamedInvites) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
   }
+
+  // A named invite is an administrator's choice to bring this person back.
+  if (!isLink) await db.organization.clearRemovedMember(organizationId, user.id);
 
   // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
   // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.
@@ -515,18 +526,25 @@ const acceptProject = async (
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
   // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
-  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
-  const grantOn = (item: IShareableDocument & { userId: string }) => {
-    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. Passing it
+  // on needs a grantor in the project: the inviter holding share, or the same grantor rule revoke uses
+  // to keep an item attached (projectGrantor.ts).
+  const hasGrantor = projectGrantorCheck(project, db);
+  const grantOn = async (item: SharedItem) => {
+    if (!inviter) return null;
+    let granted = reshareableBy(item, inviter, permissions).granted;
+    if (granted.length === 0 && (await hasGrantor(item))) {
+      granted = grantCap(item as ShareableAccessShape, inviter)(permissions);
+    }
     return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
 
   for (const file of files) {
-    const grant = grantOn(file);
+    const grant = await grantOn(file);
     if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
   }
   for (const session of sessions) {
-    const grant = grantOn(session);
+    const grant = await grantOn(session);
     if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
   }
 };

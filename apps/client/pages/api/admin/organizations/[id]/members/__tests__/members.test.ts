@@ -57,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   userApiKeyRepository: {},
   groupRepository: {},
+  inviteRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => {

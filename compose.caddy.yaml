@@ -36,7 +36,7 @@
 #   - It does not enable Mongo auth, change MinIO credentials, or configure SMTP.
 #   - It does not expose the chatcompletion API (:8788) publicly. If you want the
 #     CLI / low-level completions API reachable from outside, add a route for
-#     /api/ai/v1/* to chatcompletion:8080 and set CHAT_COMPLETION_PUBLIC_URL
+#     /api/ai/v1/* and /api/v1/turns to chatcompletion:8080 and set CHAT_COMPLETION_PUBLIC_URL
 #     (see the optional snippet in SELF_HOST.md); otherwise it stays internal.
 #   - It is defense-in-depth, not a substitute for a host/cloud firewall. Keep a
 #     cloud security group (or DOCKER-USER rules) allowing only 80/443 inbound.

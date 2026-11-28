@@ -1,4 +1,5 @@
 // The main surface's session deps: a tutorial runs in an ordinary notebook the user owns.
+import { rescopeUserSubscriptions } from '../websocket/rescopeUserSubscriptions';
 import type { TutorialRequest } from './routes/types';
 import { isTutorialSessionName, TUTORIAL_SESSION_PREFIX } from '@bike4mind/common';
 import {
@@ -14,12 +15,34 @@ import { sessionService } from '@bike4mind/services';
 import { getOrCreateSession } from '../managers/sessionCrud';
 import { setCoreSessionMarker } from './sessionMarker';
 import { tutorialSheets } from './sheet';
+import { CORE_TUTORIAL_SHEET_TAG, isCoreTutorialSheetTag } from './sheetTags';
 import type { TutorialServiceDeps } from './service';
 
-/** Names the user's sheet copies; the overlay keeps its own tag, so the two never touch each other's files. */
-export const CORE_TUTORIAL_SHEET_TAG = 'tutorial';
+export { CORE_TUTORIAL_SHEET_TAG };
 
 const sheets = tutorialSheets({ tag: CORE_TUTORIAL_SHEET_TAG });
+
+type ShareFields = { isGlobalRead?: boolean; isGlobalWrite?: boolean; users?: unknown[]; groups?: unknown[] };
+const isShared = (session: ShareFields) =>
+  !!session.isGlobalRead ||
+  !!session.isGlobalWrite ||
+  (session.users?.length ?? 0) > 0 ||
+  (session.groups?.length ?? 0) > 0;
+
+/**
+ * Whether the notebook holds knowledge the user chose. The walk attaches the user's own copy of its sample sheet,
+ * so only that copy is discounted; an id that does not resolve to one counts as the user's.
+ */
+async function holdsUserKnowledge(knowledgeIds: string[] | undefined, userId: string): Promise<boolean> {
+  if (!knowledgeIds?.length) return false;
+  const files = await fabFileRepository.findAllByIds(knowledgeIds);
+  const sampleSheetIds = new Set(
+    files
+      .filter(file => file.userId === userId && (file.tags ?? []).some(tag => isCoreTutorialSheetTag(tag.name)))
+      .map(file => String(file.id))
+  );
+  return knowledgeIds.some(id => !sampleSheetIds.has(id));
+}
 
 export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
   return {
@@ -29,14 +52,14 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
     },
     createSession: async module => {
       const name = `${TUTORIAL_SESSION_PREFIX}${module.title}`;
-      const { session, sessionId, asyncPromises } = await getOrCreateSession({
+      const { sessionId, asyncPromises } = await getOrCreateSession({
         sessionName: name,
         user: req.user!,
         ability: req.ability,
         logger: req.logger,
       });
-      // Held on the name it was born with, so auto-naming leaves the sidebar badge alone until the user renames it.
-      await sessionRepository.update({ id: session.id, autoNamePlaceholder: name });
+      // No autoNamePlaceholder: a placeholder name is what makes a notebook eligible for auto-naming
+      // (hasAutoNamePlaceholderName), and the badge and the walk's last step both rely on the tutorial name.
       Promise.all(asyncPromises).catch(error => req.logger.warn('tutorial: session side effects failed', error));
       return { id: sessionId };
     },
@@ -45,13 +68,17 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       return !!session && !session.surface;
     },
-    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it.
+    // Only a notebook still carrying the tutorial's name, owned by the user, with nothing of the user's attached to
+    // it (the walk's own sample sheet aside), not shared and in no project.
     deleteSession: async (sessionId, userId) => {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
       if (!session || !isTutorialSessionName(session.name)) return false;
+      if (isShared(session) || (await holdsUserKnowledge(session.knowledgeIds, userId))) return false;
       if ((await fabFileRepository.find({ sessionId })).length > 0) return false;
-      await withTransaction(() =>
-        sessionService.deleteSession(
+      if ((await projectRepository.findAllBySessionId(sessionId)).length > 0) return false;
+      const affectedUserIds = await withTransaction(async () => {
+        const affected = new Set<string>();
+        await sessionService.deleteSession(
           userId,
           { id: sessionId },
           {
@@ -64,9 +91,12 @@ export function coreTutorialDepsFor(req: TutorialRequest): TutorialServiceDeps {
               sessionAgentConfigs: sessionAgentConfigRepository,
             },
             logger: req.logger,
+            onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
           }
-        )
-      );
+        );
+        return [...affected];
+      });
+      await rescopeUserSubscriptions(affectedUserIds, req.logger);
       return true;
     },
     setSessionMarker: setCoreSessionMarker,

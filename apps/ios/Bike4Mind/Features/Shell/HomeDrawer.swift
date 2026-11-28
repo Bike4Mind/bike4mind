@@ -19,6 +19,7 @@ struct HomeDrawer: View {
       let progress = openFraction(width: width)
       ZStack(alignment: .leading) {
         if progress > 0 {
+          // A dimming scrim reads as black over content in both appearances, so it skips the palette.
           Color.black.opacity(0.4 * progress)
             .ignoresSafeArea()
             .contentShape(Rectangle())
@@ -27,7 +28,7 @@ struct HomeDrawer: View {
             .accessibilityLabel("Close menu")
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("home-drawer-scrim")
-          DrawerContent(api: services.api, cache: services.sessionListCache)
+          DrawerContent(recents: services.sessionsModel)
             .frame(width: width)
             .frame(maxHeight: .infinity)
             .background(Tokens.Palette.sidebar.ignoresSafeArea())
@@ -85,12 +86,8 @@ struct HomeDrawer: View {
 
 private struct DrawerContent: View {
   @Environment(AppServices.self) private var services
-  @State private var recents: SessionsViewModel
+  let recents: SessionsViewModel
   private var profile: AccountProfile? { services.cachedAccountProfile }
-
-  init(api: any B4MAPI, cache: any SessionListCache) {
-    _recents = State(initialValue: SessionsViewModel(api: api, cache: cache))
-  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -104,6 +101,9 @@ private struct DrawerContent: View {
           }
           row("Studio", symbol: "wand.and.stars", id: "drawer-studio-btn") { services.navigator.apply(.media) }
           row("Brief", symbol: "text.badge.checkmark", id: "drawer-brief-btn") { services.navigator.openLatestBrief() }
+          if services.artifactsFeatureEnabled {
+            row("Artifacts", symbol: "shippingbox", id: "drawer-artifacts-btn") { services.navigator.openArtifacts() }
+          }
           notebooks
         }
         .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs / 2)
@@ -114,6 +114,7 @@ private struct DrawerContent: View {
     }
     .task { await recents.load() }
     .task { await services.refreshAccountProfile() }
+    .task { await services.refreshArtifactsFeature() }
   }
 
   private var notebooks: some View {

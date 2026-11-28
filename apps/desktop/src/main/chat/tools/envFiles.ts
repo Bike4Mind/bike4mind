@@ -19,14 +19,17 @@ function windowsSpellings(path: string): string[] {
   return last.split(':').map(part => [...segments, part.replace(/[. ]+$/, '')].join('/'));
 }
 
+/** A checked-in template of an env file (`.env.example`, `.env.local.sample`), which holds no secrets. */
+const ENV_TEMPLATE = /\.env(\.[^/\\]+)?\.(example|sample|template)$/;
+
 /**
  * Ported from opencode's default read rules, which mirror the Node.gitignore patterns: any path
- * ending `.env` or holding `.env.`, except a committed `.env.example`. It is judged under every
+ * ending `.env` or holding `.env.`, except a committed template (ENV_TEMPLATE). It is judged under every
  * spelling windowsSpellings gives, with any drive, revision or stream part split off.
  */
 export function isEnvFile(path: string): boolean {
   return windowsSpellings(path).some(
-    spelling => !spelling.endsWith('.env.example') && (spelling.endsWith('.env') || spelling.includes('.env.'))
+    spelling => !ENV_TEMPLATE.test(spelling) && (spelling.endsWith('.env') || spelling.includes('.env.'))
   );
 }
 

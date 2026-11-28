@@ -9,7 +9,7 @@ DERIVED_DATA := $(CURDIR)/build/DerivedData
 # Generated sources are excluded from formatting so a regeneration diff is exactly the generator's output.
 SWIFT_SOURCES = $(shell find Bike4Mind Widgets CaptureUI ActivityIntents ShareExtension Tools/GenerateAppIcon.swift Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
 
-.PHONY: build device test format lint clean generate-client generate-tokens check-entitlements
+.PHONY: build device test format lint clean generate-client generate-tokens check-entitlements check-raw-colors
 
 CLIENT_PKG := Packages/B4MClient
 GENERATOR_PKG := Tools/Generator
@@ -45,11 +45,14 @@ test: check-entitlements
 format:
 	xcrun swift-format format --in-place --parallel $(SWIFT_SOURCES)
 
-lint: check-entitlements
+lint: check-entitlements check-raw-colors
 	xcrun swift-format lint --strict --parallel $(SWIFT_SOURCES)
 
 check-entitlements:
 	Tools/check-entitlements-parity.sh
+
+check-raw-colors:
+	Tools/check-raw-colors.sh
 
 clean:
 	rm -rf build

@@ -77,6 +77,7 @@ export const DEFAULT_MANIFEST = {
   // Optional here so dev/local/self-host can run keyless; the key provider refuses to MINT a DEK on
   // a deployed stage without it (packages/server-utils/src/memory/factCipher.ts).
   MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
+  MEMORY_KEY_SECRET_PREVIOUS: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
   SLACK_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },

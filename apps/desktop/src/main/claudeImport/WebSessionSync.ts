@@ -364,6 +364,7 @@ export async function importNotebook(
       sourceId: notebook.id,
       importedAt: existing?.importOrigin?.importedAt || now,
       sourceUpdatedAt: notebook.updatedAt,
+      ...(settled ? {} : { runningSince: now }),
     },
     messages,
   };

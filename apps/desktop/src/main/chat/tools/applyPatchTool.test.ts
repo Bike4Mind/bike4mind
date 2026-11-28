@@ -2,12 +2,18 @@ import { mkdir, mkdtemp, readFile, readlink, realpath, stat, symlink, writeFile 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { fileRead } from './fileTools';
 import { fileEdit } from './writeTools';
 import { PathAccessDenied } from './paths';
 import type { ToolContext, ToolReporter } from './types';
+
+// The fixtures' "outside" folders sit under the temp folder, which the write tools now accept: no temp folders here.
+vi.mock('./shellScan', async importOriginal => ({
+  ...(await importOriginal<typeof import('./shellScan')>()),
+  shellHome: vi.fn(async () => ({ home: '/', known: true, temp: [] as string[] })),
+}));
 
 const wrap = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n');
 
@@ -418,7 +424,9 @@ describe('apply_patch', () => {
 
       expect((await ask('*** Delete File: a.ts'))?.chatKey).toBeUndefined();
       expect((await ask('*** Update File: a.ts', '*** Move to: c.ts', '@@', '-one', '+1'))?.chatKey).toBeUndefined();
-      expect((await ask('*** Update File: a.ts', '@@', '-one', '+1', '*** Update File: b.ts', '@@', '-red', '+r'))?.chatKey).toBeUndefined();
+      expect(
+        (await ask('*** Update File: a.ts', '@@', '-one', '+1', '*** Update File: b.ts', '@@', '-red', '+r'))?.chatKey
+      ).toBeUndefined();
     });
 
     it('fails at approval time, before the user is asked, when a hunk does not locate', async () => {

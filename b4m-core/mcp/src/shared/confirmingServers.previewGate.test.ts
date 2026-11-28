@@ -1,5 +1,5 @@
 /**
- * The subagent permission gate trusts every tool of the `github` and `atlassian` MCP servers
+ * The subagent permission gate trusts every tool of the `github`, `atlassian` and `notion` MCP servers
  * (confirmingServerOf in b4m-core/services). That holds only while no tool writes without the
  * host-set `_executeFromButton`, so this drives every registered tool without it and fails on any
  * non-GET request or GraphQL mutation. A new tool must be classified below.
@@ -13,6 +13,9 @@ vi.hoisted(() => {
   process.env.ATLASSIAN_ACCESS_TOKEN = 'test-token';
   process.env.ATLASSIAN_CLOUD_ID = 'test-cloud';
   process.env.ATLASSIAN_SITE_URL = 'https://example.atlassian.net';
+  process.env.NOTION_ACCESS_TOKEN = 'test-token';
+  process.env.NOTION_WRITE_ENABLED = 'true';
+  process.env.NOTION_ROOT_PAGE_ID = '00000000-0000-0000-0000-000000000001';
 });
 
 import { registerGitHubTools } from '../github/registerTools.js';
@@ -29,6 +32,9 @@ import { registerConfluencePageTools } from '../atlassian/tools/confluence-pages
 import { registerConfluenceCommentTools } from '../atlassian/tools/confluence-comments.js';
 import { registerConfluenceRestrictionTools } from '../atlassian/tools/confluence-restrictions.js';
 import { registerConfluenceAttachmentTools } from '../atlassian/tools/confluence-attachments.js';
+import { ALL_TOOL_NAMES as NOTION_TOOL_NAMES, NOTION_CONFIRMABLE_TOOLS } from '../notion/constants.js';
+import { registerPageTools as registerNotionPageTools } from '../notion/tools/pages.js';
+import { registerSearchTools as registerNotionSearchTools } from '../notion/tools/search.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 type ToolResult = { content: Array<{ type: string; text: string }>; isError?: boolean };
@@ -153,8 +159,12 @@ const ATLASSIAN_READ_TOOLS = [
   'confluence_download_attachment',
 ];
 
+const NOTION_WRITE_TOOLS = ['notion_create_page', 'notion_append_blocks'];
+
+const NOTION_READ_TOOLS = ['notion_search', 'notion_read_page'];
+
 /** Tools the harness cannot drive; each needs a reason. Currently every tool is driven. */
-const KNOWN_UNDRIVEN: ReadonlyArray<{ server: 'github' | 'atlassian'; tool: string; reason: string }> = [];
+const KNOWN_UNDRIVEN: ReadonlyArray<{ server: 'github' | 'atlassian' | 'notion'; tool: string; reason: string }> = [];
 
 // Args the schema-driven generator cannot infer (nested required fields, semantic values).
 const ARG_OVERRIDES: Record<string, Record<string, unknown>> = {
@@ -165,6 +175,9 @@ const ARG_OVERRIDES: Record<string, Record<string, unknown>> = {
   confluence_add_page_restriction: { operation: 'read', restrictionType: 'user', subject: 'acct-2' },
   confluence_remove_page_restriction: { operation: 'read', restrictionType: 'user', subject: 'acct-1' },
   update_pull_request: { title: 'new title' },
+  // The configured root page, so the append preview needs no ancestry lookup.
+  notion_append_blocks: { blockId: '00000000-0000-0000-0000-000000000001', blocks: [{ type: 'divider' }] },
+  notion_read_page: { pageId: '00000000-0000-0000-0000-000000000001' },
   create_label: { color: 'ff0000' },
   list_project_fields: { project_id: 'PVT_1' },
   get_project_item: { project_id: 'PVT_1', issue_node_id: 'I_1' },
@@ -217,8 +230,14 @@ function captureTools(register: (server: McpServer) => void): Map<string, Captur
 type RecordedRequest = { method: string; url: string; body: string };
 const requests: RecordedRequest[] = [];
 
-const isWrite = ({ method, url, body }: RecordedRequest): boolean =>
-  url.endsWith('/graphql') ? /\bmutation\b/i.test(body) : method !== 'GET' && method !== 'HEAD';
+// Notion's search endpoint reads through POST.
+const READ_ONLY_POST_URLS = ['https://api.notion.com/v1/search'];
+
+const isWrite = ({ method, url, body }: RecordedRequest): boolean => {
+  if (url.endsWith('/graphql')) return /\bmutation\b/i.test(body);
+  if (method === 'POST' && READ_ONLY_POST_URLS.includes(url)) return false;
+  return method !== 'GET' && method !== 'HEAD';
+};
 
 function stubFetch(): void {
   vi.stubGlobal(
@@ -332,6 +351,17 @@ beforeAll(() => {
       confirmable: ATLASSIAN_CONFIRMABLE_TOOLS,
       writes: ATLASSIAN_WRITE_TOOLS,
       reads: ATLASSIAN_READ_TOOLS,
+    },
+    {
+      label: 'notion',
+      tools: captureTools(server => {
+        registerNotionSearchTools(server);
+        registerNotionPageTools(server);
+      }),
+      declared: NOTION_TOOL_NAMES,
+      confirmable: NOTION_CONFIRMABLE_TOOLS,
+      writes: NOTION_WRITE_TOOLS,
+      reads: NOTION_READ_TOOLS,
     }
   );
 });
@@ -340,7 +370,7 @@ beforeEach(() => {
   requests.length = 0;
 });
 
-describe.each(['github', 'atlassian'])('%s MCP server preview gate', label => {
+describe.each(['github', 'atlassian', 'notion'])('%s MCP server preview gate', label => {
   const serverUnderTest = (): ServerUnderTest => servers.find(candidate => candidate.label === label)!;
 
   it('classifies exactly the registered tools as read or write', () => {

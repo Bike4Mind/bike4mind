@@ -14,6 +14,7 @@
 
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
+    static let artifacts: any ArtifactsAPI = FixtureArtifactsAPI()
     static let studio: any StudioAPI = FixtureStudioAPI()
     /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
     static let frameUploader = FrameUploader(
@@ -412,6 +413,15 @@
         guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
         return session
       }
+
+      func renameSession(id: String, name: String) async throws -> SessionSummary {
+        let current = try await session(id: id)
+        return SessionSummary(
+          id: id, name: name, lastUsedModel: current.lastUsedModel, firstCreated: current.firstCreated,
+          lastUpdated: Date())
+      }
+
+      func deleteSession(id: String) async throws {}
 
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]

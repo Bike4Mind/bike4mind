@@ -115,6 +115,33 @@ describe('GET /api/subscriptions/Organization/:ownerId - member and manager gate
     expect(res._getJSONData()).toEqual(subscriptions);
   });
 
+  it('returns only customer-facing fields, not grant, billing-notice or Stripe customer fields', async () => {
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
+    findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce([
+      {
+        id: 'sub1',
+        ownerType: SubscriptionOwnerType.Organization,
+        ownerId: 'org1',
+        priceId: 'price_team',
+        status: 'active',
+        quantity: 5,
+        grantedBy: 'admin1',
+        grantedReason: 'comp',
+        stripeCustomerId: 'cus_1',
+        billingNoticeKeys: ['unpaid:sub_1'],
+        paymentFailureNotifiedInvoiceIds: ['in_1'],
+        acquisition: { first: { source: 'ad' } },
+      },
+    ]);
+
+    const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData()).toEqual([
+      { id: 'sub1', ownerType: 'Organization', ownerId: 'org1', priceId: 'price_team', status: 'active', quantity: 5 },
+    ]);
+  });
+
   it('returns a delinquent row instead of hiding it, so the org keeps its billing portal', async () => {
     verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
     const delinquent = [{ ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1', status: 'past_due' }];

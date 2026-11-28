@@ -22,7 +22,7 @@ import type {
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { HostNotificationDelivery } from '@shared/hostBridge';
-import type { HostEntry } from '@shared/hostConnection';
+import type { HostEntry, HostInstallProgressEvent } from '@shared/hostConnection';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { OrchestrateMiniPayload } from '@shared/orchestrateMini';
@@ -82,6 +82,16 @@ const api: DesktopApi = {
     connect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostConnect, hostId),
     disconnect: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostDisconnect, hostId),
     remove: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostRemove, hostId),
+    sshAliases: () => ipcRenderer.invoke(IPC_CHANNELS.hostSshAliases),
+    describeSshAlias: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshDescribe, alias),
+    addSshHost: alias => ipcRenderer.invoke(IPC_CHANNELS.hostSshAdd, alias),
+    install: hostId => ipcRenderer.invoke(IPC_CHANNELS.hostInstall, hostId),
+    update: (hostId, options) => ipcRenderer.invoke(IPC_CHANNELS.hostUpdate, hostId, options),
+    onInstallProgress: listener => {
+      const handler = (_event: unknown, progress: HostInstallProgressEvent) => listener(progress);
+      ipcRenderer.on(IPC_CHANNELS.hostInstallProgress, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.hostInstallProgress, handler);
+    },
   },
   library: {
     page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),

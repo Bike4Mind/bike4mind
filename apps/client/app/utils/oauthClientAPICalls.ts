@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
   CreateOAuthClientInput,
+  OAuthClientUsageStats,
   OAuthClientView,
   OAuthClientWithSecret,
   UpdateOAuthClientInput,
@@ -8,8 +9,17 @@ import type {
 
 const BASE = '/api/admin/oauth-clients';
 
+export const OAUTH_CLIENTS_QUERY_KEY = 'admin-oauth-clients';
+// Not under the list key, so list mutations do not refetch the stats.
+export const OAUTH_CLIENT_STATS_QUERY_KEY = 'admin-oauth-client-stats';
+
 export const fetchOAuthClients = async () => {
   const response = await api.get<OAuthClientView[]>(BASE);
+  return response.data;
+};
+
+export const fetchOAuthClientStats = async () => {
+  const response = await api.get<OAuthClientUsageStats>(`${BASE}/stats`);
   return response.data;
 };
 

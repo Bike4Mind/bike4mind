@@ -43,5 +43,6 @@ export async function readLakeConfigHistory(
     },
     limit,
     includeFiles,
+    viewerUserId: ctx.userId,
   });
 }
