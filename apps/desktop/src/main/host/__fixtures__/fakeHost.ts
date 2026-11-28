@@ -149,7 +149,13 @@ export class FakeHost {
   handle: (method: string, params: unknown) => unknown = () => ({});
   private readonly logs = new Map<string, number>();
 
+  /** How long the connector's prepare step takes, in ms. */
+  prepareDelayMs = 0;
+
   readonly connector: HostConnector = {
+    prepare: async () => {
+      if (this.prepareDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.prepareDelayMs));
+    },
     connect: async () => {
       const failure = this.connectFailures.shift();
       if (failure) throw new HostConnectError(failure);
