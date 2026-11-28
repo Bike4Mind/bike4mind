@@ -14,6 +14,7 @@ import { useAudioAnalyzer } from '@client/app/hooks/useAudioAnalyzer';
 import type { UseVoiceSessionEngine } from '@client/app/components/Session/VoiceSessionModal/useVoiceSessionEngine';
 import { Box, IconButton, Tooltip, Typography, useTheme } from '@mui/joy';
 import { grayAlpha, green, red, redAlpha } from '@client/app/utils/themes/colors';
+import { composerActionDarkFill } from '@client/app/components/Session/SessionBottom/composerActionSx';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
@@ -302,6 +303,8 @@ const VoiceInlineButton: React.FC<VoiceInlineButtonProps> = ({
           animation: connectionStatus === 'connecting' ? `${pulseGlow} 1.5s ease-in-out infinite` : 'none',
           color: connectionStatus === 'connecting' ? theme.palette.voiceModal.statusColors.connecting : undefined,
           '&:hover': {},
+          // Idle, this button holds the composer's action slot, so it matches the send button there.
+          ...(getButtonColor() === 'primary' && composerActionDarkFill(theme)),
         }}
         data-testid="voice-chat-btn"
       >

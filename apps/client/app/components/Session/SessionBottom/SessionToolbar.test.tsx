@@ -283,3 +283,70 @@ describe('appendTranscript', () => {
     expect(appendTranscript('draft\n', 'hello')).toBe('draft hello');
   });
 });
+
+describe('SessionToolbar - dark send button fill', () => {
+  // Pins the dark override that matches the native sendButton role (design-tokens nativeTheme.ts).
+  const ModeWrapper = (mode: 'light' | 'dark'): React.FC<{ children: React.ReactNode }> => {
+    const ModeProvider = ({ children }: { children: React.ReactNode }) => (
+      <CssVarsProvider
+        theme={appTheme}
+        defaultMode={mode}
+        modeStorageKey={`toolbar-${mode}`}
+        colorSchemeStorageKey={`toolbar-${mode}-scheme`}
+      >
+        {children}
+      </CssVarsProvider>
+    );
+    return ModeProvider;
+  };
+  const fill = () => getComputedStyle(screen.getByTestId('send-message-btn')).backgroundColor;
+
+  it('fills the enabled button with the dark accent', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('dark') });
+    expect(fill()).toBe('var(--joy-palette-reading-accent)');
+  });
+
+  it('keeps the disabled styling in dark mode', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {
+      wrapper: ModeWrapper('dark'),
+    });
+    expect(fill()).toBe(
+      'var(--variant-solidDisabledBg, var(--joy-palette-primary-solidDisabledBg, var(--joy-palette-neutral-100, #F0F4F8)))'
+    );
+  });
+
+  it('leaves light mode on the primary solid fill', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('light') });
+    expect(fill()).toBe('var(--variant-solidBg, var(--joy-palette-primary-solidBg, #0066C1))');
+  });
+
+  // getComputedStyle cannot see pseudo-classes, so check the emitted rules. Matched loosely so a
+  // stylis/Joy serialization change does not break it.
+  it('shades the fill on hover (hover-capable pointers only) and on press', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('dark') });
+    const cls = [...screen.getByTestId('send-message-btn').classList].find(name => name.startsWith('css-'));
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(style => style.textContent)
+      .join('\n');
+    const rule = (pseudo: string, percent: number) =>
+      new RegExp(
+        `\\.${cls}:not\\(:disabled\\):${pseudo}\\s*\\{[^}]*background-color:\\s*color-mix\\(in srgb,\\s*var\\(--joy-palette-reading-accent\\)\\s*${percent}%,\\s*black\\)`
+      );
+    expect(css).toMatch(rule('hover', 88));
+    expect(css).toMatch(rule('active', 78));
+    expect(css).toMatch(new RegExp(`@media \\(hover: ?hover\\)\\s*\\{[^{}]*\\.${cls}:not\\(:disabled\\):hover`));
+  });
+
+  it('gives the recording confirm button the same dark fill, since it takes the same slot', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: ModeWrapper('dark') });
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
+    expect(getComputedStyle(screen.getByTestId('voice-record-confirm-btn')).backgroundColor).toBe(
+      'var(--joy-palette-reading-accent)'
+    );
+  });
+
+  // Ties the web fill to the native sendButton pin (nativeTheme.test.ts expects #61AFEF).
+  it('resolves the dark accent to the value the native sendButton role uses', () => {
+    expect(appTheme.colorSchemes.dark.palette.reading.accent.toLowerCase()).toBe('#61afef');
+  });
+});

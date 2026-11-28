@@ -158,9 +158,10 @@ export const NATIVE_COLOR_ROLES: readonly ColorRoleSpec[] = [
   },
   {
     name: 'sendButton',
-    description: 'Send button fill (web primary solidBg: blue[600] light, the Joy default primary 500 dark).',
+    description: 'Send button fill (web primary solidBg light; dark is the accent, ' +
+      'see apps/client/app/components/Session/SessionBottom/composerActionSx.ts).',
     light: ramp('blue', '600'),
-    dark: ramp('brand', '800'),
+    dark: ramp('blue', '550'),
   },
   {
     name: 'codeSurface',

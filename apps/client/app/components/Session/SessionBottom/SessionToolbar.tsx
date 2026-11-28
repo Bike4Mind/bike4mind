@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import { fixedIconSize } from './sessionBottomConstants';
+import { composerActionDarkFill } from './composerActionSx';
 import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 
@@ -309,11 +310,12 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     /* Recording active: confirm button to stop & submit transcription */
                     <Tooltip title="Confirm recording" placement="top">
                       <Button
-                        sx={{
+                        sx={theme => ({
                           borderRadius: '6px',
                           paddingBlock: '0px',
                           ...fixedIconSize,
-                        }}
+                          ...composerActionDarkFill(theme),
+                        })}
                         variant="solid"
                         color="primary"
                         size="md"
@@ -347,11 +349,12 @@ export function SessionToolbar(props: SessionToolbarProps) {
                         style={{ display: 'inline-flex' }}
                       >
                         <Button
-                          sx={{
+                          sx={theme => ({
                             borderRadius: '6px',
                             paddingBlock: '0px',
                             ...fixedIconSize,
-                          }}
+                            ...composerActionDarkFill(theme),
+                          })}
                           variant="solid"
                           color="primary"
                           disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
