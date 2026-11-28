@@ -170,7 +170,9 @@ jobs:
       timeout_minutes:    60
       execution_timeout_minutes: 28
       stamp_promotable:   ${{ inputs.pr_number == '' }}
-      wait_for_deploy:    ${{ inputs.pr_number == '' }}
+      # A gate run is dispatched as a staging deploy finishes, so the suite fits before the next
+      # deploy replaces the API server function; waiting first ran it inside that deploy.
+      wait_for_deploy:    ${{ inputs.pr_number == '' && inputs.gate_run != 'true' }}
       show_credits:       false
       trigger_label:      ${{ inputs.gate_run == 'true' && 'Run via Deployer' || 'Run via Dispatch' }}
       concurrency_group:  ${{ inputs.gate_run == 'true' && 'e2e-core-gate' || format('e2e-core-{0}', inputs.pr_number || inputs.stage || 'dev') }}
