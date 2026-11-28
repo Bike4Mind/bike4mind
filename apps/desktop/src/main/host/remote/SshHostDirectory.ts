@@ -6,7 +6,7 @@ import type { SshConfigListing } from './sshConfig';
 import type { SshHostRecord, SshHostStore } from './sshHostsFile';
 
 export type SshHostDirectoryOptions = {
-  manager: Pick<ConnectionManager, 'register' | 'unregister' | 'connect' | 'relabel' | 'onStateChanged'>;
+  manager: Pick<ConnectionManager, 'register' | 'unregister' | 'connect' | 'relabel' | 'refresh' | 'onStateChanged'>;
   store: SshHostStore;
   /** Opens a protocol connection through one alias: in Desktop, ssh running `b4m-host connect`. */
   openTransport(alias: string): Promise<HostTransport>;
@@ -129,6 +129,7 @@ export class SshHostDirectory {
   /** Records whether the user agreed to install and update the host program on this host. */
   async setInstallConsent(id: string, consent: boolean): Promise<void> {
     this.require(id).installConsent = consent;
+    this.options.manager.refresh();
     await this.save();
   }
 
@@ -139,6 +140,7 @@ export class SshHostDirectory {
       connect: record.enabled,
       lastSeenAt: record.lastSeenAt,
       onUserAction: action => void this.userAction(record.id, action),
+      installConsent: () => this.records.find(candidate => candidate.id === record.id)?.installConsent === true,
     });
   }
 

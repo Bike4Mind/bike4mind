@@ -9,6 +9,7 @@ import { MessageThread } from './MessageThread';
 import { Composer } from './Composer';
 import { useCostDisplayPreference } from './costDisplay';
 import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 vi.mock('./PermissionsSettings', () => ({
   PermissionsSettings: () => null,
@@ -103,6 +104,7 @@ describe('developer dollar cost preference', () => {
     }));
     // The Advanced page (dollar costs, worktrees) and the rest of the screen read their state from main.
     vi.stubGlobal('b4m', {
+      host: localHostConnections(),
       watch: {
         getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
         setPreferences: async () => DEFAULT_WATCH_PREFERENCES,

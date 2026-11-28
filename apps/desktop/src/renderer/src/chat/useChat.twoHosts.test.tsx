@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSession, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import type { HostConnectionState } from '@shared/hostConnection';
 import { chatBackedHostBridge, type FakeRemoteHostOptions } from '../__fixtures__/chatBackedHostBridge';
 import { sessionDirectory, summaryHostId } from '../host/sessionDirectory';
 import { sessionListCache } from '../host/sessionListCache';
@@ -244,6 +245,19 @@ describe('sessions on a second host', () => {
     const { remote } = stubTwoHosts('nolink', { connected: 'connecting' });
     const sessions = await render<SessionsController>(() => useSessions());
     await act(async () => remote.setConnected(false));
+    expect(sessions().hostListings.get(DEVBOX)).toBe('stale');
+  });
+
+  it.each<[string, HostConnectionState]>([
+    ['failed', { status: 'failed', failure: { kind: 'sshFailed', detail: 'no route', stderrTail: '' } }],
+    ['needsInstall', { status: 'needsInstall' }],
+    ['needsSignIn', { status: 'needsSignIn' }],
+    ['needsUpdate', { status: 'needsUpdate', required: true }],
+  ])('leaves pending once a connecting host lands in %s, so no skeleton stays', async (_name, landed) => {
+    const { remote } = stubTwoHosts(`landed-${_name}`, { connected: 'connecting' });
+    const sessions = await render<SessionsController>(() => useSessions());
+    expect(sessions().hostListings.get(DEVBOX)).toBe('pending');
+    await act(async () => remote.setState(landed));
     expect(sessions().hostListings.get(DEVBOX)).toBe('stale');
   });
 

@@ -273,6 +273,17 @@ describe('SshHostDirectory', () => {
     expect(directory.installTarget('missing')).toBeNull();
   });
 
+  it('shows install consent on the host entry and announces a change', async () => {
+    const { directory, manager } = setUp({ records: [record({ enabled: false })] });
+    await directory.load();
+    const lists: Array<boolean | undefined> = [];
+    manager.onStateChanged(entries => lists.push(entries[0]?.installConsent));
+    expect(manager.list()[0].installConsent).toBe(false);
+    await directory.setInstallConsent('h1', true);
+    expect(manager.list()[0].installConsent).toBe(true);
+    expect(lists).toContain(true);
+  });
+
   it('records install consent', async () => {
     const { directory, saved } = setUp({ records: [record({ enabled: false })] });
     await directory.load();

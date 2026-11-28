@@ -19,7 +19,9 @@ import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
+import type { HostEntry } from '@shared/hostConnection';
 import type { PermissionsState } from '@shared/permissions';
+import { useHostEntries } from '../host/hostRegistry';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import type { ClaudeImportKind, ClaudeImportState } from '@shared/claudeImport';
@@ -28,6 +30,7 @@ import type { LocalContextFit, LocalContextSetting } from '@shared/localContextS
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
 import { LocalHistorySettings } from './LocalHistorySettings';
 import type { ModelServerView } from '@shared/modelServers';
+import { ConnectionsSettings, connectionsAttention, connectionsSummary } from './ConnectionsSettings';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
 import { WorktreesSettings } from './WorktreesSettings';
 import { AutoFixAttemptsSettings, autoFixAttemptsSummary, useAutoFixAttempts } from './AutoFixAttemptsSettings';
@@ -692,6 +695,19 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
   };
 }
 
+function connectionsEntry(entries: readonly HostEntry[]): ConfigEntry {
+  const attention = connectionsAttention(entries);
+  return {
+    id: 'connections',
+    icon: <ServerIcon />,
+    label: 'Connections',
+    summary: connectionsSummary(entries),
+    description: 'Run sessions on other computers you reach over SSH.',
+    ...(attention ? { attention } : {}),
+    control: <ConnectionsSettings />,
+  };
+}
+
 function modelServersEntry(
   servers: ModelServerView[] | null,
   setServers: (servers: ModelServerView[]) => void,
@@ -724,6 +740,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
   notifications: <SoundIcon />,
   agents: <AgentsIcon />,
   models: <ModelsIcon />,
+  connections: <ServerIcon />,
   permissions: <ShieldIcon />,
   privacy: <FolderIcon />,
   advanced: <SlidersIcon />,
@@ -736,6 +753,7 @@ const EXPANDED_SETTINGS = new Set([
   'orchestration-policy',
   'local-context',
   'model-servers',
+  'connections',
   'permissions',
   'claude-import',
   'server',
@@ -777,6 +795,7 @@ function useSettingsEntries(
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
+  const hosts = useHostEntries();
 
   const entries: ConfigEntry[] = [
     launchPlaceEntry(launchPlace, setLaunchPlace),
@@ -824,6 +843,7 @@ function useSettingsEntries(
       curatedList.saving
     ),
     modelServersEntry(modelServers, setModelServers, modelServersError),
+    connectionsEntry(hosts),
     permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions),
     localHistoryEntry(),
     localDataExportEntry(),

@@ -1,6 +1,5 @@
-import type { ChatSessionStatusEvent } from '@shared/chat';
+import { busySessions } from '@shared/hostBusy';
 import type {
-  HostBusySession,
   HostInstallFailure,
   HostInstallProgress,
   HostInstallProgressEvent,
@@ -14,6 +13,7 @@ import {
   type HostConnectFailure,
   type HostTransport,
 } from '@shared/hostProtocol';
+import { compareVersions } from '@shared/update';
 import { HostNeedsUserError, initializeHost, withTimeout, type ClientIdentity } from '../../handshake';
 import type { HostArtifact } from './hostArtifact';
 import { HostInstallError, type HostInstaller } from './HostInstaller';
@@ -64,6 +64,17 @@ const otherDaemonRuns = (probe: HostProbe, version: string): boolean =>
 
 const activeIs = (probe: HostProbe, version: string): boolean =>
   probe.launcher.state === 'works' && probe.launcher.version === version;
+
+/** The version the host runs or would run, when it is newer than this Desktop's: never replaced by an older build. */
+const newerHostVersion = (probe: HostProbe, version: string): string | null => {
+  const versions = [
+    probe.launcher.state === 'works' ? probe.launcher.version : null,
+    probe.daemon.state === 'running' ? probe.daemon.version : null,
+  ];
+  return (
+    versions.find((candidate): candidate is string => !!candidate && compareVersions(candidate, version) === 1) ?? null
+  );
+};
 
 /**
  * Keeps a remote machine's host program at this Desktop's version, and decides when that may
@@ -130,7 +141,7 @@ export class HostProvisioner {
       this.ready.add(hostId);
       return;
     }
-    if (activeIs(probe, version)) {
+    if (activeIs(probe, version) || newerHostVersion(probe, version)) {
       this.ready.add(hostId);
       return;
     }
@@ -191,6 +202,14 @@ export class HostProvisioner {
       const artifact = await this.artifact();
       emit({ phase: 'probing' });
       const probe = await installer.probe(alias);
+      const newer = newerHostVersion(probe, version);
+      if (newer) {
+        // A newer host is left as it is: installing this Desktop's build would be a downgrade.
+        this.ready.add(hostId);
+        emit({ phase: 'done', version: newer });
+        this.options.reconnect(hostId);
+        return { status: 'upToDate', version: newer };
+      }
       const active = activeIs(probe, version);
       const restart = otherDaemonRuns(probe, version);
       // Only an install needs the login shell's Node.js; nothing has changed yet, so the host
@@ -264,17 +283,6 @@ export class HostProvisioner {
     });
     return run;
   }
-}
-
-/** A session an update would interrupt: a turn running or waiting on the user, or background commands still running. */
-function busySessions(statuses: readonly ChatSessionStatusEvent[]): HostBusySession[] {
-  return statuses
-    .map(status => ({
-      sessionId: status.sessionId,
-      status: status.status,
-      backgroundJobs: status.background?.running ?? 0,
-    }))
-    .filter(session => session.status !== 'done' || session.backgroundJobs > 0);
 }
 
 /**

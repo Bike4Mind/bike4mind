@@ -1,3 +1,4 @@
+import { userInfo } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HOST_PROTOCOL_VERSION, HostConnectError } from '@shared/hostProtocol';
@@ -23,7 +24,8 @@ describe.skipIf(!alias)('a real ssh connection', () => {
   const target = alias ?? '';
 
   it('lists the alias from ~/.ssh/config and resolves it with ssh -G', async () => {
-    expect((await listSshHosts()).aliases).toContain(target);
+    // vitest.setup gives each file its own HOME, which ssh itself ignores, so read the account's real home.
+    expect((await listSshHosts({ home: userInfo().homedir })).aliases).toContain(target);
     const description = await describeSshHost(target);
     expect(description.alias).toBe(target);
     expect(description.hostname).not.toBe('');

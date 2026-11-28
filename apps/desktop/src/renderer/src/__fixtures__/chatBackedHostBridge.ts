@@ -13,7 +13,17 @@ import {
   type HostBridgeResponse,
   type HostNotificationDelivery,
 } from '@shared/hostBridge';
-import type { HostConnectionsApi, HostEntry, HostInfo } from '@shared/hostConnection';
+import type {
+  HostConnectionsApi,
+  HostConnectionState,
+  HostEntry,
+  HostInfo,
+  HostInstallApi,
+  HostInstallProgressEvent,
+  HostInstallResult,
+  SshAliasDescription,
+  SshAliasEntry,
+} from '@shared/hostConnection';
 import { HOST_ERROR_CODES, HOST_PROTOCOL_VERSION, hostNotification } from '@shared/hostProtocol';
 import { pageSessions, sessionPageRequestSchema } from '@shared/sessionPage';
 
@@ -213,6 +223,10 @@ export type FakeRemoteHostOptions = {
   statuses?: readonly ChatSessionStatusEvent[];
   /** Starts connected unless false; 'connecting' is a host main is still reaching. */
   connected?: boolean | 'connecting';
+  /** The exact connection state to start in (needs sign-in, failed, ...); wins over `connected`. */
+  state?: HostConnectionState;
+  /** Whether the user already agreed to installs on it, as main records. */
+  installConsent?: boolean;
   /** Methods it fails with an internal error while connected. */
   failing?: readonly string[];
   /** Answers any other method; undefined fails it as one the host does not serve. */
@@ -226,6 +240,10 @@ export type FakeRemoteHost = {
   readonly requests: { method: string; params: Record<string, unknown> }[];
   sessions: ChatSessionSummary[];
   setConnected(connected: boolean | 'connecting'): void;
+  /** Moves the host to any connection state, as main would push it. */
+  setState(state: HostConnectionState): void;
+  /** Main's record of the user's consent to installs, pushed with the host list. */
+  setInstallConsent(consent: boolean): void;
   /** Holds every `method` request until the returned release is called. */
   hold(method: string): () => void;
   /** A notification from this host, delivered as its bridge would. */
@@ -234,8 +252,32 @@ export type FakeRemoteHost = {
   emitStreamEvent(event: ChatStreamEvent): void;
 };
 
+/** What the faked host management was asked to do, and what its installer answers. */
+export type FakeHostManagement = {
+  connects: string[];
+  disconnects: string[];
+  removes: string[];
+  added: string[];
+  installs: string[];
+  updates: { hostId: string; force: boolean }[];
+  /** What install resolves with. */
+  installResult: HostInstallResult;
+  /** What each update resolves with, in order; the last one repeats. */
+  updateResults: HostInstallResult[];
+  emitProgress(event: HostInstallProgressEvent): void;
+};
+
+export type BridgeHostOptions = {
+  remote?: FakeRemoteHostOptions;
+  /** The Host aliases `~/.ssh/config` lists. */
+  aliases?: readonly SshAliasEntry[];
+  descriptions?: Readonly<Record<string, SshAliasDescription>>;
+};
+
 export type ChatBackedHostBridge = HostBridgeApi &
-  HostConnectionsApi & {
+  HostConnectionsApi &
+  HostInstallApi & {
+    management: FakeHostManagement;
     /** The faked second host, when the bridge was made with one. */
     remote: FakeRemoteHost | null;
   };
@@ -247,7 +289,7 @@ export type ChatBackedHostBridge = HostBridgeApi &
  * missing fails as one the host does not serve; a stub that throws fails with its message.
  * Stream events are numbered per session and reach only subscribed sessions, as a host sends them.
  */
-export function chatBackedHostBridge(options: { remote?: FakeRemoteHostOptions } = {}): ChatBackedHostBridge {
+export function chatBackedHostBridge(options: BridgeHostOptions = {}): ChatBackedHostBridge {
   // One upstream subscription shared by every listener, as the real bridge's single IPC channel is.
   const listeners = new Set<(delivery: HostNotificationDelivery) => void>();
   const deliver = (delivery: HostNotificationDelivery) => listeners.forEach(listener => listener(delivery));
@@ -324,26 +366,61 @@ export function chatBackedHostBridge(options: { remote?: FakeRemoteHostOptions }
   const announce = () => hostListeners.forEach(listener => listener(entries()));
   const remote = options.remote ? createFakeRemote(options.remote, deliver, announce) : null;
   const entries = (): HostEntry[] => (remote ? [LOCAL_ENTRY, remote.entry()] : [LOCAL_ENTRY]);
+  const progressListeners = new Set<(event: HostInstallProgressEvent) => void>();
+  const management: FakeHostManagement = {
+    connects: [],
+    disconnects: [],
+    removes: [],
+    added: [],
+    installs: [],
+    updates: [],
+    installResult: { status: 'installed', version: 'test', restarted: false },
+    updateResults: [{ status: 'installed', version: 'test', restarted: true }],
+    emitProgress: event => progressListeners.forEach(listener => listener(event)),
+  };
   return {
     remote: remote?.controls ?? null,
+    management,
     list: async () => entries(),
     onStateChanged(listener) {
       hostListeners.add(listener);
       return () => hostListeners.delete(listener);
     },
     async connect(hostId) {
+      management.connects.push(hostId);
       if (remote?.controls.hostId === hostId) remote.controls.setConnected(true);
     },
     async disconnect(hostId) {
+      management.disconnects.push(hostId);
       if (remote?.controls.hostId === hostId) remote.controls.setConnected(false);
     },
-    remove: async () => undefined,
-    sshAliases: async () => [],
+    async remove(hostId) {
+      management.removes.push(hostId);
+    },
+    sshAliases: async () => [...(options.aliases ?? [])],
     describeSshAlias: async alias => {
-      throw new Error(`No SSH alias ${alias} in this test`);
+      const described = options.descriptions?.[alias];
+      if (!described) throw new Error(`No SSH alias ${alias} in this test`);
+      return described;
     },
     addSshHost: async alias => {
-      throw new Error(`No SSH alias ${alias} in this test`);
+      management.added.push(alias);
+      return `host-${alias}`;
+    },
+    async install(hostId) {
+      management.installs.push(hostId);
+      // Installing records the consent in main, which shows on the host's entry.
+      if (remote?.controls.hostId === hostId) remote.controls.setInstallConsent(true);
+      return management.installResult;
+    },
+    async update(hostId, { force }) {
+      management.updates.push({ hostId, force });
+      const index = Math.min(management.updates.length - 1, management.updateResults.length - 1);
+      return management.updateResults[index] ?? management.installResult;
+    },
+    onInstallProgress(listener) {
+      progressListeners.add(listener);
+      return () => progressListeners.delete(listener);
     },
     async request(hostId, method, params): Promise<HostBridgeResponse> {
       if (remote && hostId === remote.controls.hostId) return remote.request(method, asRecord(params));
@@ -413,6 +490,8 @@ function createFakeRemote(
 ) {
   const { hostId } = options;
   let state: boolean | 'connecting' = options.connected ?? true;
+  let exact: HostConnectionState | null = options.state ?? null;
+  let installConsent = options.installConsent ?? false;
   const held = new Map<string, Promise<void>>();
   const seqs = new Map<string, number>();
   const subscribed = new Set<string>();
@@ -421,9 +500,19 @@ function createFakeRemote(
     requests: [],
     sessions: [...(options.sessions ?? [])],
     setConnected(next) {
-      if (next === state) return;
+      if (next === state && exact === null) return;
       state = next;
+      exact = null;
       if (next !== true) subscribed.clear();
+      announce();
+    },
+    setInstallConsent(consent) {
+      installConsent = consent;
+      announce();
+    },
+    setState(next) {
+      exact = next;
+      if (next.status !== 'connected') subscribed.clear();
       announce();
     },
     hold(method) {
@@ -450,18 +539,22 @@ function createFakeRemote(
     hostId,
     label: options.label ?? hostId,
     kind: 'remote',
+    installConsent,
     state:
-      state === true
+      exact ??
+      (state === true
         ? { status: 'connected', info: fakeHostInfo(hostId, options.capabilities), latencyMs: 1 }
         : state === 'connecting'
           ? { status: 'connecting' }
-          : { status: 'offline', reason: 'unreachable', lastSeenAt: null },
+          : { status: 'offline', reason: 'unreachable', lastSeenAt: null }),
   });
   const request = async (method: string, params: Record<string, unknown>): Promise<HostBridgeResponse> => {
     controls.requests.push({ method, params });
     const gate = held.get(method);
     if (gate) await gate;
-    if (state !== true) {
+    // A host awaiting sign-in is up, and serves the sign-in method alone.
+    const servesSignIn = method === 'host/auth/start' && entry().state.status === 'needsSignIn';
+    if (entry().state.status !== 'connected' && !servesSignIn) {
       return { ok: false, error: { code: HOST_ERROR_CODES.capabilityUnavailable, message: `${hostId} is offline` } };
     }
     if (options.failing?.includes(method)) {

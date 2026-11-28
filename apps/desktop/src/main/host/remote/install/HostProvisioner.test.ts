@@ -228,6 +228,24 @@ describe('HostProvisioner.install and update', () => {
     expect(reconnect).toHaveBeenCalledWith('h1');
   });
 
+  it('never installs this older build over a newer host program', async () => {
+    const { provisioner, installer, runningWork } = setup(
+      machine({ launcher: { state: 'works', version: '3.0.0' }, daemon: { state: 'running', version: '3.0.0' } })
+    );
+    await expect(provisioner.update('h1', { force: true })).resolves.toEqual({ status: 'upToDate', version: '3.0.0' });
+    expect(installer.install).not.toHaveBeenCalled();
+    expect(installer.stopDaemon).not.toHaveBeenCalled();
+    expect(runningWork).not.toHaveBeenCalled();
+  });
+
+  it('connects to a newer host program without a quiet downgrade', async () => {
+    const { provisioner, installer } = setup(machine({ launcher: { state: 'works', version: '3.0.0' } }), {
+      consent: true,
+    });
+    await provisioner.beforeConnect('h1', 'box');
+    expect(installer.install).not.toHaveBeenCalled();
+  });
+
   it('returns the running work and changes nothing without confirmation', async () => {
     const { provisioner, installer, reconnect } = setup(machine({ daemon: { state: 'running', version: '1.0.0' } }), {
       work: BUSY,
