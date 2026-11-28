@@ -1,0 +1,82 @@
+name: GHCR base image mirror
+description: >-
+  Resolve a Dockerfile's digest-pinned public.ecr.aws base images through a GHCR copy, so image builds
+  do not pull them from ECR Public anonymously (the runner pool's shared anonymous quota fails builds
+  with "toomanyrequests: Data limit exceeded"). Outputs buildx build-contexts that point each FROM ref
+  at the same digest in GHCR. Expects a prior docker login to ghcr.io.
+
+inputs:
+  dockerfile:
+    description: Path of the Dockerfile whose FROM lines to resolve.
+    required: true
+  can-write:
+    description: >-
+      'true' when the job token may push packages (not a fork PR). A digest missing from the mirror is
+      then copied in once; otherwise that base image keeps its ECR Public ref.
+    required: true
+
+outputs:
+  build-contexts:
+    description: Newline-separated build-contexts for docker/build-push-action (empty when none apply).
+    value: ${{ steps.resolve.outputs.build-contexts }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        CAN_WRITE: ${{ inputs.can-write }}
+        OWNER: ${{ github.repository_owner }}
+      run: |
+        set -euo pipefail
+        mirror_root="ghcr.io/${OWNER,,}/ecr-public-mirror"
+        contexts=""
+        # The override key must be the FROM ref exactly as written, digest included; buildx then never
+        # resolves that ref against ECR Public. The mirror is addressed by the same digest, so the pin
+        # still decides the content.
+        refs=$(grep -oE '^[[:space:]]*FROM[[:space:]]+(--[^[:space:]]+[[:space:]]+)*public\.ecr\.aws/[^[:space:]]+@sha256:[0-9a-f]{64}' "$DOCKERFILE" \
+          | grep -oE 'public\.ecr\.aws/[^[:space:]]+@sha256:[0-9a-f]{64}' | sort -u || true)
+        for ref in $refs; do
+          digest="${ref##*@}"
+          name_tag="${ref%@*}"
+          name_tag="${name_tag#public.ecr.aws/}"
+          name="${name_tag%%:*}"
+          tag="${name_tag#"$name"}"
+          tag="${tag#:}"
+          mirror="${mirror_root}/${name}"
+          if ! docker buildx imagetools inspect "${mirror}@${digest}" >/dev/null 2>&1; then
+            if [ "$CAN_WRITE" != "true" ]; then
+              echo "::notice::${mirror}@${digest} is not mirrored yet and this token cannot push; pulling ${ref} from ECR Public."
+              continue
+            fi
+            # ECR Public's docker/library/* is a copy of the Docker Hub official images with the same
+            # digests, so the one-time copy tries Docker Hub first: the copy itself must not depend on
+            # the anonymous ECR quota it exists to avoid.
+            sources=()
+            case "$name" in
+              docker/library/*) sources+=("docker.io/library/${name#docker/library/}@${digest}") ;;
+            esac
+            sources+=("$ref")
+            copied=false
+            for source in "${sources[@]}"; do
+              # The tag keeps the copy from being pruned as an untagged version.
+              if docker buildx imagetools create -t "${mirror}:${tag:-latest}-${digest#sha256:}" "$source"; then
+                copied=true
+                break
+              fi
+            done
+            if [ "$copied" != "true" ]; then
+              echo "::warning::Could not copy ${ref} into ${mirror}; pulling it from ECR Public."
+              continue
+            fi
+          fi
+          contexts+="${ref}=docker-image://${mirror}@${digest}"$'\n'
+        done
+        {
+          echo "build-contexts<<CONTEXTS_EOF"
+          printf '%s' "$contexts"
+          echo "CONTEXTS_EOF"
+        } >> "$GITHUB_OUTPUT"
+        printf 'Resolved base images:\n%s' "${contexts:-none}"

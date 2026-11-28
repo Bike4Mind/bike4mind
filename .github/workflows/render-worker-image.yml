@@ -24,6 +24,7 @@ on:
       - 'turbo.json'
       - '.dockerignore'
       - '.github/workflows/render-worker-image.yml'
+      - '.github/actions/ghcr-base-image-mirror/**'
       - '!**/*.md'
       - '!**/*.mdx'
   pull_request:
@@ -43,6 +44,7 @@ on:
       - 'turbo.json'
       - '.dockerignore'
       - '.github/workflows/render-worker-image.yml'
+      - '.github/actions/ghcr-base-image-mirror/**'
       - '!**/*.md'
       - '!**/*.mdx'
   workflow_dispatch:
@@ -83,15 +85,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      # Publish only on push/dispatch (same-repo). Fork PRs get a read-only
-      # token and never reach the push path below.
+      # Every event logs in: the base images resolve through GHCR below. Publishing still happens only on
+      # push/dispatch (same-repo); fork PRs get a read-only token and never reach the push path.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve base images through GHCR
+        id: base
+        uses: ./.github/actions/ghcr-base-image-mirror
+        with:
+          dockerfile: apps/workers/Dockerfile.renderworker
+          can-write: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Build (PR validation, no push)
         if: github.event_name == 'pull_request'
@@ -101,6 +109,7 @@ jobs:
           file: apps/workers/Dockerfile.renderworker
           platforms: ${{ matrix.platform }}
           push: false
+          build-contexts: ${{ steps.base.outputs.build-contexts }}
           cache-from: type=gha,scope=render-worker-${{ matrix.arch }}
 
       - name: Build and push by digest
@@ -114,6 +123,7 @@ jobs:
           # Push the untagged per-arch image by digest; the merge job below
           # stitches the digests into the tagged multi-arch manifest.
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-contexts: ${{ steps.base.outputs.build-contexts }}
           cache-from: type=gha,scope=render-worker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=render-worker-${{ matrix.arch }}
 
