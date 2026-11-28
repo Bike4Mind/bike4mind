@@ -19,6 +19,7 @@ import type { ChatMessage } from '@shared/chat';
 import { MessageThread } from './MessageThread';
 import { SettingsScreen } from './SettingsPanel';
 import { TurnStatus } from './TurnStatus';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
 import { CssVarsProvider } from '@mui/joy/styles';
 
@@ -479,6 +480,7 @@ describe('the reply stats settings', () => {
     }));
     // SettingsScreen's menu-bar switch reads its preference from main.
     vi.stubGlobal('b4m', {
+      host: localHostConnections(),
       watch: {
         getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
         setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
