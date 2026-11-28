@@ -186,10 +186,13 @@ export class HostRuntime {
     // one reply, so it travels beside the status pushes rather than inside the reply stream.
     this.queue = new MessageQueue(event => events.queueChanged(event));
 
-    this.approvals = new ApprovalGate({
-      requested: sessionId => this.activity.approvalRequested(sessionId),
-      settled: sessionId => this.activity.approvalSettled(sessionId),
-    });
+    this.approvals = new ApprovalGate(
+      {
+        requested: sessionId => this.activity.approvalRequested(sessionId),
+        settled: sessionId => this.activity.approvalSettled(sessionId),
+      },
+      this.store
+    );
 
     // Output and status go out on the same channel as reply tokens: a background process is
     // still something that conversation is doing, and a renderer that reloads re-subscribes to
